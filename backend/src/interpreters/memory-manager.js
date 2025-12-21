@@ -1,243 +1,294 @@
 /**
  * Memory Manager
- * Simulates stack, heap, and global memory
+ * Manages virtual memory: stack frames, heap allocations, and pointers
  */
 
-export class MemoryManager {
+export default class MemoryManager {
   constructor() {
-    this.globals = new Map();
     this.stack = [];
     this.heap = new Map();
-    this.callStack = [];
-    this.nextAddress = 0x1000;
+    this.globals = new Map();
+    this.nextHeapAddress = 0x1000;
+    this.stepCounter = 0;
   }
 
   /**
-   * Declare global variable
+   * Push a new stack frame
    */
-  declareGlobal(name, type, value) {
-    const address = this.allocateAddress();
-    this.globals.set(name, {
+  pushFrame(functionName, line) {
+    const frame = {
+      id: `frame_${this.stack.length}`,
+      function: functionName,
+      line: line,
+      variables: new Map(),
+      returnAddress: null
+    };
+    this.stack.push(frame);
+    return frame;
+  }
+
+  /**
+   * Pop the top stack frame
+   */
+  popFrame() {
+    if (this.stack.length === 0) {
+      throw new Error('Stack underflow');
+    }
+    return this.stack.pop();
+  }
+
+  /**
+   * Get current frame
+   */
+  getCurrentFrame() {
+    return this.stack[this.stack.length - 1];
+  }
+
+  /**
+   * Declare a variable in current scope
+   */
+  declareVariable(name, type, value = null, isGlobal = false) {
+    const variable = {
       name,
       type,
       value,
-      address,
-      scope: 'global',
-      isAlive: true
-    });
-  }
-
-  /**
-   * Declare local variable
-   */
-  declareLocal(name, type, value) {
-    if (this.callStack.length === 0) {
-      throw new Error('No active stack frame');
-    }
-
-    const currentFrame = this.callStack[this.callStack.length - 1];
-    const address = this.allocateAddress();
-    
-    currentFrame.locals[name] = {
-      name,
-      type,
-      value,
-      address,
-      scope: 'local',
-      isAlive: true
-    };
-  }
-
-  /**
-   * Declare array
-   */
-  declareArray(name, type, size, values = []) {
-    const baseAddress = this.allocateAddress();
-    const cells = [];
-
-    for (let i = 0; i < size; i++) {
-      const cellAddress = this.allocateAddress();
-      cells.push({
-        index: i,
-        value: values[i] !== undefined ? values[i] : 0,
-        address: cellAddress
-      });
-    }
-
-    const arrayVar = {
-      name,
-      type: `${type}[]`,
-      size,
-      baseAddress,
-      values: cells,
-      scope: this.callStack.length > 0 ? 'local' : 'global',
-      isAlive: true
+      address: this._generateAddress(),
+      scope: isGlobal ? 'global' : 'local',
+      isInitialized: value !== null
     };
 
-    if (this.callStack.length > 0) {
-      const currentFrame = this.callStack[this.callStack.length - 1];
-      currentFrame.locals[name] = arrayVar;
+    if (isGlobal) {
+      this.globals.set(name, variable);
     } else {
-      this.globals.set(name, arrayVar);
+      const frame = this.getCurrentFrame();
+      if (!frame) {
+        throw new Error('No active stack frame');
+      }
+      frame.variables.set(name, variable);
     }
+
+    return variable;
   }
 
   /**
    * Set variable value
    */
-  setValue(name, value) {
-    // Check local scope first
-    if (this.callStack.length > 0) {
-      const currentFrame = this.callStack[this.callStack.length - 1];
-      if (currentFrame.locals[name]) {
-        currentFrame.locals[name].value = value;
-        return;
-      }
+  setVariable(name, value) {
+    let variable = this._findVariable(name);
+    if (!variable) {
+      throw new Error(`Variable '${name}' not found`);
     }
-
-    // Check global scope
-    if (this.globals.has(name)) {
-      const globalVar = this.globals.get(name);
-      globalVar.value = value;
-      this.globals.set(name, globalVar);
-      return;
-    }
-
-    throw new Error(`Variable ${name} not found`);
+    variable.value = value;
+    variable.isInitialized = true;
+    return variable;
   }
 
   /**
    * Get variable value
    */
-  getValue(name) {
-    // Check local scope first
-    if (this.callStack.length > 0) {
-      const currentFrame = this.callStack[this.callStack.length - 1];
-      if (currentFrame.locals[name]) {
-        return currentFrame.locals[name].value;
-      }
+  getVariable(name) {
+    const variable = this._findVariable(name);
+    if (!variable) {
+      throw new Error(`Variable '${name}' not found`);
     }
-
-    // Check global scope
-    if (this.globals.has(name)) {
-      return this.globals.get(name).value;
+    if (!variable.isInitialized) {
+      throw new Error(`Variable '${name}' used before initialization`);
     }
-
-    return undefined;
-  }
-
-  /**
-   * Check if variable is global
-   */
-  isGlobal(name) {
-    return this.globals.has(name);
-  }
-
-  /**
-   * Push stack frame
-   */
-  pushStackFrame(functionName, params = {}) {
-    const frameId = `frame_${this.callStack.length}`;
-    const frame = {
-      function: functionName,
-      returnType: 'int',
-      params,
-      locals: {},
-      frameId,
-      returnAddress: this.callStack.length > 0 ? this.callStack[this.callStack.length - 1].frameId : null,
-      isActive: true
-    };
-
-    this.callStack.push(frame);
-    return frameId;
-  }
-
-  /**
-   * Pop stack frame
-   */
-  popStackFrame() {
-    if (this.callStack.length === 0) {
-      throw new Error('Cannot pop from empty call stack');
-    }
-
-    const frame = this.callStack.pop();
-    
-    // Mark local variables as dead
-    for (const varName in frame.locals) {
-      frame.locals[varName].isAlive = false;
-    }
-
-    return frame;
+    return variable;
   }
 
   /**
    * Allocate heap memory
    */
-  allocateHeap(size, type = 'int') {
-    const address = this.allocateAddress();
-    this.heap.set(address, {
+  malloc(size, type = 'void*') {
+    const address = this.nextHeapAddress;
+    const block = {
       address,
       size,
       type,
-      allocated: true,
-      values: Array(size).fill(0)
-    });
+      data: new Array(size).fill(0),
+      allocated: true
+    };
+    this.heap.set(address, block);
+    this.nextHeapAddress += size;
     return address;
   }
 
   /**
    * Free heap memory
    */
-  freeHeap(address) {
-    if (this.heap.has(address)) {
-      const block = this.heap.get(address);
-      block.allocated = false;
-      this.heap.set(address, block);
+  free(address) {
+    const block = this.heap.get(address);
+    if (!block) {
+      throw new Error(`Invalid free: address ${address.toString(16)} not found`);
     }
+    if (!block.allocated) {
+      throw new Error(`Double free: address ${address.toString(16)}`);
+    }
+    block.allocated = false;
+    return block;
   }
 
   /**
-   * Allocate memory address
+   * Get heap block
    */
-  allocateAddress() {
-    const address = `0x${this.nextAddress.toString(16).toUpperCase()}`;
-    this.nextAddress += 4; // 4 bytes per address
-    return address;
+  getHeapBlock(address) {
+    return this.heap.get(address);
   }
 
   /**
-   * Get memory snapshot for current state
+   * Write to heap
    */
-  getSnapshot() {
-    // Convert Map to plain object
-    const globalsObj = {};
-    this.globals.forEach((value, key) => {
-      globalsObj[key] = value;
-    });
+  writeHeap(address, index, value) {
+    const block = this.heap.get(address);
+    if (!block) {
+      throw new Error(`Invalid memory access: ${address.toString(16)}`);
+    }
+    if (!block.allocated) {
+      throw new Error(`Access to freed memory: ${address.toString(16)}`);
+    }
+    if (index < 0 || index >= block.size) {
+      throw new Error(`Heap buffer overflow: index ${index} out of bounds`);
+    }
+    block.data[index] = value;
+  }
 
-    const heapObj = {};
-    this.heap.forEach((value, key) => {
-      heapObj[key] = value;
-    });
+  /**
+   * Read from heap
+   */
+  readHeap(address, index) {
+    const block = this.heap.get(address);
+    if (!block) {
+      throw new Error(`Invalid memory access: ${address.toString(16)}`);
+    }
+    if (!block.allocated) {
+      throw new Error(`Access to freed memory: ${address.toString(16)}`);
+    }
+    if (index < 0 || index >= block.size) {
+      throw new Error(`Heap buffer overflow: index ${index} out of bounds`);
+    }
+    return block.data[index];
+  }
 
+  /**
+   * Create memory snapshot for execution step
+   */
+  snapshot() {
     return {
-      globals: globalsObj,
-      stack: this.stack,
-      heap: heapObj,
-      callStack: JSON.parse(JSON.stringify(this.callStack)) // Deep clone
+      globals: Array.from(this.globals.values()).map(v => this._serializeVariable(v)),
+      stack: this.stack.map(frame => ({
+        id: frame.id,
+        function: frame.function,
+        line: frame.line,
+        variables: Array.from(frame.variables.values()).map(v => this._serializeVariable(v))
+      })),
+      heap: Array.from(this.heap.values())
+        .filter(block => block.allocated)
+        .map(block => ({
+          address: `0x${block.address.toString(16)}`,
+          size: block.size,
+          type: block.type,
+          data: [...block.data]
+        })),
+      pointers: this._extractPointers()
     };
   }
 
   /**
-   * Reset memory
+   * Find variable in current scope or global
+   */
+  _findVariable(name) {
+    // Check current frame
+    const frame = this.getCurrentFrame();
+    if (frame && frame.variables.has(name)) {
+      return frame.variables.get(name);
+    }
+
+    // Check globals
+    if (this.globals.has(name)) {
+      return this.globals.get(name);
+    }
+
+    return null;
+  }
+
+  /**
+   * Generate unique address
+   */
+  _generateAddress() {
+    return `0x${(0x7fff0000 + this.stepCounter++ * 8).toString(16)}`;
+  }
+
+  /**
+   * Serialize variable for snapshot
+   */
+  _serializeVariable(variable) {
+    return {
+      name: variable.name,
+      type: variable.type,
+      value: this._formatValue(variable.value, variable.type),
+      address: variable.address,
+      scope: variable.scope
+    };
+  }
+
+  /**
+   * Format value based on type
+   */
+  _formatValue(value, type) {
+    if (value === null || value === undefined) {
+      return 'uninitialized';
+    }
+    if (type.includes('*')) {
+      return typeof value === 'number' ? `0x${value.toString(16)}` : value;
+    }
+    if (Array.isArray(value)) {
+      return value;
+    }
+    return value;
+  }
+
+  /**
+   * Extract pointer relationships
+   */
+  _extractPointers() {
+    const pointers = [];
+
+    // Check globals
+    this.globals.forEach((variable) => {
+      if (variable.type.includes('*') && variable.value !== null) {
+        pointers.push({
+          from: variable.address,
+          to: typeof variable.value === 'number' ? `0x${variable.value.toString(16)}` : variable.value,
+          name: variable.name
+        });
+      }
+    });
+
+    // Check stack frames
+    this.stack.forEach((frame) => {
+      frame.variables.forEach((variable) => {
+        if (variable.type.includes('*') && variable.value !== null) {
+          pointers.push({
+            from: variable.address,
+            to: typeof variable.value === 'number' ? `0x${variable.value.toString(16)}` : variable.value,
+            name: variable.name
+          });
+        }
+      });
+    });
+
+    return pointers;
+  }
+
+  /**
+   * Reset memory manager
    */
   reset() {
-    this.globals.clear();
     this.stack = [];
     this.heap.clear();
-    this.callStack = [];
-    this.nextAddress = 0x1000;
+    this.globals.clear();
+    this.nextHeapAddress = 0x1000;
+    this.stepCounter = 0;
   }
 }
-
-export default MemoryManager;

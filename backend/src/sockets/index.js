@@ -65,7 +65,7 @@ export function setupSocketHandlers(io) {
         if (result.complete) {
           // All chunks received, proceed with analysis
           const { code } = result;
-          const language = data.language || analyzeService.detectLanguage(code);
+          const language = data.language || 'c';
 
           // Send progress update
           socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
@@ -74,16 +74,24 @@ export function setupSocketHandlers(io) {
           });
 
           // Validate syntax first
-          let syntaxResult;
+          let syntaxValid = true;
+          let syntaxErrors = [];
+          
           if (gccService.isAvailable()) {
-            syntaxResult = await gccService.compileCode(code, language);
+            const gccResult = await gccService.compileCode(code, language);
+            syntaxValid = gccResult.success;
+            if (!syntaxValid) {
+              syntaxErrors = [gccResult.errors || 'Syntax error'];
+            }
           } else {
-            syntaxResult = await analyzeService.validateSyntax(code, language);
+            const parseResult = await analyzeService.validateSyntax({ code, language });
+            syntaxValid = parseResult.valid;
+            syntaxErrors = parseResult.errors || [];
           }
 
-          if (!syntaxResult.success && syntaxResult.errors) {
+          if (!syntaxValid) {
             socket.emit(SOCKET_EVENTS.CODE_SYNTAX_ERROR, {
-              errors: syntaxResult.errors
+              errors: syntaxErrors
             });
             return;
           }
@@ -94,7 +102,14 @@ export function setupSocketHandlers(io) {
             progress: 50
           });
 
-          const trace = await analyzeService.generateTrace(code, language, data.inputs);
+          const analyzeResult = await analyzeService.analyze({ code, language, inputs: data.inputs || [] });
+          if (!analyzeResult.success) {
+            socket.emit(SOCKET_EVENTS.CODE_TRACE_ERROR, {
+              message: analyzeResult.error
+            });
+            return;
+          }
+          const trace = analyzeResult.trace;
 
           // Compress and chunk the trace
           console.log(`📊 Original trace size: ${traceCompressor.estimateSize(trace)} bytes`);
@@ -133,26 +148,24 @@ export function setupSocketHandlers(io) {
      */
     socket.on(SOCKET_EVENTS.CODE_ANALYZE_SYNTAX, async (data) => {
       try {
-        const { code, language } = data;
-        const detectedLang = language || analyzeService.detectLanguage(code);
+        const { code, language = 'c' } = data;
 
         let result;
         if (gccService.isAvailable()) {
-          result = await gccService.compileCode(code, detectedLang);
+          result = await gccService.compileCode(code, language);
           socket.emit(SOCKET_EVENTS.CODE_SYNTAX_RESULT, {
             valid: result.success,
             errors: result.errors,
             warnings: result.warnings,
-            language: detectedLang,
+            language: language,
             method: 'gcc'
           });
         } else {
-          result = await analyzeService.validateSyntax(code, detectedLang);
+          result = await analyzeService.validateSyntax({ code, language });
           socket.emit(SOCKET_EVENTS.CODE_SYNTAX_RESULT, {
             valid: result.valid,
             errors: result.errors,
-            warnings: result.warnings,
-            language: detectedLang,
+            language: language,
             method: 'parser'
           });
         }
@@ -168,8 +181,9 @@ export function setupSocketHandlers(io) {
      */
     socket.on(SOCKET_EVENTS.CODE_TRACE_GENERATE, async (data) => {
       try {
-        const { code, language, inputs } = data;
-        const detectedLang = language || analyzeService.detectLanguage(code);
+        const { code, language = 'c', inputs = [] } = data;
+
+        console.log(`📝 Generating trace for ${language.toUpperCase()} code (${code.length} bytes)`);
 
         // Emit progress updates
         socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
@@ -177,7 +191,15 @@ export function setupSocketHandlers(io) {
           progress: 25
         });
 
-        const trace = await analyzeService.generateTrace(code, detectedLang, inputs);
+        const result = await analyzeService.analyze({ code, language, inputs });
+        if (!result.success) {
+          console.error(`❌ Analysis failed: ${result.error}`);
+          socket.emit(SOCKET_EVENTS.CODE_TRACE_ERROR, {
+            message: result.error
+          });
+          return;
+        }
+        const trace = result.trace;
 
         socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
           stage: 'compressing',

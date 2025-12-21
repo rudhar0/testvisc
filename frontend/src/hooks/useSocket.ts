@@ -55,6 +55,16 @@ export function useSocket() {
    * Setup event listeners
    */
   useEffect(() => {
+    // Listen for connection state changes
+    const handleConnectionState: SocketEventCallback = (data) => {
+      setIsConnected(data.connected);
+      if (!data.connected) {
+        console.log('⚠️ Disconnected from server');
+      }
+    };
+
+    socketService.on('connection:state', handleConnectionState);
+
     // GCC Status
     const handleGCCStatus: SocketEventCallback = (data) => {
       setGCCStatus(data);
@@ -84,6 +94,13 @@ export function useSocket() {
       if (!data.valid && data.errors) {
         toast.error('Syntax errors found');
       }
+    };
+
+    // Code Syntax Error
+    const handleSyntaxError: SocketEventCallback = (data) => {
+      const errors = Array.isArray(data.errors) ? data.errors.join(', ') : data.errors;
+      toast.error(`Syntax error: ${errors}`);
+      setAnalyzing(false);
     };
 
     // Trace Progress
@@ -133,11 +150,13 @@ export function useSocket() {
     };
 
     // Register listeners
+    socketService.on('connection:state', handleConnectionState);
     socketService.on('gcc:status', handleGCCStatus);
     socketService.on('gcc:download:progress', handleGCCProgress);
     socketService.on('gcc:download:complete', handleGCCComplete);
     socketService.on('gcc:download:error', handleGCCError);
     socketService.on('code:syntax:result', handleSyntaxResult);
+    socketService.on('code:syntax:error', handleSyntaxError);
     socketService.on('code:trace:progress', handleTraceProgress);
     socketService.on('code:trace:chunk', handleTraceChunk);
     socketService.on('code:trace:complete', handleTraceComplete);
@@ -145,10 +164,12 @@ export function useSocket() {
 
     // Cleanup
     return () => {
+      socketService.off('connection:state', handleConnectionState);
       socketService.off('gcc:status', handleGCCStatus);
       socketService.off('gcc:download:progress', handleGCCProgress);
       socketService.off('gcc:download:complete', handleGCCComplete);
       socketService.off('gcc:download:error', handleGCCError);
+      socketService.off('code:syntax:error', handleSyntaxError);
       socketService.off('code:syntax:result', handleSyntaxResult);
       socketService.off('code:trace:progress', handleTraceProgress);
       socketService.off('code:trace:chunk', handleTraceChunk);

@@ -1,158 +1,192 @@
 /**
- * Code Analysis Service
- * Provides fallback analysis when GCC is not available
+ * Analyze Service
+ * Main service for handling code analysis requests
  */
 
+import TraceService from './trace.service.js';
+
 class AnalyzeService {
-  /**
-   * Auto-detect C vs C++
-   */
-  detectLanguage(code) {
-    // C++ indicators
-    const cppPatterns = [
-      /\#include\s*<iostream>/,
-      /std::/,
-      /\bclass\b/,
-      /\bnamespace\b/,
-      /\btemplate\s*</,
-      /\bcout\b/,
-      /\bcin\b/,
-      /\busing\s+namespace/
-    ];
+  constructor() {
+    this.traceService = new TraceService();
+  }
 
-    for (const pattern of cppPatterns) {
-      if (pattern.test(code)) {
-        return 'cpp';
+  /**
+   * Analyze code and generate execution trace
+   * @param {Object} options
+   * @param {string} options.code - Source code
+   * @param {string} options.language - Programming language ('c' or 'cpp')
+   * @param {Array} options.inputs - User inputs for interactive programs
+   * @returns {Promise<Object>} Analysis result
+   */
+  async analyze({ code, language = 'c', inputs = [] }) {
+    try {
+      // Validate inputs
+      this._validateAnalyzeRequest(code, language);
+
+      // First, validate syntax
+      const syntaxCheck = await this.traceService.validateSyntax(code, language);
+      
+      if (!syntaxCheck.valid) {
+        return {
+          success: false,
+          error: 'Syntax errors found',
+          errors: syntaxCheck.errors,
+          trace: []
+        };
       }
-    }
 
-    // Default to C
-    return 'c';
+      // Generate execution trace
+      let trace;
+      try {
+        trace = await this.traceService.generateTrace(code, language, inputs);
+      } catch (traceError) {
+        console.error(`❌ Trace generation error: ${traceError.message}`);
+        // For now, return error with details
+        throw new Error(`Code execution failed: ${traceError.message}`);
+      }
+
+      // Get trace statistics
+      const stats = this.traceService.getTraceStats(trace);
+
+      return {
+        success: true,
+        trace,
+        stats,
+        metadata: {
+          language,
+          totalSteps: trace.length,
+          hasInput: stats.stepTypes['input_request'] > 0,
+          hasHeap: stats.heapAllocations > 0,
+          maxStackDepth: stats.maxStackDepth
+        }
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        trace: []
+      };
+    }
   }
 
   /**
-   * Basic syntax validation (fallback)
+   * Validate syntax only (fast check)
    */
-  async validateSyntax(code, language = 'c') {
-    const errors = [];
-    const warnings = [];
+  async validateSyntax({ code, language = 'c' }) {
+    try {
+      this._validateAnalyzeRequest(code, language);
 
-    // Basic checks
-    if (!code.includes('main')) {
-      errors.push({
-        line: 0,
-        message: 'No main function found'
-      });
+      const result = await this.traceService.validateSyntax(code, language);
+
+      return {
+        success: result.valid,
+        valid: result.valid,
+        errors: result.errors
+      };
+    } catch (error) {
+      return {
+        success: false,
+        valid: false,
+        errors: [error.message]
+      };
     }
-
-    // Check for balanced braces
-    const openBraces = (code.match(/\{/g) || []).length;
-    const closeBraces = (code.match(/\}/g) || []).length;
-    if (openBraces !== closeBraces) {
-      errors.push({
-        line: 0,
-        message: 'Unbalanced braces'
-      });
-    }
-
-    // Check for balanced parentheses
-    const openParens = (code.match(/\(/g) || []).length;
-    const closeParens = (code.match(/\)/g) || []).length;
-    if (openParens !== closeParens) {
-      errors.push({
-        line: 0,
-        message: 'Unbalanced parentheses'
-      });
-    }
-
-    return {
-      valid: errors.length === 0,
-      errors,
-      warnings
-    };
   }
 
   /**
-   * Parse AST (fallback - basic parsing)
+   * Extract input requirements from code
    */
-  async parseAST(code, language = 'c') {
-    // This is a placeholder - in production, use tree-sitter or similar
+  async getInputRequirements({ code, language = 'c' }) {
+    try {
+      this._validateAnalyzeRequest(code, language);
+
+      const requirements = await this.traceService.extractInputRequirements(code, language);
+
+      return {
+        success: true,
+        requirements,
+        needsInput: requirements.length > 0
+      };
+    } catch (error) {
+      return {
+        success: false,
+        requirements: [],
+        needsInput: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Continue execution after input is provided
+   * This is called when user provides input during execution
+   */
+  async continueExecution({ code, language = 'c', inputs = [], stepId = 0 }) {
+    try {
+      // For now, we regenerate the trace with inputs
+      // In a more sophisticated implementation, we could resume from stepId
+      return await this.analyze({ code, language, inputs });
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        trace: []
+      };
+    }
+  }
+
+  /**
+   * Validate analyze request
+   */
+  _validateAnalyzeRequest(code, language) {
+    if (!code || typeof code !== 'string') {
+      throw new Error('Code is required and must be a string');
+    }
+
+    if (code.trim().length === 0) {
+      throw new Error('Code cannot be empty');
+    }
+
+    if (!['c', 'cpp', 'c++'].includes(language.toLowerCase())) {
+      throw new Error('Language must be "c" or "cpp"');
+    }
+
+    // Check code length (prevent abuse)
+    if (code.length > 100000) {
+      throw new Error('Code exceeds maximum length (100KB)');
+    }
+  }
+
+  /**
+   * Get supported features
+   */
+  getSupportedFeatures() {
     return {
-      success: true,
-      ast: {
-        type: 'Program',
-        functions: this.extractFunctions(code),
-        globals: this.extractGlobals(code),
-        includes: this.extractIncludes(code)
+      languages: ['c', 'cpp'],
+      features: {
+        variables: true,
+        arrays: true,
+        pointers: true,
+        functions: true,
+        recursion: true,
+        loops: true,
+        conditionals: true,
+        heap: true,
+        malloc: true,
+        free: true,
+        printf: true,
+        scanf: true,
+        cout: true,
+        cin: true
+      },
+      limitations: {
+        maxExecutionSteps: 10000,
+        maxLoopIterations: 10000,
+        maxStackDepth: 1000,
+        maxHeapSize: 1000000
       }
     };
-  }
-
-  /**
-   * Extract function declarations
-   */
-  extractFunctions(code) {
-    const functions = [];
-    const functionPattern = /(\w+)\s+(\w+)\s*\([^)]*\)\s*\{/g;
-    let match;
-
-    while ((match = functionPattern.exec(code)) !== null) {
-      functions.push({
-        returnType: match[1],
-        name: match[2],
-        line: code.substring(0, match.index).split('\n').length
-      });
-    }
-
-    return functions;
-  }
-
-  /**
-   * Extract global variables
-   */
-  extractGlobals(code) {
-    const globals = [];
-    // Simple pattern for global declarations
-    const globalPattern = /^(int|float|double|char|long)\s+(\w+)\s*(?:=\s*([^;]+))?\s*;/gm;
-    let match;
-
-    while ((match = globalPattern.exec(code)) !== null) {
-      globals.push({
-        type: match[1],
-        name: match[2],
-        initialValue: match[3] || null,
-        line: code.substring(0, match.index).split('\n').length
-      });
-    }
-
-    return globals;
-  }
-
-  /**
-   * Extract #include statements
-   */
-  extractIncludes(code) {
-    const includes = [];
-    const includePattern = /#include\s*[<"]([^>"]+)[>"]/g;
-    let match;
-
-    while ((match = includePattern.exec(code)) !== null) {
-      includes.push(match[1]);
-    }
-
-    return includes;
-  }
-
-  /**
-   * Generate execution trace using trace service
-   */
-  async generateTrace(code, language = 'c', inputs = []) {
-    // Import trace service dynamically
-    const { traceService } = await import('./trace.service.js');
-    
-    // Generate full execution trace
-    return await traceService.generateTrace(code, language, inputs);
   }
 }
 
 export const analyzeService = new AnalyzeService();
+export default AnalyzeService;

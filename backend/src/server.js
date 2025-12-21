@@ -9,15 +9,10 @@ import { gccService } from './services/gcc.service.js';
 import { setupSocketHandlers } from './sockets/index.js';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 import { logger } from './utils/logger.js';
-
+import { socketConfig } from './config/socket.config.js';
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: {
-    origin: config.allowedOrigins,
-    methods: ['GET', 'POST']
-  }
-});
+const io = new Server(httpServer, socketConfig);
 
 // Middleware
 app.use(cors({
@@ -26,6 +21,11 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('dev'));
+
+// Quick root route to verify Express HTTP is responding
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'Express root responding', time: new Date().toISOString() });
+});
 
 // API Routes
 app.use('/api', routes);

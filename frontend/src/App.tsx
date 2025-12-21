@@ -11,9 +11,13 @@ function App() {
     // Connect to Socket.io on mount
     connect();
 
-    // Cleanup on unmount
+    // Keep socket connection alive across React Strict Mode remounts
+    // Only disconnect when the page is unloaded
+    const handleBeforeUnload = () => disconnect();
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
-      disconnect();
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [connect, disconnect]);
 

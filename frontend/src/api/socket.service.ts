@@ -15,6 +15,7 @@ class SocketService {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private eventListeners: Map<string, SocketEventCallback[]> = new Map();
+  private isConnectedFlag = false;
 
   /**
    * Connect to Socket.io server
@@ -40,6 +41,8 @@ class SocketService {
       this.socket.on('connect', () => {
         console.log('✅ Socket.io connected:', this.socket?.id);
         this.reconnectAttempts = 0;
+        this.isConnectedFlag = true;
+        this.emit('connection:state', { connected: true });
         resolve(this.socket!);
       });
 
@@ -47,6 +50,8 @@ class SocketService {
       this.socket.on('connect_error', (error) => {
         console.error('❌ Socket.io connection error:', error);
         this.reconnectAttempts++;
+        this.isConnectedFlag = false;
+        this.emit('connection:state', { connected: false });
         
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
           reject(new Error('Failed to connect after maximum attempts'));
@@ -56,6 +61,8 @@ class SocketService {
       // Disconnection
       this.socket.on('disconnect', (reason) => {
         console.log('🔌 Socket.io disconnected:', reason);
+        this.isConnectedFlag = false;
+        this.emit('connection:state', { connected: false });
       });
 
       // Reconnection attempt
