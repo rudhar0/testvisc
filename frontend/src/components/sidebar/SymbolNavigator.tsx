@@ -1,14 +1,11 @@
-/**
- * Symbol Navigator Component
- * Shows functions, variables, and structures from the code
- */
 
-import { Globe, FunctionSquare, Box, ChevronRight } from 'lucide-react';
-import { useState } from 'react';
+
+import { Globe, SquareFunction, Box, ChevronRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useExecutionStore } from '@store/slices/executionSlice';
 import { useCanvasStore } from '@store/slices/canvasSlice';
 import { COLORS } from '@config/theme.config';
-
+  
 export default function SymbolNavigator() {
   const { executionTrace } = useExecutionStore();
   const { selectElement } = useCanvasStore();
@@ -17,16 +14,35 @@ export default function SymbolNavigator() {
     functions: true,
   });
 
-  // Extract symbols from first trace step
-  const firstStep = executionTrace[0];
-  const globals = firstStep?.state?.globals || {};
-  const callStack = executionTrace.find(step => step.type === 'function_call');
-  
-  // Extract function names from trace
-  const functions = executionTrace
-    .filter(step => step.type === 'function_call')
-    .map(step => (step as any).function)
-    .filter((v, i, a) => a.indexOf(v) === i); // Unique
+  const [globals, setGlobals] = useState({});
+  const [functions, setFunctions] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (executionTrace.length > 0) {
+      // Extract globals from the entire trace
+      const allGlobals: Record<string, any> = {};
+      executionTrace.forEach(step => {
+        if (step.type === 'global_declaration') {
+          allGlobals[(step as any).variable] = { type: (step as any).dataType };
+        }
+        if (step.state?.globals) {
+          Object.assign(allGlobals, step.state.globals);
+        }
+      });
+      setGlobals(allGlobals);
+
+      // Extract unique function names from the entire trace
+      const uniqueFunctions = Array.from(new Set(
+        executionTrace
+          .filter(step => step.type === 'function_call')
+          .map(step => String((step as any).function || 'unknown'))
+      ));
+      setFunctions(uniqueFunctions);
+    } else {
+      setGlobals({});
+      setFunctions([]);
+    }
+  }, [executionTrace]);
 
   const toggleSection = (section: 'globals' | 'functions') => {
     setExpandedSections(prev => ({
@@ -77,7 +93,7 @@ export default function SymbolNavigator() {
         {expandedSections.globals && (
           <div className="ml-6 space-y-1">
             {Object.entries(globals).map(([name, variable]: [string, any]) => (
-              <button
+              <button 
                 key={name}
                 onClick={() => handleSymbolClick(name, 'global')}
                 className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 transition-colors group"
@@ -114,7 +130,7 @@ export default function SymbolNavigator() {
               expandedSections.functions ? 'rotate-90' : ''
             }`}
           />
-          <FunctionSquare className="h-4 w-4" style={{ color: COLORS.memory.stack.DEFAULT }} />
+          <SquareFunction className="h-4 w-4" style={{ color: COLORS.memory.stack.DEFAULT }} />
           <span className="text-sm font-semibold text-slate-200">
             Functions
           </span>
@@ -126,7 +142,7 @@ export default function SymbolNavigator() {
         {expandedSections.functions && (
           <div className="ml-6 space-y-1">
             {functions.map((funcName) => (
-              <button
+              <button 
                 key={funcName}
                 onClick={() => handleSymbolClick(funcName, 'function')}
                 className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 transition-colors group"

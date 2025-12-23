@@ -18,9 +18,14 @@ export default function VariableLifetime() {
     birthStep: number;
     deathStep: number | null;
     isAlive: boolean;
+    depth: number;
   }>();
 
+  let stackDepth = 0;
+
   executionTrace.forEach((step, index) => {
+    if (step.type === 'function_call') stackDepth++;
+
     if (step.type === 'variable_declaration' || step.type === 'global_declaration') {
       const varName = (step as any).variable;
       const varType = (step as any).dataType;
@@ -34,6 +39,7 @@ export default function VariableLifetime() {
           birthStep: index,
           deathStep: null,
           isAlive: true,
+          depth: stackDepth,
         });
       }
     }
@@ -41,11 +47,13 @@ export default function VariableLifetime() {
     // Detect variable death (function return for locals)
     if (step.type === 'function_return') {
       variables.forEach((v, name) => {
-        if (v.scope === 'local' && v.deathStep === null) {
+        // Only kill locals at the current stack depth
+        if (v.scope === 'local' && v.deathStep === null && v.depth === stackDepth) {
           v.deathStep = index;
           v.isAlive = false;
         }
       });
+      stackDepth--;
     }
   });
 

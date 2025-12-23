@@ -11,38 +11,71 @@ class TraceCompressor {
    * Compress execution trace to reduce data size
    */
   compressTrace(trace) {
-    const compressed = {
-      steps: this.compressSteps(trace.steps),
-      totalSteps: trace.steps.length,
-      globals: this.compressVariables(trace.globals || []),
-      functions: trace.functions || [],
-      metadata: {
-        compressed: true,
-        originalSize: this.estimateSize(trace),
-        timestamp: Date.now()
-      }
-    };
+    try {
+      console.log('compressTrace called with:', {
+        isArray: Array.isArray(trace),
+        type: typeof trace,
+        hasSteps: trace?.steps !== undefined,
+        length: Array.isArray(trace) ? trace.length : trace?.steps?.length
+      });
+      
+      const steps = Array.isArray(trace) ? trace : (trace?.steps || []);
+      const globals = Array.isArray(trace) ? [] : (trace?.globals || []);
+      
+      console.log('Extracted:', {
+        stepsCount: steps.length,
+        globalsCount: globals.length,
+        stepsIsArray: Array.isArray(steps),
+        globalsIsArray: Array.isArray(globals)
+      });
+      
+      const compressed = {
+        steps: this.compressSteps(steps),
+        totalSteps: steps.length,
+        globals: this.compressVariables(globals),
+        functions: Array.isArray(trace) ? [] : (trace?.functions || []),
+        metadata: {
+          compressed: true,
+          originalSize: this.estimateSize(trace),
+          timestamp: Date.now()
+        }
+      };
 
-    compressed.metadata.compressedSize = this.estimateSize(compressed);
-    compressed.metadata.compressionRatio = 
-      (compressed.metadata.compressedSize / compressed.metadata.originalSize * 100).toFixed(2) + '%';
+      compressed.metadata.compressedSize = this.estimateSize(compressed);
+      compressed.metadata.compressionRatio = 
+        (compressed.metadata.compressedSize / compressed.metadata.originalSize * 100).toFixed(2) + '%';
 
-    return compressed;
+      return compressed;
+    } catch (error) {
+      console.error('compressTrace error:', error);
+      console.error('Trace input:', JSON.stringify(trace, null, 2).substring(0, 500));
+      throw error;
+    }
   }
 
   /**
    * Compress individual execution steps
    */
   compressSteps(steps) {
+    if (!Array.isArray(steps)) {
+      console.error('compressSteps: steps is not an array:', typeof steps);
+      return [];
+    }
+    
     return steps.map((step, index) => {
+      if (!step || typeof step !== 'object') {
+        console.error(`compressSteps: Invalid step at index ${index}:`, step);
+        return null;
+      }
+      
       const compressed = {
-        id: step.id,
-        type: step.type,
-        line: step.line,
-        explanation: step.explanation,
+        id: step.id ?? index,
+        type: step.type || 'unknown',
+        line: step.line || 0,
+        explanation: step.explanation || '',
         
         // Only include state diff instead of full state
-        stateDiff: index > 0 ? this.calculateStateDiff(steps[index - 1].state, step.state) : step.state,
+        stateDiff: index > 0 ? this.calculateStateDiff(steps[index - 1]?.state, step.state) : (step.state || {}),
         
         // Compress animation config
         animation: this.compressAnimation(step.animation),
@@ -53,7 +86,7 @@ class TraceCompressor {
       };
 
       return compressed;
-    });
+    }).filter(step => step !== null);
   }
 
   /**
@@ -62,6 +95,7 @@ class TraceCompressor {
    */
   calculateStateDiff(prevState, currentState) {
     if (!prevState) return currentState;
+    if (!currentState) return null;
 
     const diff = {};
 
@@ -71,9 +105,11 @@ class TraceCompressor {
       diff.globals = globalsDiff;
     }
 
-    // Check stack
-    if (JSON.stringify(prevState.stack) !== JSON.stringify(currentState.stack)) {
-      diff.stack = currentState.stack;
+    // Check stack (handle arrays and undefined)
+    const prevStack = prevState.stack || [];
+    const currStack = currentState.stack || [];
+    if (JSON.stringify(prevStack) !== JSON.stringify(currStack)) {
+      diff.stack = currStack;
     }
 
     // Check heap
@@ -82,9 +118,11 @@ class TraceCompressor {
       diff.heap = heapDiff;
     }
 
-    // Check call stack
-    if (JSON.stringify(prevState.callStack) !== JSON.stringify(currentState.callStack)) {
-      diff.callStack = currentState.callStack;
+    // Check call stack (handle arrays and undefined)
+    const prevCallStack = prevState.callStack || [];
+    const currCallStack = currentState.callStack || [];
+    if (JSON.stringify(prevCallStack) !== JSON.stringify(currCallStack)) {
+      diff.callStack = currCallStack;
     }
 
     return Object.keys(diff).length > 0 ? diff : null;
@@ -95,6 +133,9 @@ class TraceCompressor {
    */
   diffObjects(obj1, obj2) {
     const diff = {};
+    
+    if (!obj1) obj1 = {};
+    if (!obj2) obj2 = {};
 
     // Check for changes and additions
     for (const key in obj2) {
@@ -140,15 +181,27 @@ class TraceCompressor {
    * Compress variable list
    */
   compressVariables(variables) {
-    return variables.map(v => ({
-      n: v.name,
-      t: v.type,
-      v: v.value,
-      a: v.address,
-      s: v.scope,
-      ...(v.birthStep !== undefined && { b: v.birthStep }),
-      ...(v.deathStep !== undefined && { d: v.deathStep })
-    }));
+    if (!Array.isArray(variables)) {
+      console.error('compressVariables: variables is not an array:', typeof variables, variables);
+      return [];
+    }
+    
+    return variables.map((v, index) => {
+      if (!v || typeof v !== 'object') {
+        console.warn(`compressVariables: Invalid variable at index ${index}:`, v);
+        return null;
+      }
+      
+      return {
+        n: v.name,
+        t: v.type,
+        v: v.value,
+        a: v.address,
+        s: v.scope,
+        ...(v.birthStep !== undefined && { b: v.birthStep }),
+        ...(v.deathStep !== undefined && { d: v.deathStep })
+      };
+    }).filter(v => v !== null);
   }
 
   /**
