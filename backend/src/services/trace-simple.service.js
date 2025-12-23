@@ -1,6 +1,6 @@
 /**
- * Simplified Trace Service
- * Uses Clang + LibTooling for validation and generates trace from code analysis
+ * Simplified Trace Service - FIXED VERSION
+ * Generates trace with correct state structure matching frontend types
  */
 
 import ASTWalker from '../parsers/ast-walker.js';
@@ -11,25 +11,17 @@ class TraceService {
     this.walker = null;
   }
 
-  /**
-   * Generate execution trace for C/C++ code
-   * Validates with Clang if available, parses with tree-sitter, generates trace with semantic info
-   * Fallback to tree-sitter parsing if Clang is not available
-   */
   async generateTrace(code, language = 'c', inputs = []) {
     try {
       console.log(`🔍 Validating ${language.toUpperCase()} code...`);
 
-      // Try to validate with Clang, but don't fail if Clang is not available
-      let tree = null; // Declare tree here to be accessible later
+      let tree = null;
       let clangAvailable = true;
+      
       try {
         const validationResult = await clangAnalyzerService.validateCode(code, language);
         if (!validationResult.valid) {
           let errorsToProcess = validationResult.errors;
-          // Ensure errorsToProcess is an array before calling map.
-          // This handles cases where validationResult.errors might be a string,
-          // a non-array object, or null/undefined.
           if (!Array.isArray(errorsToProcess)) {
             errorsToProcess = errorsToProcess ? [errorsToProcess] : [];
           }
@@ -41,24 +33,21 @@ class TraceService {
         console.warn(`⚠️  Clang validation unavailable, using tree-sitter fallback: ${clangError.message}`);
         clangAvailable = false;
         
-        // Fallback: Basic syntax validation with tree-sitter
         try {
           this.walker = new ASTWalker(language);
-          tree = this.walker.parse(code); // Parse here if Clang fails
+          tree = this.walker.parse(code);
           console.log(`✅ Tree-sitter parsing passed`);
         } catch (parseError) {
           throw new Error(`Syntax error: ${parseError.message}`);
         }
       }
 
-      // Parse code with tree-sitter for basic structure analysis
-      if (!tree) { // Only parse if tree wasn't already parsed in the Clang fallback
+      if (!tree) {
         console.log(`🔍 Parsing ${language.toUpperCase()} code with tree-sitter...`);
         this.walker = new ASTWalker(language);
         tree = this.walker.parse(code);
       }
 
-      // Check for main function
       try {
         const mainFunc = this.walker.findMain(tree);
         console.log(`✅ Found main function at line ${mainFunc.startLine}`);
@@ -66,7 +55,6 @@ class TraceService {
         throw new Error(`No main function found: ${error.message}`);
       }
 
-      // Generate trace with semantic information
       const trace = await this._generateSemanticTrace(code, language, inputs, clangAvailable);
       console.log(`✅ Execution trace generated: ${trace.length} steps`);
 
@@ -78,14 +66,14 @@ class TraceService {
   }
 
   /**
-   * Generate trace with semantic information from Clang analysis (with fallback)
+   * Generate trace with CORRECT state structure
    */
   async _generateSemanticTrace(code, language, inputs, clangAvailable = true) {
     const lines = code.split('\n');
     const trace = [];
     let stepId = 0;
 
-    // Get semantic information (if Clang is available)
+    // Get semantic information
     let semanticInfo = null;
     if (clangAvailable) {
       try {
@@ -98,49 +86,61 @@ class TraceService {
       semanticInfo = { success: false, analysis: null };
     }
 
+    // Helper to create proper state structure
+    const createState = (globals = {}, callStack = [], heap = {}) => ({
+      globals,        // Object with variable names as keys
+      stack: [],      // Legacy, keeping empty for compatibility
+      heap,           // Object with addresses as keys
+      callStack       // Array of CallFrame objects
+    });
+
     // Program start
     trace.push({
       id: stepId++,
       line: 1,
       type: 'program_start',
       explanation: 'Program execution begins',
-      semantic: {
-        functions: semanticInfo.analysis?.semantic?.functions ?? 0, // These are counts, not arrays
-        classes: semanticInfo.analysis?.semantic?.classes ?? 0,     // Use nullish coalescing for default 0
-        variables: semanticInfo.analysis?.semantic?.variables ?? 0
-      },
-      state: {
-        globals: semanticInfo.analysis?.variables?.filter(v => v.scope === 'global') || [], // Filter for actual globals
-        stack: [],
-        heap: [],
-        pointers: semanticInfo.analysis?.pointers?.pointers || []
+      state: createState(),
+      animation: {
+        type: 'appear',
+        target: 'global',
+        duration: 500
       }
     });
 
-    // Parse functions and key lines
+    // Parse and generate steps
     let inMain = false;
     let mainLineNum = 0;
+    const localVars = {}; // Track local variables
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lineNum = i + 1;
-      const currentGlobals = trace[trace.length - 1].state.globals; // Carry globals forward
       const trimmed = line.trim();
 
       // Detect main function
       if (trimmed.includes('main') && (trimmed.includes('(') && trimmed.includes(')'))) {
         inMain = true;
         mainLineNum = lineNum;
+        
         trace.push({
           id: stepId++,
           line: lineNum,
           type: 'function_call',
-          explanation: `Entering main() function`,
-          state: {
-            globals: currentGlobals, // Carry globals forward
-            stack: [{ id: 'frame_0', function: 'main', line: lineNum, variables: [] }],
-            heap: [],
-            pointers: []
+          explanation: 'Entering main() function',
+          state: createState({}, [{
+            function: 'main',
+            returnType: 'int',
+            params: {},
+            locals: {},
+            frameId: 'frame_0',
+            returnAddress: null,
+            isActive: true
+          }]),
+          animation: {
+            type: 'push_frame',
+            target: 'stack',
+            duration: 400
           }
         });
         continue;
@@ -148,71 +148,109 @@ class TraceService {
 
       if (!inMain) continue;
 
+      // Get current call stack from last step
+      const lastState = trace[trace.length - 1].state;
+      const currentCallStack = [...lastState.callStack];
+      const currentGlobals = { ...lastState.globals };
+
       // Detect variable declarations
-      const varDeclMatch = trimmed.match(/^(int|char|float|double|bool|auto|long|short)\s+(\w+)\s*(?:=|;)/);
+      const varDeclMatch = trimmed.match(/^(int|char|float|double|bool|auto|long|short)\s+(\w+)\s*(?:=\s*([^;]+))?;?/);
       if (varDeclMatch) {
+        const [, type, name, initValue] = varDeclMatch;
+        const value = initValue ? this._parseValue(initValue) : 0;
+        
+        // Add to local variables
+        localVars[name] = {
+          name,
+          type,
+          value,
+          address: `0x${(0x7fff0000 + Object.keys(localVars).length * 8).toString(16)}`,
+          scope: 'local',
+          isAlive: true
+        };
+
+        // Update call stack with new variable
+        if (currentCallStack.length > 0) {
+          currentCallStack[currentCallStack.length - 1].locals = { ...localVars };
+        }
+
         trace.push({
           id: stepId++,
           line: lineNum,
-          type: 'declaration',
-          explanation: `Variable ${varDeclMatch[2]} declared (type: ${varDeclMatch[1]})`,
-          state: {
-            globals: currentGlobals, // Carry globals forward
-            stack: [{ id: 'frame_0', function: 'main', line: lineNum, variables: [{ name: varDeclMatch[2], type: varDeclMatch[1], value: 0 }] }],
-            heap: [],
-            pointers: []
+          type: 'variable_declaration',
+          explanation: `Declare ${type} ${name}${initValue ? ` = ${value}` : ''}`,
+          state: createState(currentGlobals, currentCallStack),
+          animation: {
+            type: 'appear',
+            target: 'stack',
+            duration: 300,
+            element: name
           }
         });
       }
 
       // Detect assignments
-      const assignMatch = trimmed.match(/(\w+)\s*=/);
+      const assignMatch = trimmed.match(/^(\w+)\s*=\s*([^;]+);?/);
       if (assignMatch && !varDeclMatch && !trimmed.startsWith('//')) {
+        const [, name, valueExpr] = assignMatch;
+        const newValue = this._parseValue(valueExpr);
+        
+        if (localVars[name]) {
+          const oldValue = localVars[name].value;
+          localVars[name].value = newValue;
+          
+          // Update call stack
+          if (currentCallStack.length > 0) {
+            currentCallStack[currentCallStack.length - 1].locals = { ...localVars };
+          }
+
+          trace.push({
+            id: stepId++,
+            line: lineNum,
+            type: 'assignment',
+            explanation: `${name} = ${newValue}`,
+            state: createState(currentGlobals, currentCallStack),
+            animation: {
+              type: 'value_change',
+              target: 'stack',
+              duration: 400,
+              element: name,
+              from: oldValue,
+              to: newValue
+            }
+          });
+        }
+      }
+
+      // Detect output (printf/cout)
+      if (trimmed.includes('printf') || trimmed.includes('cout')) {
+        const funcName = trimmed.includes('printf') ? 'printf' : 'cout';
         trace.push({
           id: stepId++,
           line: lineNum,
-          type: 'assignment',
-          explanation: `Assignment: ${trimmed}`,
-          state: {
-            globals: currentGlobals, // Carry globals forward
-            stack: [{ id: 'frame_0', function: 'main', line: lineNum, variables: [] }],
-            heap: [],
-            pointers: []
+          type: 'output',
+          explanation: `Output: ${trimmed.substring(0, 50)}...`,
+          state: createState(currentGlobals, currentCallStack),
+          animation: {
+            type: 'appear',
+            target: 'overlay',
+            duration: 500
           }
         });
       }
 
-      // Detect function calls
-      if (trimmed.includes('printf') || trimmed.includes('cout') || trimmed.includes('scanf') || trimmed.includes('cin')) {
-        const funcName = trimmed.includes('printf') ? 'printf' : 
-                        trimmed.includes('cout') ? 'cout' :
-                        trimmed.includes('scanf') ? 'scanf' : 'cin';
-        trace.push({
-          id: stepId++,
-          line: lineNum,
-          type: 'function_call',
-          explanation: `Call to ${funcName}(): ${trimmed}`,
-          state: {
-            globals: currentGlobals, // Carry globals forward
-            stack: [{ id: 'frame_0', function: 'main', line: lineNum, variables: [] }],
-            heap: [],
-            pointers: []
-          }
-        });
-      }
-
-      // Detect return statement
+      // Detect return
       if (trimmed.includes('return')) {
         trace.push({
           id: stepId++,
           line: lineNum,
           type: 'function_return',
           explanation: 'Return from main()',
-          state: {
-            globals: currentGlobals, // Carry globals forward
-            stack: [],
-            heap: [],
-            pointers: []
+          state: createState(currentGlobals, []),
+          animation: {
+            type: 'pop_frame',
+            target: 'stack',
+            duration: 400
           }
         });
         inMain = false;
@@ -221,55 +259,57 @@ class TraceService {
     }
 
     // Program end
-    if (trace.length > 1) {
-      trace.push({
-        id: stepId++,
-        line: lines.length,
-        type: 'program_end',
-        explanation: 'Program execution completed',
-        state: {
-          globals: [],
-          stack: [],
-          heap: [],
-          pointers: []
-        }
-      });
-    }
-
-    return trace.length > 1 ? trace : this._getMinimalTrace();
-  }
-
-  /**
-   * Get a minimal valid trace for any code
-   */
-  _getMinimalTrace() {
-    return [
-      {
-        id: 0,
-        line: 1,
-        type: 'program_start',
-        explanation: 'Program execution begins',
-        state: { globals: [], stack: [], heap: [], pointers: [] }
-      },
-      {
-        id: 1,
-        line: 2,
-        type: 'program_end',
-        explanation: 'Program execution completed',
-        state: { globals: [], stack: [], heap: [], pointers: [] }
+    trace.push({
+      id: stepId++,
+      line: lines.length,
+      type: 'program_end',
+      explanation: 'Program execution completed',
+      state: createState(),
+      animation: {
+        type: 'disappear',
+        target: 'global',
+        duration: 500
       }
-    ];
+    });
+
+    return trace;
   }
 
   /**
-   * Validate syntax only (without execution)
+   * Parse simple values from expressions
    */
+  _parseValue(expr) {
+    const trimmed = expr.trim();
+    
+    // Number
+    if (/^-?\d+$/.test(trimmed)) {
+      return parseInt(trimmed, 10);
+    }
+    
+    // Float
+    if (/^-?\d+\.\d+$/.test(trimmed)) {
+      return parseFloat(trimmed);
+    }
+    
+    // String literal
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      return trimmed.slice(1, -1);
+    }
+    
+    // Char literal
+    if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+      return trimmed.slice(1, -1);
+    }
+    
+    // Default
+    return trimmed;
+  }
+
   async validateSyntax(code, language = 'c') {
     try {
       const walker = new ASTWalker(language);
       const tree = walker.parse(code);
       
-      // Syntax is valid if tree parses without error
       return {
         valid: true,
         errors: []
@@ -282,9 +322,6 @@ class TraceService {
     }
   }
 
-  /**
-   * Get trace statistics
-   */
   getTraceStats(trace) {
     const stats = {
       totalSteps: trace.length,
@@ -296,17 +333,14 @@ class TraceService {
 
     for (const step of trace) {
       stats.stepTypes[step.type] = (stats.stepTypes[step.type] || 0) + 1;
-      if (step.state.stack) {
-        stats.maxStackDepth = Math.max(stats.maxStackDepth, step.state.stack.length);
+      if (step.state.callStack) {
+        stats.maxStackDepth = Math.max(stats.maxStackDepth, step.state.callStack.length);
       }
     }
 
     return stats;
   }
 
-  /**
-   * Extract input requirements from code
-   */
   async extractInputRequirements(code, language = 'c') {
     const requirements = [];
     const lines = code.split('\n');
