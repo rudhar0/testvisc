@@ -31,8 +31,8 @@ export function useSocket() {
       setIsConnected(true);
       toast.success('Connected to server');
       
-      // Request initial GCC status
-      socketService.requestGCCStatus();
+      // Request initial compiler status
+      socketService.requestCompilerStatus();
     } catch (error) {
       console.error('Failed to connect:', error);
       toast.error('Failed to connect to server');
@@ -63,43 +63,54 @@ export function useSocket() {
       }
     };
 
-    socketService.on('connection:state', handleConnectionState);
-
-    // GCC Status
+    // Compiler Status
     const handleGCCStatus: SocketEventCallback = (data) => {
       setGCCStatus(data);
-    };
-
-    // GCC Download Progress
-    const handleGCCProgress: SocketEventCallback = (data) => {
-      setProgress(data.progress);
-      setStage(data.stage);
-    };
-
-    // GCC Download Complete
-    const handleGCCComplete: SocketEventCallback = () => {
-      setStage('ready');
-      setProgress(100);
-      toast.success('GCC installed successfully');
-    };
-
-    // GCC Download Error
-    const handleGCCError: SocketEventCallback = (data) => {
-      setDownloadError(data.message);
-      toast.error(`GCC download failed: ${data.message}`);
     };
 
     // Code Syntax Result
     const handleSyntaxResult: SocketEventCallback = (data) => {
       if (!data.valid && data.errors) {
-        toast.error('Syntax errors found');
+        let errorMessages = '';
+        if (Array.isArray(data.errors)) {
+          errorMessages = data.errors
+            .map((err: any) => {
+              if (typeof err === 'string') return err;
+              if (err.message) {
+                return err.details ? `${err.message} - ${err.details}` : err.message;
+              }
+              return JSON.stringify(err);
+            })
+            .join('; ');
+        } else if (typeof data.errors === 'string') {
+          errorMessages = data.errors;
+        }
+        toast.error(`Syntax errors found: ${errorMessages}`);
       }
     };
 
     // Code Syntax Error
     const handleSyntaxError: SocketEventCallback = (data) => {
-      const errors = Array.isArray(data.errors) ? data.errors.join(', ') : data.errors;
-      toast.error(`Syntax error: ${errors}`);
+      let errorMessage = 'Unknown syntax error';
+      
+      if (Array.isArray(data.errors)) {
+        // Handle array of error objects from Clang
+        errorMessage = data.errors
+          .map((err: any) => {
+            if (typeof err === 'string') return err;
+            if (err.message) {
+              return err.details ? `${err.message} - ${err.details}` : err.message;
+            }
+            return JSON.stringify(err);
+          })
+          .join('; ');
+      } else if (typeof data.errors === 'string') {
+        errorMessage = data.errors;
+      } else if (data.message) {
+        errorMessage = data.message;
+      }
+      
+      toast.error(`Syntax error: ${errorMessage}`);
       setAnalyzing(false);
     };
 
@@ -151,10 +162,7 @@ export function useSocket() {
 
     // Register listeners
     socketService.on('connection:state', handleConnectionState);
-    socketService.on('gcc:status', handleGCCStatus);
-    socketService.on('gcc:download:progress', handleGCCProgress);
-    socketService.on('gcc:download:complete', handleGCCComplete);
-    socketService.on('gcc:download:error', handleGCCError);
+    socketService.on('compiler:status', handleGCCStatus);
     socketService.on('code:syntax:result', handleSyntaxResult);
     socketService.on('code:syntax:error', handleSyntaxError);
     socketService.on('code:trace:progress', handleTraceProgress);
@@ -165,10 +173,7 @@ export function useSocket() {
     // Cleanup
     return () => {
       socketService.off('connection:state', handleConnectionState);
-      socketService.off('gcc:status', handleGCCStatus);
-      socketService.off('gcc:download:progress', handleGCCProgress);
-      socketService.off('gcc:download:complete', handleGCCComplete);
-      socketService.off('gcc:download:error', handleGCCError);
+      socketService.off('compiler:status', handleGCCStatus);
       socketService.off('code:syntax:error', handleSyntaxError);
       socketService.off('code:syntax:result', handleSyntaxResult);
       socketService.off('code:trace:progress', handleTraceProgress);

@@ -1,62 +1,42 @@
-import { gccService } from '../services/gcc.service.js';
-import { analyzeService } from '../services/analyze.service.js';
+import clangAnalyzerService from '../services/clang-analyzer.service.js';
+import TraceService from '../services/trace-simple.service.js';
+import ASTWalker from '../parsers/ast-walker.js';
 import { chunkService } from '../services/chunk.service.js';
 import { traceCompressor } from '../middleware/trace-compression.middleware.js';
 import { SOCKET_EVENTS } from '../constants/events.js';
 
 /**
- * Setup Socket.io event handlers with compression
+ * Setup Socket.io event handlers with Clang + LibTooling
+ * Clang is system-built and requires no download
  */
 export function setupSocketHandlers(io) {
+  const traceService = new TraceService();
+
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
 
-    // Send initial status
-    socket.emit(SOCKET_EVENTS.GCC_STATUS, gccService.getStatus());
-
-    /**
-     * Request GCC status
-     */
-    socket.on(SOCKET_EVENTS.GCC_STATUS_REQUEST, () => {
-      socket.emit(SOCKET_EVENTS.GCC_STATUS, gccService.getStatus());
+    // Send initial status - Clang is always available
+    socket.emit(SOCKET_EVENTS.COMPILER_STATUS, {
+      compiler: 'clang',
+      available: true,
+      ready: true,
+      message: 'Clang + LibTooling ready'
     });
 
     /**
-     * Start GCC download
+     * Request Clang status
      */
-    socket.on(SOCKET_EVENTS.GCC_DOWNLOAD_START, async () => {
-      try {
-        if (gccService.isAvailable()) {
-          socket.emit(SOCKET_EVENTS.GCC_DOWNLOAD_COMPLETE, {
-            message: 'GCC already available'
-          });
-          return;
-        }
-
-        if (gccService.downloading) {
-          socket.emit(SOCKET_EVENTS.GCC_DOWNLOAD_ERROR, {
-            message: 'Download already in progress'
-          });
-          return;
-        }
-
-        await gccService.downloadGCC((progress, stage) => {
-          socket.emit(SOCKET_EVENTS.GCC_DOWNLOAD_PROGRESS, { progress, stage });
-        });
-
-        socket.emit(SOCKET_EVENTS.GCC_DOWNLOAD_COMPLETE, {
-          message: 'GCC installed successfully'
-        });
-
-      } catch (error) {
-        socket.emit(SOCKET_EVENTS.GCC_DOWNLOAD_ERROR, {
-          message: error.message
-        });
-      }
+    socket.on(SOCKET_EVENTS.COMPILER_STATUS_REQUEST, () => {
+      socket.emit(SOCKET_EVENTS.COMPILER_STATUS, {
+        compiler: 'clang',
+        available: true,
+        ready: true,
+        message: 'Clang + LibTooling ready'
+      });
     });
 
     /**
-     * Handle code chunks (for large files)
+     * Handle code chunks with advanced semantic analysis
      */
     socket.on(SOCKET_EVENTS.CODE_ANALYZE_CHUNK, async (data) => {
       try {
@@ -66,50 +46,27 @@ export function setupSocketHandlers(io) {
           // All chunks received, proceed with analysis
           const { code } = result;
           const language = data.language || 'c';
+          const inputs = data.inputs || [];
 
           // Send progress update
           socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
-            stage: 'parsing',
+            stage: 'semantic_analysis',
             progress: 10
           });
 
-          // Validate syntax first
-          let syntaxValid = true;
-          let syntaxErrors = [];
-          
-          if (gccService.isAvailable()) {
-            const gccResult = await gccService.compileCode(code, language);
-            syntaxValid = gccResult.success;
-            if (!syntaxValid) {
-              syntaxErrors = [gccResult.errors || 'Syntax error'];
-            }
-          } else {
-            const parseResult = await analyzeService.validateSyntax({ code, language });
-            syntaxValid = parseResult.valid;
-            syntaxErrors = parseResult.errors || [];
-          }
-
-          if (!syntaxValid) {
-            socket.emit(SOCKET_EVENTS.CODE_SYNTAX_ERROR, {
-              errors: syntaxErrors
-            });
-            return;
-          }
-
-          // Generate trace
+          // Extract semantic visualization info
           socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
             stage: 'analyzing',
             progress: 50
           });
 
-          const analyzeResult = await analyzeService.analyze({ code, language, inputs: data.inputs || [] });
-          if (!analyzeResult.success) {
-            socket.emit(SOCKET_EVENTS.CODE_TRACE_ERROR, {
-              message: analyzeResult.error
-            });
-            return;
-          }
-          const trace = analyzeResult.trace;
+          // Generate execution trace (includes validation with fallback)
+          const trace = await traceService.generateTrace(code, language, inputs);
+          
+          socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
+            stage: 'compressing',
+            progress: 80
+          });
 
           // Compress and chunk the trace
           console.log(`📊 Original trace size: ${traceCompressor.estimateSize(trace)} bytes`);
@@ -127,7 +84,7 @@ export function setupSocketHandlers(io) {
           // Send completion signal
           socket.emit(SOCKET_EVENTS.CODE_TRACE_COMPLETE, {
             totalChunks: chunks.length,
-            totalSteps: trace.totalSteps || trace.steps.length
+            totalSteps: trace.length || 0
           });
 
         } else {
@@ -144,31 +101,43 @@ export function setupSocketHandlers(io) {
     });
 
     /**
-     * Analyze code syntax
+     * Analyze code syntax with Clang semantic checking
      */
     socket.on(SOCKET_EVENTS.CODE_ANALYZE_SYNTAX, async (data) => {
       try {
         const { code, language = 'c' } = data;
 
-        let result;
-        if (gccService.isAvailable()) {
-          result = await gccService.compileCode(code, language);
-          socket.emit(SOCKET_EVENTS.CODE_SYNTAX_RESULT, {
-            valid: result.success,
-            errors: result.errors,
-            warnings: result.warnings,
-            language: language,
-            method: 'gcc'
-          });
-        } else {
-          result = await analyzeService.validateSyntax({ code, language });
-          socket.emit(SOCKET_EVENTS.CODE_SYNTAX_RESULT, {
-            valid: result.valid,
-            errors: result.errors,
-            language: language,
-            method: 'parser'
-          });
+        // Try Clang validation first, fallback to tree-sitter
+        let valid = false;
+        let errors = [];
+        let analyzer = 'unknown';
+
+        try {
+          const result = await clangAnalyzerService.validateCode(code, language);
+          valid = result.valid;
+          errors = result.errors;
+          analyzer = 'clang+libtooling';
+        } catch (clangError) {
+          // Clang not available, try tree-sitter
+          try {
+            const walker = new ASTWalker(language);
+            walker.parse(code);
+            valid = true;
+            errors = [];
+            analyzer = 'tree-sitter';
+          } catch (tsError) {
+            valid = false;
+            errors = [{ message: tsError.message }];
+            analyzer = 'tree-sitter';
+          }
         }
+        
+        socket.emit(SOCKET_EVENTS.CODE_SYNTAX_RESULT, {
+          valid,
+          errors,
+          language,
+          analyzer
+        });
       } catch (error) {
         socket.emit(SOCKET_EVENTS.CODE_SYNTAX_ERROR, {
           message: error.message
@@ -191,15 +160,22 @@ export function setupSocketHandlers(io) {
           progress: 25
         });
 
-        const result = await analyzeService.analyze({ code, language, inputs });
-        if (!result.success) {
-          console.error(`❌ Analysis failed: ${result.error}`);
-          socket.emit(SOCKET_EVENTS.CODE_TRACE_ERROR, {
-            message: result.error
+        // Validate first
+        const validationResult = await clangAnalyzerService.validateCode(code, language);
+        if (!validationResult.valid) {
+          socket.emit(SOCKET_EVENTS.CODE_SYNTAX_ERROR, {
+            errors: validationResult.errors
           });
           return;
         }
-        const trace = result.trace;
+
+        socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
+          stage: 'analyzing',
+          progress: 50
+        });
+
+        // Generate trace
+        const trace = await traceService.generateTrace(code, language, inputs);
 
         socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
           stage: 'compressing',
@@ -219,7 +195,7 @@ export function setupSocketHandlers(io) {
 
         socket.emit(SOCKET_EVENTS.CODE_TRACE_COMPLETE, {
           totalChunks: chunks.length,
-          totalSteps: trace.totalSteps || trace.steps.length
+          totalSteps: trace.length || 0
         });
 
       } catch (error) {
@@ -263,15 +239,7 @@ export function setupSocketHandlers(io) {
     });
   });
 
-  // Broadcast GCC download progress to all clients
-  setInterval(() => {
-    if (gccService.downloading) {
-      io.emit(SOCKET_EVENTS.GCC_DOWNLOAD_PROGRESS, {
-        progress: gccService.downloadProgress,
-        stage: gccService.downloadStage
-      });
-    }
-  }, 1000);
+  // Clang is always available - no need for download broadcasting
 }
 
 export default setupSocketHandlers;

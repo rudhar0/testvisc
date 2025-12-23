@@ -1,13 +1,15 @@
 /**
  * Analyze Service
- * Main service for handling code analysis requests
+ * Main service for handling code analysis requests using Clang for static analysis.
  */
 
-import TraceService from './trace.service.js';
+import ClangService from './clang.service.js';
 
 class AnalyzeService {
   constructor() {
-    this.traceService = new TraceService();
+    // This service would encapsulate the logic for interacting with the Clang executable.
+    // e.g., running `clang -Xclang -ast-dump=json -fsyntax-only ...`
+    this.clangService = new ClangService();
   }
 
   /**
@@ -15,68 +17,60 @@ class AnalyzeService {
    * @param {Object} options
    * @param {string} options.code - Source code
    * @param {string} options.language - Programming language ('c' or 'cpp')
-   * @param {Array} options.inputs - User inputs for interactive programs
-   * @returns {Promise<Object>} Analysis result
+   * @returns {Promise<Object>} Analysis result containing the AST.
    */
-  async analyze({ code, language = 'c', inputs = [] }) {
+  async analyze({ code, language = 'c' }) {
     try {
       // Validate inputs
       this._validateAnalyzeRequest(code, language);
 
-      // First, validate syntax
-      const syntaxCheck = await this.traceService.validateSyntax(code, language);
-      
-      if (!syntaxCheck.valid) {
+      // Generate AST. Clang performs syntax and semantic checks during this process.
+      const analysisResult = await this.clangService.generateAst(code, language);
+
+      if (!analysisResult.success) {
+        // Distinguish between system errors (like missing Clang) and actual code syntax errors.
+        const primaryError = analysisResult.errors?.[0]?.message || 'Unknown analysis error';
+        const isSystemError = primaryError.includes('Clang compiler is not installed');
+
+        console.error(isSystemError ? 'System Configuration Error:' : 'Clang Syntax Errors:', analysisResult.errors);
         return {
           success: false,
-          error: 'Syntax errors found',
-          errors: syntaxCheck.errors,
-          trace: []
+          error: isSystemError ? 'System Configuration Error' : 'Syntax errors found in code',
+          errors: analysisResult.errors,
+          ast: null
         };
       }
 
-      // Generate execution trace
-      let trace;
-      try {
-        trace = await this.traceService.generateTrace(code, language, inputs);
-      } catch (traceError) {
-        console.error(`❌ Trace generation error: ${traceError.message}`);
-        // For now, return error with details
-        throw new Error(`Code execution failed: ${traceError.message}`);
-      }
-
-      // Get trace statistics
-      const stats = this.traceService.getTraceStats(trace);
+      // The primary artifact is now the AST.
+      const { ast, metadata } = analysisResult;
 
       return {
         success: true,
-        trace,
-        stats,
+        ast,
         metadata: {
+          ...metadata, // Propagate rich metadata from ClangService
           language,
-          totalSteps: trace.length,
-          hasInput: stats.stepTypes['input_request'] > 0,
-          hasHeap: stats.heapAllocations > 0,
-          maxStackDepth: stats.maxStackDepth
         }
       };
     } catch (error) {
+      console.error(`❌ AST generation error: ${error.message}`);
       return {
         success: false,
         error: error.message,
-        trace: []
+        errors: [{ message: error.message }],
+        ast: null
       };
     }
   }
 
   /**
-   * Validate syntax only (fast check)
+   * Validate syntax only (fast check using Clang).
    */
   async validateSyntax({ code, language = 'c' }) {
     try {
       this._validateAnalyzeRequest(code, language);
 
-      const result = await this.traceService.validateSyntax(code, language);
+      const result = await this.clangService.validateSyntax(code, language);
 
       return {
         success: result.valid,
@@ -87,23 +81,26 @@ class AnalyzeService {
       return {
         success: false,
         valid: false,
-        errors: [error.message]
+        error: error.message,
+        errors: [{ message: error.message }]
       };
     }
   }
 
   /**
-   * Extract input requirements from code
+   * Statically extract potential input requirements from code by analyzing the AST.
    */
   async getInputRequirements({ code, language = 'c' }) {
     try {
       this._validateAnalyzeRequest(code, language);
 
-      const requirements = await this.traceService.extractInputRequirements(code, language);
+      // This can be implemented by generating the AST and traversing it
+      // to find calls to input functions like scanf, cin, etc.
+      const requirements = await this.clangService.extractInputCalls(code, language);
 
       return {
         success: true,
-        requirements,
+        requirements, // e.g., [{ function: 'scanf', line: 10, format: '%d' }]
         needsInput: requirements.length > 0
       };
     } catch (error) {
@@ -112,24 +109,6 @@ class AnalyzeService {
         requirements: [],
         needsInput: false,
         error: error.message
-      };
-    }
-  }
-
-  /**
-   * Continue execution after input is provided
-   * This is called when user provides input during execution
-   */
-  async continueExecution({ code, language = 'c', inputs = [], stepId = 0 }) {
-    try {
-      // For now, we regenerate the trace with inputs
-      // In a more sophisticated implementation, we could resume from stepId
-      return await this.analyze({ code, language, inputs });
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        trace: []
       };
     }
   }
@@ -162,27 +141,24 @@ class AnalyzeService {
   getSupportedFeatures() {
     return {
       languages: ['c', 'cpp'],
+      // Features now reflect static analysis capabilities from Clang
       features: {
-        variables: true,
-        arrays: true,
-        pointers: true,
-        functions: true,
-        recursion: true,
-        loops: true,
-        conditionals: true,
-        heap: true,
-        malloc: true,
-        free: true,
-        printf: true,
-        scanf: true,
-        cout: true,
-        cin: true
+        astGeneration: true,
+        syntaxValidation: true,
+        semanticAnalysis: true, // Full semantic analysis
+        typeInformation: true, // AST contains type info
+        pointerAnalysis: true, // Pointer analysis & dereferencing
+        templateSupport: true, // Understands templates
+        classHierarchy: true, // Understands inheritance
+        controlFlowGraph: true, // CFG generation
+        callGraph: true, // Call graph generation
+        cStandards: ['c89', 'c99', 'c11', 'c17'],
+        cppStandards: ['c++98', 'c++03', 'c++11', 'c++14', 'c++17', 'c++20', 'c++23'],
       },
+      // Limitations are now related to analysis time and complexity, not execution
       limitations: {
-        maxExecutionSteps: 10000,
-        maxLoopIterations: 10000,
-        maxStackDepth: 1000,
-        maxHeapSize: 1000000
+        maxAnalysisTimeSeconds: 30,
+        maxCodeLength: 100000, // From _validateAnalyzeRequest
       }
     };
   }

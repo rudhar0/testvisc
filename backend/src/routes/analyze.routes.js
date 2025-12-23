@@ -1,12 +1,12 @@
 import express from 'express';
-import { gccService } from '../services/gcc.service.js';
+import clangAnalyzerService from '../services/clang-analyzer.service.js';
 import { analyzeService } from '../services/analyze.service.js';
 
 const router = express.Router();
 
 /**
  * POST /api/analyze/syntax
- * Check syntax using GCC
+ * Check syntax using Clang + LibTooling semantic analysis
  */
 router.post('/syntax', async (req, res) => {
   try {
@@ -22,33 +22,17 @@ router.post('/syntax', async (req, res) => {
     // Auto-detect language if not provided
     const detectedLang = language || analyzeService.detectLanguage(code);
 
-    if (gccService.isAvailable()) {
-      // Use GCC for syntax check
-      const result = await gccService.compileCode(code, detectedLang);
-      res.json({
-        success: true,
-        data: {
-          valid: result.success,
-          errors: result.errors,
-          warnings: result.warnings,
-          language: detectedLang,
-          method: 'gcc'
-        }
-      });
-    } else {
-      // Fallback to parser-based validation
-      const result = await analyzeService.validateSyntax(code, detectedLang);
-      res.json({
-        success: true,
-        data: {
-          valid: result.valid,
-          errors: result.errors,
-          warnings: result.warnings,
-          language: detectedLang,
-          method: 'parser'
-        }
-      });
-    }
+    // Use Clang semantic validation
+    const result = await clangAnalyzerService.validateCode(code, detectedLang);
+    res.json({
+      success: true,
+      data: {
+        valid: result.valid,
+        errors: result.errors,
+        language: detectedLang,
+        analyzer: 'clang+libtooling'
+      }
+    });
 
   } catch (error) {
     res.status(500).json({
@@ -60,7 +44,7 @@ router.post('/syntax', async (req, res) => {
 
 /**
  * POST /api/analyze/ast
- * Get AST dump
+ * Get complete semantic AST dump with type information
  */
 router.post('/ast', async (req, res) => {
   try {
@@ -75,19 +59,13 @@ router.post('/ast', async (req, res) => {
 
     const detectedLang = language || analyzeService.detectLanguage(code);
 
-    if (gccService.isAvailable()) {
-      const result = await gccService.getASTDump(code, detectedLang);
-      res.json({
-        success: true,
-        data: result
-      });
-    } else {
-      const result = await analyzeService.parseAST(code, detectedLang);
-      res.json({
-        success: true,
-        data: result
-      });
-    }
+    // Use Clang for complete semantic AST
+    const result = await clangAnalyzerService.analyzeCode(code, detectedLang);
+    res.json({
+      success: result.success,
+      data: result.analysis,
+      errors: result.errors
+    });
 
   } catch (error) {
     res.status(500).json({
@@ -114,12 +92,77 @@ router.post('/trace', async (req, res) => {
 
     const detectedLang = language || analyzeService.detectLanguage(code);
     
-    // Generate execution trace (this will be implemented in analyze.service.js)
+    // Generate execution trace
     const trace = await analyzeService.generateTrace(code, detectedLang, inputs);
 
     res.json({
       success: true,
       data: trace
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/analyze/visual
+ * Extract information optimized for visualization
+ */
+router.post('/visual', async (req, res) => {
+  try {
+    const { code, language } = req.body;
+
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message: 'Code is required'
+      });
+    }
+
+    const detectedLang = language || analyzeService.detectLanguage(code);
+    
+    const result = await clangAnalyzerService.extractVisualInfo(code, detectedLang);
+
+    res.json({
+      success: result.success,
+      data: result.visualization,
+      error: result.error
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/analyze/memory-issues
+ * Detect potential memory-related issues
+ */
+router.post('/memory-issues', async (req, res) => {
+  try {
+    const { code, language } = req.body;
+
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message: 'Code is required'
+      });
+    }
+
+    const detectedLang = language || analyzeService.detectLanguage(code);
+    
+    const result = await clangAnalyzerService.detectMemoryIssues(code, detectedLang);
+
+    res.json({
+      success: true,
+      data: result
     });
 
   } catch (error) {

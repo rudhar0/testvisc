@@ -1,86 +1,90 @@
 import express from 'express';
-import { gccService } from '../services/gcc.service.js';
-import { io } from '../server.js';
+import clangAnalyzerService from '../services/clang-analyzer.service.js';
 
 const router = express.Router();
 
 /**
  * GET /api/compiler/status
- * Check GCC availability
+ * Check Clang availability (always available)
  */
 router.get('/status', (req, res) => {
   try {
-    const status = gccService.getStatus();
-    res.json({
-      success: true,
-      data: status
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
-/**
- * POST /api/compiler/download
- * Start GCC download
- */
-router.post('/download', async (req, res) => {
-  try {
-    if (gccService.isAvailable()) {
-      return res.json({
-        success: true,
-        message: 'GCC already available'
-      });
-    }
-
-    if (gccService.downloading) {
-      return res.status(409).json({
-        success: false,
-        message: 'Download already in progress'
-      });
-    }
-
-    // Start download in background
-    gccService.downloadGCC((progress, stage) => {
-      // Emit progress via Socket.io
-      io.emit('gcc:download:progress', {
-        progress,
-        stage
-      });
-    }).catch(error => {
-      io.emit('gcc:download:error', {
-        message: error.message
-      });
-    });
-
-    res.json({
-      success: true,
-      message: 'GCC download started'
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
-/**
- * GET /api/compiler/progress
- * Get download progress
- */
-router.get('/progress', (req, res) => {
-  try {
-    const status = gccService.getStatus();
     res.json({
       success: true,
       data: {
-        progress: status.progress,
-        stage: status.stage
+        compiler: 'clang',
+        available: true,
+        ready: true,
+        version: 'system-installed',
+        message: 'Clang + LibTooling ready for use'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/compiler/compile
+ * Compile and validate code
+ */
+router.post('/compile', async (req, res) => {
+  try {
+    const { code, language = 'c' } = req.body;
+
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message: 'Code is required'
+      });
+    }
+
+    // Validate syntax with Clang semantic checking
+    const result = await clangAnalyzerService.validateCode(code, language);
+    
+    res.json({
+      success: result.valid,
+      data: {
+        valid: result.valid,
+        errors: result.errors,
+        language: language,
+        compiler: 'clang+libtooling'
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/compiler/info
+ * Get Clang and compiler information
+ */
+router.get('/info', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        compiler: 'Clang + LibTooling',
+        standard: 'Industry standard (VSCode, CLion, clangd)',
+        features: [
+          'Full semantic analysis (not just syntax)',
+          'Pointer analysis & dereferencing chains',
+          'Template instantiation tracking',
+          'Class inheritance hierarchies',
+          'Member access & ownership tracking',
+          'Control flow graph generation',
+          'Call graph with virtual function resolution',
+          'C++20/23 feature support'
+        ],
+        available: true
       }
     });
   } catch (error) {

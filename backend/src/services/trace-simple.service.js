@@ -1,10 +1,10 @@
 /**
  * Simplified Trace Service
- * Uses GCC for validation and generates basic trace from code analysis
+ * Uses Clang + LibTooling for validation and generates trace from code analysis
  */
 
 import ASTWalker from '../parsers/ast-walker.js';
-import { gccService } from './gcc.service.js';
+import clangAnalyzerService from './clang-analyzer.service.js';
 
 class TraceService {
   constructor() {
@@ -13,26 +13,51 @@ class TraceService {
 
   /**
    * Generate execution trace for C/C++ code
-   * Simplified approach: validate with GCC, parse with tree-sitter, generate basic trace
+   * Validates with Clang if available, parses with tree-sitter, generates trace with semantic info
+   * Fallback to tree-sitter parsing if Clang is not available
    */
   async generateTrace(code, language = 'c', inputs = []) {
     try {
-      console.log(`🔍 Validating ${language.toUpperCase()} code with GCC...`);
+      console.log(`🔍 Validating ${language.toUpperCase()} code...`);
 
-      // First, validate with GCC
-      if (gccService.isAvailable()) {
-        const gccResult = await gccService.compileCode(code, language);
-        if (!gccResult.success) {
-          throw new Error(`GCC compilation failed: ${gccResult.errors}`);
+      // Try to validate with Clang, but don't fail if Clang is not available
+      let tree = null; // Declare tree here to be accessible later
+      let clangAvailable = true;
+      try {
+        const validationResult = await clangAnalyzerService.validateCode(code, language);
+        if (!validationResult.valid) {
+          let errorsToProcess = validationResult.errors;
+          // Ensure errorsToProcess is an array before calling map.
+          // This handles cases where validationResult.errors might be a string,
+          // a non-array object, or null/undefined.
+          if (!Array.isArray(errorsToProcess)) {
+            errorsToProcess = errorsToProcess ? [errorsToProcess] : [];
+          }
+          const errorMsgs = errorsToProcess.map(e => typeof e === 'string' ? e : e.message).join(', ');
+          throw new Error(`Syntax errors found: ${errorMsgs}`);
         }
-        console.log(`✅ GCC validation passed`);
+        console.log(`✅ Clang semantic validation passed`);
+      } catch (clangError) {
+        console.warn(`⚠️  Clang validation unavailable, using tree-sitter fallback: ${clangError.message}`);
+        clangAvailable = false;
+        
+        // Fallback: Basic syntax validation with tree-sitter
+        try {
+          this.walker = new ASTWalker(language);
+          tree = this.walker.parse(code); // Parse here if Clang fails
+          console.log(`✅ Tree-sitter parsing passed`);
+        } catch (parseError) {
+          throw new Error(`Syntax error: ${parseError.message}`);
+        }
       }
 
       // Parse code with tree-sitter for basic structure analysis
-      console.log(`🔍 Parsing ${language.toUpperCase()} code...`);
-      this.walker = new ASTWalker(language);
-      const tree = this.walker.parse(code);
-      
+      if (!tree) { // Only parse if tree wasn't already parsed in the Clang fallback
+        console.log(`🔍 Parsing ${language.toUpperCase()} code with tree-sitter...`);
+        this.walker = new ASTWalker(language);
+        tree = this.walker.parse(code);
+      }
+
       // Check for main function
       try {
         const mainFunc = this.walker.findMain(tree);
@@ -41,8 +66,8 @@ class TraceService {
         throw new Error(`No main function found: ${error.message}`);
       }
 
-      // Generate simplified trace based on code analysis
-      const trace = this._generateSimplifiedTrace(code, language);
+      // Generate trace with semantic information
+      const trace = await this._generateSemanticTrace(code, language, inputs, clangAvailable);
       console.log(`✅ Execution trace generated: ${trace.length} steps`);
 
       return trace;
@@ -53,13 +78,25 @@ class TraceService {
   }
 
   /**
-   * Generate a simplified trace by analyzing code structure
-   * Returns basic execution steps without full interpretation
+   * Generate trace with semantic information from Clang analysis (with fallback)
    */
-  _generateSimplifiedTrace(code, language) {
+  async _generateSemanticTrace(code, language, inputs, clangAvailable = true) {
     const lines = code.split('\n');
     const trace = [];
     let stepId = 0;
+
+    // Get semantic information (if Clang is available)
+    let semanticInfo = null;
+    if (clangAvailable) {
+      try {
+        semanticInfo = await clangAnalyzerService.analyzeCode(code, language);
+      } catch (error) {
+        console.warn(`⚠️  Failed to get semantic info: ${error.message}`);
+        semanticInfo = { success: false, analysis: null };
+      }
+    } else {
+      semanticInfo = { success: false, analysis: null };
+    }
 
     // Program start
     trace.push({
@@ -67,11 +104,16 @@ class TraceService {
       line: 1,
       type: 'program_start',
       explanation: 'Program execution begins',
+      semantic: {
+        functions: semanticInfo.analysis?.semantic?.functions ?? 0, // These are counts, not arrays
+        classes: semanticInfo.analysis?.semantic?.classes ?? 0,     // Use nullish coalescing for default 0
+        variables: semanticInfo.analysis?.semantic?.variables ?? 0
+      },
       state: {
-        globals: [],
+        globals: semanticInfo.analysis?.variables?.filter(v => v.scope === 'global') || [], // Filter for actual globals
         stack: [],
         heap: [],
-        pointers: []
+        pointers: semanticInfo.analysis?.pointers?.pointers || []
       }
     });
 
@@ -82,6 +124,7 @@ class TraceService {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lineNum = i + 1;
+      const currentGlobals = trace[trace.length - 1].state.globals; // Carry globals forward
       const trimmed = line.trim();
 
       // Detect main function
@@ -94,7 +137,7 @@ class TraceService {
           type: 'function_call',
           explanation: `Entering main() function`,
           state: {
-            globals: [],
+            globals: currentGlobals, // Carry globals forward
             stack: [{ id: 'frame_0', function: 'main', line: lineNum, variables: [] }],
             heap: [],
             pointers: []
@@ -114,7 +157,7 @@ class TraceService {
           type: 'declaration',
           explanation: `Variable ${varDeclMatch[2]} declared (type: ${varDeclMatch[1]})`,
           state: {
-            globals: [],
+            globals: currentGlobals, // Carry globals forward
             stack: [{ id: 'frame_0', function: 'main', line: lineNum, variables: [{ name: varDeclMatch[2], type: varDeclMatch[1], value: 0 }] }],
             heap: [],
             pointers: []
@@ -131,7 +174,7 @@ class TraceService {
           type: 'assignment',
           explanation: `Assignment: ${trimmed}`,
           state: {
-            globals: [],
+            globals: currentGlobals, // Carry globals forward
             stack: [{ id: 'frame_0', function: 'main', line: lineNum, variables: [] }],
             heap: [],
             pointers: []
@@ -150,7 +193,7 @@ class TraceService {
           type: 'function_call',
           explanation: `Call to ${funcName}(): ${trimmed}`,
           state: {
-            globals: [],
+            globals: currentGlobals, // Carry globals forward
             stack: [{ id: 'frame_0', function: 'main', line: lineNum, variables: [] }],
             heap: [],
             pointers: []
@@ -166,7 +209,7 @@ class TraceService {
           type: 'function_return',
           explanation: 'Return from main()',
           state: {
-            globals: [],
+            globals: currentGlobals, // Carry globals forward
             stack: [],
             heap: [],
             pointers: []

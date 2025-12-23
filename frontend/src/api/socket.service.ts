@@ -100,21 +100,9 @@ class SocketService {
   private setupEventListeners() {
     if (!this.socket) return;
 
-    // GCC Events
-    this.socket.on(SOCKET_EVENTS.GCC_STATUS, (data: GCCStatus) => {
-      this.emit('gcc:status', data);
-    });
-
-    this.socket.on(SOCKET_EVENTS.GCC_DOWNLOAD_PROGRESS, (data) => {
-      this.emit('gcc:download:progress', data);
-    });
-
-    this.socket.on(SOCKET_EVENTS.GCC_DOWNLOAD_COMPLETE, (data) => {
-      this.emit('gcc:download:complete', data);
-    });
-
-    this.socket.on(SOCKET_EVENTS.GCC_DOWNLOAD_ERROR, (data) => {
-      this.emit('gcc:download:error', data);
+    // Compiler Status Events (Clang + LibTooling)
+    this.socket.on(SOCKET_EVENTS.COMPILER_STATUS, (data: GCCStatus) => {
+      this.emit('compiler:status', data);
     });
 
     // Code Analysis Events
@@ -195,17 +183,10 @@ class SocketService {
   // ============================================
 
   /**
-   * Request GCC status
+   * Request Compiler status
    */
-  requestGCCStatus() {
-    this.socket?.emit(SOCKET_EVENTS.GCC_STATUS_REQUEST);
-  }
-
-  /**
-   * Start GCC download
-   */
-  startGCCDownload() {
-    this.socket?.emit(SOCKET_EVENTS.GCC_DOWNLOAD_START);
+  requestCompilerStatus() {
+    this.socket?.emit(SOCKET_EVENTS.COMPILER_STATUS_REQUEST);
   }
 
   /**
