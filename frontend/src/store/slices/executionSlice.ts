@@ -230,7 +230,7 @@ export const useExecutionStore = create<ExecutionState>()(
             clearInterval(state.playbackInterval);
           }
           
-          const delay = 1000 / speed;
+          const delay = 2000 / speed;
           state.playbackInterval = setInterval(() => {
             const current = get();
             if (current.currentStep < current.totalSteps - 1) {

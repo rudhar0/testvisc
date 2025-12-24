@@ -1,7 +1,3 @@
-/**
- * Simplified Trace Service - FIXED VERSION
- * Generates trace with correct state structure matching frontend types
- */
 
 import ASTWalker from '../parsers/ast-walker.js';
 import clangAnalyzerService from './clang-analyzer.service.js';
@@ -66,32 +62,18 @@ class TraceService {
   }
 
   /**
-   * Generate trace with CORRECT state structure
+   * Generate comprehensive trace with ALL execution steps
    */
   async _generateSemanticTrace(code, language, inputs, clangAvailable = true) {
     const lines = code.split('\n');
     const trace = [];
     let stepId = 0;
 
-    // Get semantic information
-    let semanticInfo = null;
-    if (clangAvailable) {
-      try {
-        semanticInfo = await clangAnalyzerService.analyzeCode(code, language);
-      } catch (error) {
-        console.warn(`⚠️  Failed to get semantic info: ${error.message}`);
-        semanticInfo = { success: false, analysis: null };
-      }
-    } else {
-      semanticInfo = { success: false, analysis: null };
-    }
-
-    // Helper to create proper state structure
     const createState = (globals = {}, callStack = [], heap = {}) => ({
-      globals,        // Object with variable names as keys
-      stack: [],      // Legacy, keeping empty for compatibility
-      heap,           // Object with addresses as keys
-      callStack       // Array of CallFrame objects
+      globals,
+      stack: [],
+      heap,
+      callStack
     });
 
     // Program start
@@ -101,65 +83,91 @@ class TraceService {
       type: 'program_start',
       explanation: 'Program execution begins',
       state: createState(),
-      animation: {
-        type: 'appear',
-        target: 'global',
-        duration: 500
-      }
+      animation: { type: 'appear', target: 'global', duration: 500 }
     });
 
-    // Parse and generate steps
     let inMain = false;
-    let mainLineNum = 0;
-    const localVars = {}; // Track local variables
+    let inLoop = false;
+    let loopDepth = 0;
+    const globalVars = {};
+    const localVars = {};
+    let currentCallStack = [];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lineNum = i + 1;
       const trimmed = line.trim();
 
+      // Skip empty lines, comments, and preprocessor directives
+      if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('#')) {
+        continue;
+      }
+
+      // Detect global variables (before main)
+      if (!inMain && !trimmed.includes('main')) {
+        const globalMatch = trimmed.match(/^(int|char|float|double|long|short|unsigned|signed)\s+(\w+)\s*(?:=\s*([^;]+))?;/);
+        if (globalMatch) {
+          const [, type, name, initValue] = globalMatch;
+          const value = initValue ? this._parseValue(initValue) : 0;
+          
+          globalVars[name] = {
+            name,
+            type,
+            value,
+            address: `0x${(0x1000 + Object.keys(globalVars).length * 8).toString(16)}`,
+            scope: 'global',
+            isAlive: true
+          };
+
+          trace.push({
+            id: stepId++,
+            line: lineNum,
+            type: 'global_declaration',
+            explanation: `Declare global variable: ${type} ${name}${initValue ? ` = ${value}` : ''}`,
+            state: createState({ ...globalVars }, currentCallStack),
+            animation: { type: 'appear', target: 'global', duration: 300 }
+          });
+          continue;
+        }
+      }
+
       // Detect main function
-      if (trimmed.includes('main') && (trimmed.includes('(') && trimmed.includes(')'))) {
+      if (trimmed.includes('int main') || trimmed.includes('void main')) {
         inMain = true;
-        mainLineNum = lineNum;
+        
+        currentCallStack = [{
+          function: 'main',
+          returnType: trimmed.includes('void main') ? 'void' : 'int',
+          params: {},
+          locals: {},
+          frameId: 'frame_0',
+          returnAddress: null,
+          isActive: true
+        }];
         
         trace.push({
           id: stepId++,
           line: lineNum,
           type: 'function_call',
           explanation: 'Entering main() function',
-          state: createState({}, [{
-            function: 'main',
-            returnType: 'int',
-            params: {},
-            locals: {},
-            frameId: 'frame_0',
-            returnAddress: null,
-            isActive: true
-          }]),
-          animation: {
-            type: 'push_frame',
-            target: 'stack',
-            duration: 400
-          }
+          state: createState({ ...globalVars }, [...currentCallStack]),
+          animation: { type: 'push_frame', target: 'stack', duration: 400 }
         });
         continue;
       }
 
       if (!inMain) continue;
 
-      // Get current call stack from last step
-      const lastState = trace[trace.length - 1].state;
-      const currentCallStack = [...lastState.callStack];
-      const currentGlobals = { ...lastState.globals };
+      // Get current frame
+      const currentFrame = currentCallStack[currentCallStack.length - 1];
+      if (!currentFrame) continue;
 
-      // Detect variable declarations
-      const varDeclMatch = trimmed.match(/^(int|char|float|double|bool|auto|long|short)\s+(\w+)\s*(?:=\s*([^;]+))?;?/);
-      if (varDeclMatch) {
+      // Variable declarations (including for loop initializers)
+      const varDeclMatch = trimmed.match(/^(?:for\s*\(\s*)?(int|char|float|double|bool|long|short|unsigned|signed)\s+(\w+)\s*(?:=\s*([^;,)]+))?[;,)]?/);
+      if (varDeclMatch && !trimmed.startsWith('//')) {
         const [, type, name, initValue] = varDeclMatch;
-        const value = initValue ? this._parseValue(initValue) : 0;
+        const value = initValue ? this._evaluateExpression(initValue, localVars, globalVars) : 0;
         
-        // Add to local variables
         localVars[name] = {
           name,
           type,
@@ -169,50 +177,83 @@ class TraceService {
           isAlive: true
         };
 
-        // Update call stack with new variable
-        if (currentCallStack.length > 0) {
-          currentCallStack[currentCallStack.length - 1].locals = { ...localVars };
-        }
-
+        currentFrame.locals = { ...localVars };
+        
         trace.push({
           id: stepId++,
           line: lineNum,
           type: 'variable_declaration',
-          explanation: `Declare ${type} ${name}${initValue ? ` = ${value}` : ''}`,
-          state: createState(currentGlobals, currentCallStack),
-          animation: {
-            type: 'appear',
-            target: 'stack',
-            duration: 300,
-            element: name
-          }
+          explanation: `Declare local variable: ${type} ${name}${initValue ? ` = ${value}` : ''}`,
+          state: createState({ ...globalVars }, [...currentCallStack]),
+          animation: { type: 'appear', target: 'stack', duration: 300, element: name }
         });
+
+        // If this is a for loop initialization, continue parsing the line
+        if (trimmed.startsWith('for')) {
+          inLoop = true;
+          loopDepth++;
+          
+          trace.push({
+            id: stepId++,
+            line: lineNum,
+            type: 'loop_start',
+            explanation: 'Start for loop',
+            state: createState({ ...globalVars }, [...currentCallStack]),
+            animation: { type: 'highlight', target: 'line', duration: 300 }
+          });
+        }
+        continue;
       }
 
-      // Detect assignments
-      const assignMatch = trimmed.match(/^(\w+)\s*=\s*([^;]+);?/);
-      if (assignMatch && !varDeclMatch && !trimmed.startsWith('//')) {
-        const [, name, valueExpr] = assignMatch;
-        const newValue = this._parseValue(valueExpr);
+      // Standalone assignments
+      const assignMatch = trimmed.match(/^(\w+)\s*([\+\-\*\/]?=)\s*([^;]+);?/);
+      if (assignMatch && !trimmed.startsWith('//') && !trimmed.includes('int ') && !trimmed.includes('char ') && !trimmed.includes('float ')) {
+        const [, name, operator, valueExpr] = assignMatch;
+        
+        let newValue;
+        if (operator === '=') {
+          newValue = this._evaluateExpression(valueExpr, localVars, globalVars);
+        } else {
+          // Compound assignment (+=, -=, etc.)
+          const op = operator[0];
+          const currentValue = localVars[name]?.value ?? globalVars[name]?.value ?? 0;
+          const rightValue = this._evaluateExpression(valueExpr, localVars, globalVars);
+          newValue = this._applyOperator(currentValue, rightValue, op);
+        }
         
         if (localVars[name]) {
           const oldValue = localVars[name].value;
           localVars[name].value = newValue;
+          currentFrame.locals = { ...localVars };
           
-          // Update call stack
-          if (currentCallStack.length > 0) {
-            currentCallStack[currentCallStack.length - 1].locals = { ...localVars };
-          }
-
           trace.push({
             id: stepId++,
             line: lineNum,
             type: 'assignment',
-            explanation: `${name} = ${newValue}`,
-            state: createState(currentGlobals, currentCallStack),
-            animation: {
-              type: 'value_change',
-              target: 'stack',
+            explanation: `Assign ${name} ${operator} ${valueExpr} → ${newValue}`,
+            state: createState({ ...globalVars }, [...currentCallStack]),
+            animation: { 
+              type: 'value_change', 
+              target: 'stack', 
+              duration: 400,
+              element: name,
+              from: oldValue,
+              to: newValue
+            }
+          });
+        } else if (globalVars[name]) {
+          const oldValue = globalVars[name].value;
+          globalVars[name].value = newValue;
+          
+          trace.push({
+            id: stepId++,
+            line: lineNum,
+            type: 'assignment',
+            explanation: `Assign global ${name} ${operator} ${valueExpr} → ${newValue}`,
+            state: createState({ ...globalVars }, [...currentCallStack]),
+            animation: { 
+              type: 'value_change', 
+              target: 'global', 
               duration: 400,
               element: name,
               from: oldValue,
@@ -220,39 +261,133 @@ class TraceService {
             }
           });
         }
+        continue;
       }
 
-      // Detect output (printf/cout)
+      // Increment/Decrement operations
+      const incDecMatch = trimmed.match(/^(\w+)([\+\-]{2});?$/);
+      if (incDecMatch) {
+        const [, name, operator] = incDecMatch;
+        const isIncrement = operator === '++';
+        
+        if (localVars[name]) {
+          const oldValue = localVars[name].value;
+          const newValue = isIncrement ? oldValue + 1 : oldValue - 1;
+          localVars[name].value = newValue;
+          currentFrame.locals = { ...localVars };
+          
+          trace.push({
+            id: stepId++,
+            line: lineNum,
+            type: 'assignment',
+            explanation: `${name}${operator} → ${newValue}`,
+            state: createState({ ...globalVars }, [...currentCallStack]),
+            animation: { 
+              type: 'value_change', 
+              target: 'stack', 
+              duration: 400,
+              element: name,
+              from: oldValue,
+              to: newValue
+            }
+          });
+        } else if (globalVars[name]) {
+          const oldValue = globalVars[name].value;
+          const newValue = isIncrement ? oldValue + 1 : oldValue - 1;
+          globalVars[name].value = newValue;
+          
+          trace.push({
+            id: stepId++,
+            line: lineNum,
+            type: 'assignment',
+            explanation: `Global ${name}${operator} → ${newValue}`,
+            state: createState({ ...globalVars }, [...currentCallStack]),
+            animation: { 
+              type: 'value_change', 
+              target: 'global', 
+              duration: 400,
+              element: name,
+              from: oldValue,
+              to: newValue
+            }
+          });
+        }
+        continue;
+      }
+
+      // Detect loop start (for/while that wasn't caught by variable declaration)
+      if ((trimmed.startsWith('for') || trimmed.startsWith('while')) && !inLoop) {
+        inLoop = true;
+        loopDepth++;
+        
+        trace.push({
+          id: stepId++,
+          line: lineNum,
+          type: 'loop_start',
+          explanation: `Start ${trimmed.startsWith('for') ? 'for' : 'while'} loop`,
+          state: createState({ ...globalVars }, [...currentCallStack]),
+          animation: { type: 'highlight', target: 'line', duration: 300 }
+        });
+        continue;
+      }
+
+      // Detect loop end (closing brace)
+      if (trimmed === '}' && inLoop && loopDepth > 0) {
+        // Check if this closes a loop by looking back
+        let isLoopEnd = false;
+        for (let j = i - 1; j >= 0; j--) {
+          const prevLine = lines[j].trim();
+          if (prevLine.includes('++') || prevLine.includes('--') || 
+              prevLine.startsWith('for') || prevLine.startsWith('while')) {
+            isLoopEnd = true;
+            break;
+          }
+          if (prevLine === '{') break;
+        }
+
+        if (isLoopEnd) {
+          loopDepth--;
+          if (loopDepth === 0) inLoop = false;
+          
+          trace.push({
+            id: stepId++,
+            line: lineNum,
+            type: 'loop_end',
+            explanation: 'Exit loop',
+            state: createState({ ...globalVars }, [...currentCallStack]),
+            animation: { type: 'highlight', target: 'line', duration: 300 }
+          });
+        }
+        continue;
+      }
+
+      // Detect printf/cout output
       if (trimmed.includes('printf') || trimmed.includes('cout')) {
-        const funcName = trimmed.includes('printf') ? 'printf' : 'cout';
         trace.push({
           id: stepId++,
           line: lineNum,
           type: 'output',
-          explanation: `Output: ${trimmed.substring(0, 50)}...`,
-          state: createState(currentGlobals, currentCallStack),
-          animation: {
-            type: 'appear',
-            target: 'overlay',
-            duration: 500
-          }
+          explanation: `Output statement: ${trimmed.substring(0, 60)}${trimmed.length > 60 ? '...' : ''}`,
+          state: createState({ ...globalVars }, [...currentCallStack]),
+          animation: { type: 'appear', target: 'overlay', duration: 500 }
         });
+        continue;
       }
 
-      // Detect return
+      // Return statement
       if (trimmed.includes('return')) {
+        const returnMatch = trimmed.match(/return\s+([^;]+);?/);
+        const returnValue = returnMatch ? this._evaluateExpression(returnMatch[1], localVars, globalVars) : 0;
+        
         trace.push({
           id: stepId++,
           line: lineNum,
           type: 'function_return',
-          explanation: 'Return from main()',
-          state: createState(currentGlobals, []),
-          animation: {
-            type: 'pop_frame',
-            target: 'stack',
-            duration: 400
-          }
+          explanation: `Return from ${currentFrame.function}()${returnValue !== undefined ? ` with value: ${returnValue}` : ''}`,
+          state: createState({ ...globalVars }, []),
+          animation: { type: 'pop_frame', target: 'stack', duration: 400 }
         });
+        
         inMain = false;
         break;
       }
@@ -263,45 +398,91 @@ class TraceService {
       id: stepId++,
       line: lines.length,
       type: 'program_end',
-      explanation: 'Program execution completed',
+      explanation: 'Program execution completed successfully',
       state: createState(),
-      animation: {
-        type: 'disappear',
-        target: 'global',
-        duration: 500
-      }
+      animation: { type: 'disappear', target: 'global', duration: 500 }
     });
 
+    console.log(`📊 Trace statistics: ${trace.length} total steps, ${Object.keys(globalVars).length} globals, ${Object.keys(localVars).length} locals`);
     return trace;
   }
 
   /**
-   * Parse simple values from expressions
+   * Enhanced expression evaluator with support for complex expressions
    */
-  _parseValue(expr) {
+  _evaluateExpression(expr, localVars = {}, globalVars = {}) {
     const trimmed = expr.trim();
     
-    // Number
-    if (/^-?\d+$/.test(trimmed)) {
-      return parseInt(trimmed, 10);
-    }
+    // Number literals
+    if (/^-?\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+    if (/^-?\d+\.\d+$/.test(trimmed)) return parseFloat(trimmed);
     
-    // Float
-    if (/^-?\d+\.\d+$/.test(trimmed)) {
-      return parseFloat(trimmed);
-    }
-    
-    // String literal
+    // String literals
     if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
       return trimmed.slice(1, -1);
     }
     
-    // Char literal
+    // Character literals
     if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
-      return trimmed.slice(1, -1);
+      return trimmed.charCodeAt(1);
     }
     
-    // Default
+    // Variable reference
+    if (/^\w+$/.test(trimmed)) {
+      if (localVars[trimmed]) return localVars[trimmed].value;
+      if (globalVars[trimmed]) return globalVars[trimmed].value;
+      return 0;
+    }
+    
+    // Binary operations: a + b, a - b, a * b, a / b, a % b
+    const binaryMatch = trimmed.match(/^(.+?)\s*([\+\-\*\/%])\s*(.+)$/);
+    if (binaryMatch) {
+      const [, left, op, right] = binaryMatch;
+      const leftVal = this._evaluateExpression(left, localVars, globalVars);
+      const rightVal = this._evaluateExpression(right, localVars, globalVars);
+      return this._applyOperator(leftVal, rightVal, op);
+    }
+    
+    // Parenthesized expressions
+    if (trimmed.startsWith('(') && trimmed.endsWith(')')) {
+      return this._evaluateExpression(trimmed.slice(1, -1), localVars, globalVars);
+    }
+    
+    // Fallback: try to parse as value
+    return this._parseValue(trimmed);
+  }
+
+  /**
+   * Apply binary operator
+   */
+  _applyOperator(left, right, operator) {
+    const l = typeof left === 'number' ? left : parseFloat(left) || 0;
+    const r = typeof right === 'number' ? right : parseFloat(right) || 0;
+    
+    switch (operator) {
+      case '+': return l + r;
+      case '-': return l - r;
+      case '*': return l * r;
+      case '/': return r !== 0 ? Math.floor(l / r) : 0;
+      case '%': return r !== 0 ? l % r : 0;
+      default: return 0;
+    }
+  }
+
+  /**
+   * Parse simple values
+   */
+  _parseValue(expr) {
+    const trimmed = expr.trim();
+    
+    if (/^-?\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+    if (/^-?\d+\.\d+$/.test(trimmed)) return parseFloat(trimmed);
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed.slice(1, -1);
+    if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
+    if (trimmed === 'true') return 1;
+    if (trimmed === 'false') return 0;
+    if (trimmed === 'NULL' || trimmed === 'null') return 0;
+    
     return trimmed;
   }
 
@@ -309,16 +490,9 @@ class TraceService {
     try {
       const walker = new ASTWalker(language);
       const tree = walker.parse(code);
-      
-      return {
-        valid: true,
-        errors: []
-      };
+      return { valid: true, errors: [] };
     } catch (error) {
-      return {
-        valid: false,
-        errors: [error.message]
-      };
+      return { valid: false, errors: [error.message] };
     }
   }
 
@@ -327,14 +501,23 @@ class TraceService {
       totalSteps: trace.length,
       stepTypes: {},
       maxStackDepth: 0,
-      heapAllocations: 0,
-      loopIterations: 0
+      globalCount: 0,
+      localCount: 0
     };
 
     for (const step of trace) {
       stats.stepTypes[step.type] = (stats.stepTypes[step.type] || 0) + 1;
-      if (step.state.callStack) {
+      
+      if (step.state?.callStack) {
         stats.maxStackDepth = Math.max(stats.maxStackDepth, step.state.callStack.length);
+      }
+      
+      if (step.state?.globals) {
+        stats.globalCount = Math.max(stats.globalCount, Object.keys(step.state.globals).length);
+      }
+      
+      if (step.state?.callStack?.[0]?.locals) {
+        stats.localCount = Math.max(stats.localCount, Object.keys(step.state.callStack[0].locals).length);
       }
     }
 
@@ -361,3 +544,4 @@ class TraceService {
 }
 
 export default TraceService;
+export { TraceService };

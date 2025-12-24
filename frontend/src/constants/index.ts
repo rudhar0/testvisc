@@ -146,7 +146,7 @@ export const PLAYBACK_SPEEDS = [
 // ============================================
 
 export const DEFAULTS = {
-  PLAYBACK_SPEED: 1,
+  PLAYBACK_SPEED: 0.5,
   CANVAS_ZOOM: 1,
   CANVAS_POSITION: { x: 0, y: 0 },
   CODE: '',
