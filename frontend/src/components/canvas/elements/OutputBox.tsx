@@ -1,7 +1,7 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
-
+ 
 interface OutputBoxProps {
   x: number;
   y: number;
@@ -16,40 +16,66 @@ const COLORS = {
   text: { primary: '#F1F5F9', secondary: '#10B981' }
 };
 
-export const OutputBox: React.FC<OutputBoxProps> = ({ x, y, width, height, content }) => {
+export const OutputBox: React.FC<OutputBoxProps> = ({ x, y, width, height, content: initialContent }) => {
   const groupRef = useRef<Konva.Group>(null);
   const [isInitialMount, setIsInitialMount] = useState(true);
-  const prevContentRef = useRef(content);
+  const [currentContent, setCurrentContent] = useState(initialContent);
+  const prevContentRef = useRef(initialContent);
+
+  // Update content and trigger animation
+  const updateContent = useCallback((newContent: string) => {
+    if (newContent !== prevContentRef.current) {
+      setCurrentContent(newContent);
+      if (groupRef.current) {
+        groupRef.current.to({
+          scaleX: 1.02,
+          scaleY: 1.02,
+          duration: 0.1,
+          yoyo: true,
+          onFinish: () => {
+            // Ensure scale returns to normal after pulse
+            groupRef.current?.to({
+              scaleX: 1,
+              scaleY: 1,
+              duration: 0.1
+            });
+          }
+        });
+      }
+    }
+    prevContentRef.current = newContent;
+  }, []);
 
   // APPEAR ANIMATION
   useEffect(() => {
     const node = groupRef.current;
-    if (!node || !isInitialMount) return;
+    if (!node) return;
 
-    node.opacity(0);
-    node.y(y + 15);
-    node.to({
-      opacity: 1,
-      y: y,
-      duration: 0.4,
-      easing: Konva.Easings.EaseOut
-    });
-
-    setIsInitialMount(false);
-  }, [y, isInitialMount]);
+    if (isInitialMount) {
+      node.opacity(0);
+      node.y(y + 15);
+      node.to({
+        opacity: 1,
+        y: y,
+        duration: 0.4,
+        easing: Konva.Easings.EaseOut
+      });
+      setIsInitialMount(false);
+    } else {
+      // Position animation for subsequent moves
+      node.to({
+        x: x,
+        y: y,
+        duration: 0.3,
+        easing: Konva.Easings.EaseInOut,
+      });
+    }
+  }, [x, y, isInitialMount]);
 
   // CONTENT UPDATE ANIMATION
   useEffect(() => {
-    if (content !== prevContentRef.current && groupRef.current) {
-      groupRef.current.to({
-        scaleX: 1.02,
-        scaleY: 1.02,
-        duration: 0.1,
-        yoyo: true
-      });
-    }
-    prevContentRef.current = content;
-  }, [content]);
+    updateContent(initialContent);
+  }, [initialContent, updateContent]);
 
   return (
     <Group ref={groupRef} x={x} y={y}>
@@ -78,11 +104,11 @@ export const OutputBox: React.FC<OutputBoxProps> = ({ x, y, width, height, conte
       <Text
         x={15}
         y={35}
-        text={content || 'No output'}
+        text={currentContent || 'No output'}
         fontSize={14}
         fontFamily="monospace"
-        fill={content ? COLORS.text.primary : '#64748B'}
-        fontStyle={content ? 'normal' : 'italic'}
+        fill={currentContent ? COLORS.text.primary : '#64748B'}
+        fontStyle={currentContent ? 'normal' : 'italic'}
         width={width - 30}
         height={height - 50}
         wrap="word"
