@@ -1,12 +1,11 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
-import type { CanvasPosition } from '@types/index';
 import { DEFAULTS } from '@constants/index';
 
 export interface CanvasState {
   // Viewport
   zoom: number;
-  position: CanvasPosition;
+  position: { x: number; y: number };
   
   // Canvas size
   width: number;
@@ -24,7 +23,7 @@ export interface CanvasState {
   setZoom: (zoom: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
-  setPosition: (position: CanvasPosition) => void;
+  setPosition: (position: { x: number; y: number }) => void;
   setCanvasSize: (width: number, height: number) => void;
   resetView: () => void;
   
@@ -47,8 +46,8 @@ const ZOOM_STEP = 0.1;
 export const useCanvasStore = create<CanvasState>()(
   immer((set, get) => ({
     // Initial state
-    zoom: DEFAULTS.CANVAS_ZOOM,
-    position: DEFAULTS.CANVAS_POSITION,
+    zoom: 1,
+    position: { x: 0, y: 0 },
     width: 800,
     height: 600,
     selectedElement: null,
@@ -57,6 +56,9 @@ export const useCanvasStore = create<CanvasState>()(
     isDragging: false,
 
     // Actions
+
+
+    
     setZoom: (zoom: number) =>
       set((state) => {
         // Clamp zoom between min and max
@@ -75,7 +77,7 @@ export const useCanvasStore = create<CanvasState>()(
         state.zoom = Math.max(MIN_ZOOM, newZoom);
       }),
 
-    setPosition: (position: CanvasPosition) =>
+    setPosition: (position: { x: number; y: number }) =>
       set((state) => {
         state.position = position;
       }),
