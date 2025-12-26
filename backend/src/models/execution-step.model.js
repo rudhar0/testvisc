@@ -11,7 +11,8 @@ export class ExecutionStep {
     explanation,
     state,
     animation,
-    inputRequest = null
+    inputRequest = null,
+    stdout = ''
   }) {
     this.id = id;
     this.line = line;
@@ -25,6 +26,7 @@ export class ExecutionStep {
     };
     this.animation = animation || null;
     this.inputRequest = inputRequest;
+    this.stdout = stdout;
   }
 }
 

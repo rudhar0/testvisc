@@ -15,8 +15,8 @@ import { VariableBox } from './elements/VariableBox';
 import { ArrayView } from './elements/ArrayView';
 import { StackFrame } from './elements/StackFrame';
 import { PointerArrow } from './elements/PointerArrow';
-import { OutputBox } from './elements/OutputBox';
 import { HeapBlock } from './elements/HeapBlock';
+import OutputElement from './elements/OutputElement';
 import { LayoutEngine } from './layout/LayoutEngine';
 
 export default function VisualizationCanvas() {
@@ -30,7 +30,7 @@ export default function VisualizationCanvas() {
   // Local state
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
   const [dragMode, setDragMode] = useState(false);
-  const [prevLayout, setPrevLayout] = useState<any>(null);
+  const prevLayoutRef = useRef<any>(null);
 
   const currentStep = getCurrentStep();
   const state = currentStep?.state;
@@ -42,15 +42,15 @@ export default function VisualizationCanvas() {
       state, 
       dimensions.width, 
       dimensions.height, 
-      prevLayout
+      prevLayoutRef.current
     );
     return newLayout;
-  }, [state, dimensions.width, dimensions.height, prevLayout]);
+  }, [state, dimensions.width, dimensions.height]);
 
   // Update prevLayout after render
   useEffect(() => {
     if (layout) {
-      setPrevLayout(layout);
+      prevLayoutRef.current = layout;
     }
   }, [layout]);
 
@@ -408,22 +408,18 @@ export default function VisualizationCanvas() {
               {frame.locals.map((variable: any) => (
                 <VariableBox key={variable.id} {...variable} />
               ))}
+              {frame.output && frame.output.map((output: any) => (
+                <OutputElement 
+                  key={output.id} 
+                  x={output.x} 
+                  y={output.y} 
+                  width={output.width} 
+                  height={output.height} 
+                  content={output.text} 
+                />
+              ))}
             </Group>
           ))}
-
-          {layout.arrays.map((array: any) => (
-            <ArrayView key={array.id} {...array} />
-          ))}
-
-          {layout.heap.map((block: any) => (
-            <HeapBlock key={block.id} {...block} />
-          ))}
-
-          {layout.pointers.map((pointer: any) => (
-            <PointerArrow key={pointer.id} {...pointer} />
-          ))}
-
-          {layout.output && <OutputBox {...layout.output} />}
         </Layer>
       </Stage>
     </div>

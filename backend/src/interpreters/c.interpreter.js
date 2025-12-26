@@ -668,6 +668,7 @@ export default class CInterpreter {
       line,
       type: StepType.OUTPUT,
       explanation: `Output: "${output}"`,
+      stdout: this.outputBuffer.join(''),
       animation: {
         type: AnimationType.HIGHLIGHT,
         target: 'output',
@@ -795,6 +796,7 @@ export default class CInterpreter {
       line,
       type: StepType.OUTPUT,
       explanation: `Output: "${output}"`,
+      stdout: this.outputBuffer.join(''),
       animation: {
         type: AnimationType.HIGHLIGHT,
         target: 'output',
@@ -1339,7 +1341,8 @@ export default class CInterpreter {
       explanation: stepData.explanation,
       state: this.memory.snapshot(),
       animation: stepData.animation,
-      inputRequest: stepData.inputRequest || null
+      inputRequest: stepData.inputRequest || null,
+      stdout: stepData.stdout || ''
     });
     
     this.steps.push(step);

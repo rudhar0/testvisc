@@ -1,4 +1,4 @@
-import { LayoutResult, VariableData, StackFrameData, ArrayData, HeapBlockData, PointerArrowData } from '../types';
+import { LayoutResult, VariableData, StackFrameData, ArrayData, HeapBlockData, PointerArrowData, OutputData, LoopIndicatorData } from '../types';
 
 export class LayoutEngine {
   private static readonly CONFIG = {
@@ -30,8 +30,10 @@ export class LayoutEngine {
     
     // Output dimensions
     outputWidth: 500,
-    outputHeight: 120,
-    outputBottomMargin: 20,
+    outputHeight: 75,
+    outputLineGap: 5, // Gap between individual output lines
+    outputSectionTopMargin: 15, // Gap between last stack frame and first output line
+    outputSectionHeaderHeight: 30, // For a potential 'Output' label
   };
 
   static calculateLayout(
@@ -46,7 +48,6 @@ export class LayoutEngine {
       stack: [],
       heap: [],
       pointers: [],
-      output: null,
       loopIndicators: [],
       bounds: { minX: 0, minY: 0, maxX: canvasWidth, maxY: 0 }
     };
@@ -81,8 +82,13 @@ export class LayoutEngine {
     layout.stack = stackResult.frames;
     layout.arrays.push(...stackResult.arrays);
     
+    // Update stackY to reflect the bottom of the last stack frame
+    // This value is then used for the next section, which is the output.
     if (layout.stack.length > 0) {
-      stackY = Math.max(...layout.stack.map(f => f.y + f.height)) + this.CONFIG.frameGap;
+      stackY = Math.max(...layout.stack.map(f => f.y + f.height));
+    } else {
+      // If no stack frames, start output from initial stackY
+      stackY = this.CONFIG.padding;
     }
 
     // 4. HEAP (Right column)
@@ -94,17 +100,6 @@ export class LayoutEngine {
 
     // 5. POINTERS (Calculate after all elements positioned)
     layout.pointers = this.calculatePointers(layout);
-
-    // 6. OUTPUT (Bottom of canvas)
-    if (state?.stdout && state.stdout.trim()) {
-      layout.output = {
-        x: this.CONFIG.padding,
-        y: canvasHeight - this.CONFIG.outputHeight - this.CONFIG.outputBottomMargin,
-        width: Math.min(this.CONFIG.outputWidth, canvasWidth - 2 * this.CONFIG.padding),
-        height: this.CONFIG.outputHeight,
-        content: state.stdout
-      };
-    }
 
     // 7. LOOP INDICATORS
     layout.loopIndicators = this.calculateLoopIndicators(state, stackX);
@@ -270,35 +265,54 @@ export class LayoutEngine {
       });
 
       // Calculate frame dimensions
-      const varRows = Math.ceil(localVars.length / this.CONFIG.maxVarsPerRow);
       const frameWidth = Math.max(
         450,
         this.CONFIG.maxVarsPerRow * (this.CONFIG.varWidth + this.CONFIG.varGap) + 2 * this.CONFIG.framePadding
       );
 
-      let contentHeight = this.CONFIG.framePadding;
-
+      let contentHeight = 0; // Initialize contentHeight for variables and arrays within the frame
+      
       // Position local variables
-      localVars.forEach((variable, idx) => {
-        const col = idx % this.CONFIG.maxVarsPerRow;
-        const row = Math.floor(idx / this.CONFIG.maxVarsPerRow);
-        variable.x = startX + this.CONFIG.framePadding + col * (this.CONFIG.varWidth + this.CONFIG.varGap);
-        variable.y = currentY + this.CONFIG.frameHeaderHeight + row * (this.CONFIG.varHeight + this.CONFIG.varGap);
-      });
-
       if (localVars.length > 0) {
-        contentHeight += varRows * (this.CONFIG.varHeight + this.CONFIG.varGap) + this.CONFIG.varGap;
+        const varRows = Math.ceil(localVars.length / this.CONFIG.maxVarsPerRow);
+        localVars.forEach((variable, idx) => {
+          const col = idx % this.CONFIG.maxVarsPerRow;
+          const row = Math.floor(idx / this.CONFIG.maxVarsPerRow);
+          variable.x = startX + this.CONFIG.framePadding + col * (this.CONFIG.varWidth + this.CONFIG.varGap);
+          variable.y = currentY + this.CONFIG.frameHeaderHeight + this.CONFIG.framePadding + row * (this.CONFIG.varHeight + this.CONFIG.varGap);
+        });
+        contentHeight += varRows * (this.CONFIG.varHeight + this.CONFIG.varGap);
+        if (localArrays.length > 0) { // Add extra gap if arrays follow variables
+          contentHeight += this.CONFIG.varGap;
+        }
       }
 
       // Position local arrays
       localArrays.forEach((array) => {
         array.x = startX + this.CONFIG.framePadding;
-        array.y = currentY + this.CONFIG.frameHeaderHeight + contentHeight;
+        array.y = currentY + this.CONFIG.frameHeaderHeight + this.CONFIG.framePadding + contentHeight;
         contentHeight += array.cellHeight + this.CONFIG.arrayLabelHeight + this.CONFIG.varGap;
         arrays.push(array);
       });
 
-      const frameHeight = this.CONFIG.frameHeaderHeight + contentHeight + this.CONFIG.framePadding;
+      // Add output to the active frame
+      let frameOutput: OutputData[] = [];
+      // Only add output to the topmost (active) stack frame
+      if (frameIndex === state.callStack.length - 1 && state.stdout) {
+        // currentY is the Y position of the frame itself.
+        // contentHeight is the height occupied by vars/arrays INSIDE the frame.
+        // We pass the current contentHeight of the frame as the starting point for output.
+        frameOutput = this.layoutFrameOutput(state.stdout, frameWidth, contentHeight);
+        // Update contentHeight to include the output
+        if (frameOutput.length > 0) {
+            contentHeight += this.CONFIG.outputSectionTopMargin; // For the initial gap
+            contentHeight += this.CONFIG.outputSectionHeaderHeight;
+            contentHeight += frameOutput.length * (this.CONFIG.outputHeight + this.CONFIG.outputLineGap);
+            contentHeight -= this.CONFIG.outputLineGap; // Remove last gap, as layoutFrameOutput adds it to each line
+        }
+      }
+
+      const frameHeight = this.CONFIG.frameHeaderHeight + this.CONFIG.framePadding + contentHeight + this.CONFIG.framePadding;
 
       frames.push({
         id: frameId,
@@ -309,7 +323,8 @@ export class LayoutEngine {
         y: currentY,
         width: frameWidth,
         height: frameHeight,
-        locals: localVars
+        locals: localVars,
+        output: frameOutput
       });
 
       currentY += frameHeight + this.CONFIG.frameGap;
@@ -393,6 +408,36 @@ export class LayoutEngine {
     return pointers;
   }
 
+  private static layoutFrameOutput(
+    outputContent: string,
+    frameWidth: number,
+    currentContentHeight: number // The current height of content within the frame (locals + arrays)
+  ): OutputData[] {
+    if (!outputContent) return [];
+
+    const outputLines = outputContent.split('\n').filter(line => line.trim() !== '');
+    const outputData: OutputData[] = [];
+    let currentRelativeY = this.CONFIG.frameHeaderHeight + currentContentHeight + this.CONFIG.framePadding + this.CONFIG.outputSectionTopMargin + this.CONFIG.outputSectionHeaderHeight;
+
+    outputLines.forEach((line, index) => {
+      const id = `output-${line}-${index}`; // More robust ID
+      const actualWidth = Math.min(this.CONFIG.outputWidth, frameWidth - 2 * this.CONFIG.framePadding);
+      outputData.push({
+        id,
+        text: line,
+        // x is relative to frame.x
+        x: (frameWidth - actualWidth) / 2, 
+        // y is relative to frame.y
+        y: currentRelativeY, 
+        width: actualWidth,
+        height: this.CONFIG.outputHeight,
+      });
+      currentRelativeY += this.CONFIG.outputHeight + this.CONFIG.outputLineGap;
+    });
+
+    return outputData;
+  }
+
   private static calculateLoopIndicators(state: any, stackX: number): LoopIndicatorData[] {
     // Extract loop info from current step if available
     if (state?.currentLoop) {
@@ -412,18 +457,32 @@ export class LayoutEngine {
     canvasWidth: number,
     canvasHeight: number
   ): { minX: number; minY: number; maxX: number; maxY: number } {
+    // Collect all output elements with their absolute positions
+    const allOutputElementsWithAbsolutePos = layout.stack.flatMap(frame => 
+      (frame.output || []).map(output => ({
+        x: frame.x + output.x,
+        y: frame.y + output.y,
+        width: output.width,
+        height: output.height
+      }))
+    );
+
     const allX = [
       ...layout.globals.map(v => [v.x, v.x + v.width]),
       ...layout.stack.map(f => [f.x, f.x + f.width]),
       ...layout.heap.map(h => [h.x, h.x + h.width]),
-      ...layout.arrays.map(a => [a.x, a.x + a.cells.length * (a.cellWidth + this.CONFIG.arrayGap)])
+      ...layout.arrays.map(a => [a.x, a.x + a.cells.length * (a.cellWidth + this.CONFIG.arrayGap)]),
+      // Use the new array for output elements
+      ...allOutputElementsWithAbsolutePos.map(o => [o.x, o.x + o.width])
     ].flat();
 
     const allY = [
       ...layout.globals.map(v => [v.y, v.y + v.height]),
       ...layout.stack.map(f => [f.y, f.y + f.height]),
       ...layout.heap.map(h => [h.y, h.y + h.height]),
-      ...layout.arrays.map(a => [a.y, a.y + a.cellHeight + this.CONFIG.arrayLabelHeight])
+      ...layout.arrays.map(a => [a.y, a.y + a.cellHeight + this.CONFIG.arrayLabelHeight]),
+      // Use the new array for output elements
+      ...allOutputElementsWithAbsolutePos.map(o => [o.y, o.y + o.height])
     ].flat();
 
     return {
@@ -434,4 +493,3 @@ export class LayoutEngine {
     };
   }
 }
-

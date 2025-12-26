@@ -30,6 +30,7 @@ export interface StackFrameData {
   width: number;
   height: number;
   locals: VariableData[];
+  output: OutputData[]; // Added output directly to StackFrameData
 }
 
 export interface ArrayData {
@@ -75,11 +76,12 @@ export interface HeapBlockData {
 }
 
 export interface OutputData {
+  id: string;
   x: number;
   y: number;
   width: number;
   height: number;
-  content: string;
+  text: string;
 }
 
 export interface LoopIndicatorData {
@@ -96,7 +98,6 @@ export interface LayoutResult {
   stack: StackFrameData[];
   heap: HeapBlockData[];
   pointers: PointerArrowData[];
-  output: OutputData | null;
   loopIndicators: LoopIndicatorData[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
 }

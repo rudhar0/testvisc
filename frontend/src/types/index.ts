@@ -50,6 +50,7 @@ export interface MemoryState {
   stack: StackFrame[];
   heap: Record<string, HeapBlock>;
   callStack: CallFrame[];
+  stdout?: string;
 }
 
 export interface Variable {

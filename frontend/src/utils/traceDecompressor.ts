@@ -35,7 +35,10 @@ class TraceDecompressor {
     };
     
     for (const step of compressedSteps) {
-      if (step.stateDiff !== undefined && step.stateDiff !== null) {
+      // If a full state is provided, use it directly
+      if (step.state !== undefined && step.state !== null) {
+        currentState = this.cloneState(step.state);
+      } else if (step.stateDiff !== undefined && step.stateDiff !== null) {
         currentState = this.applyStateDiff(currentState, step.stateDiff);
       }
       
@@ -49,6 +52,26 @@ class TraceDecompressor {
         state: this.cloneState(currentState),
         animation,
       };
+
+      // Handle stdout for 'output' steps
+      if (step.type === 'output' && step.explanation) {
+        // Attempt to extract the string literal from printf in the explanation
+        const printfMatch = step.explanation.match(/printf\s*\(\s*"([^"]*)"(?:,\s*.*)?\s*\)/);
+        if (printfMatch && printfMatch[1]) {
+            let outputString = printfMatch[1]
+                .replace(/\\n/g, '\n')
+                .replace(/\\t/g, '\t')
+                .replace(/\\"/g, '"')
+                .replace(/\\\\/g, '\\');
+            
+            if (!fullStep.state.stdout) {
+              fullStep.state.stdout = '';
+            }
+            fullStep.state.stdout += outputString;
+            // Update the current state's stdout as well, so it persists to subsequent steps
+            currentState.stdout = fullStep.state.stdout;
+        }
+      }
       
       if (step.pauseExecution) {
         fullStep.pauseExecution = true;
