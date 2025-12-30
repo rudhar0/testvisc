@@ -61,8 +61,14 @@ const detectLanguageFromCode = (code: string): Language => {
 export const useEditorStore = create<EditorState>()(
   immer((set) => ({
     // Initial state
-    code: '',
-    language: 'c',
+    code: `#include <iostream>
+
+int main() {
+    std::cout << "Hello, World!" << std::endl;
+    return 0;
+}
+`,
+    language: 'cpp',
     fileName: null,
     isDirty: false,
     errors: [],

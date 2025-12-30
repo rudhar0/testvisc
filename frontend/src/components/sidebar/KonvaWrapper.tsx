@@ -43,10 +43,10 @@ export default function KonvaWrapper() {
 
   // 5. Animation Trigger: Animate nodes when the step changes.
   useEffect(() => {
-    if (stageRef.current && executionTrace[currentStep]) {
-      animateStepChange(stageRef.current, executionTrace[currentStep]);
+    if (stageRef.current && elements) {
+      animateStepChange(stageRef.current, elements);
     }
-  }, [currentStep, executionTrace]);
+  }, [currentStep, executionTrace, elements]);
 
   return (
     <div className="flex flex-col h-full w-full bg-slate-950">

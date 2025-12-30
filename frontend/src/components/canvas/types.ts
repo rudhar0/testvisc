@@ -18,6 +18,10 @@ export interface VariableData {
   isUpdated?: boolean;
   previousValue?: any;
   expression?: string;
+  isInitialized?: boolean;
+  declarationType?: 'with_value' | 'without_value' | 'multiple';
+  isAccessed?: boolean;
+  accessType?: 'read' | 'write';
 }
 
 export interface StackFrameData {

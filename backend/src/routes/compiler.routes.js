@@ -1,5 +1,4 @@
 import express from 'express';
-import clangAnalyzerService from '../services/clang-analyzer.service.js';
 
 const router = express.Router();
 
@@ -19,42 +18,6 @@ router.get('/status', (req, res) => {
         message: 'Clang + LibTooling ready for use'
       }
     });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
-/**
- * POST /api/compiler/compile
- * Compile and validate code
- */
-router.post('/compile', async (req, res) => {
-  try {
-    const { code, language = 'c' } = req.body;
-
-    if (!code) {
-      return res.status(400).json({
-        success: false,
-        message: 'Code is required'
-      });
-    }
-
-    // Validate syntax with Clang semantic checking
-    const result = await clangAnalyzerService.validateCode(code, language);
-    
-    res.json({
-      success: result.valid,
-      data: {
-        valid: result.valid,
-        errors: result.errors,
-        language: language,
-        compiler: 'clang+libtooling'
-      }
-    });
-
   } catch (error) {
     res.status(500).json({
       success: false,

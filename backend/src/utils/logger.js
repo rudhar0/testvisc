@@ -29,6 +29,9 @@ class Logger {
     // Console output
     const color = this.getColor(level);
     console.log(`${color}[${timestamp}] ${level.toUpperCase()}: ${message}\x1b[0m`);
+    if (meta && (Object.keys(meta).length > 0 || meta instanceof Error)) {
+      console.log(meta);
+    }
 
     // File output (async, non-blocking)
     this.writeToFile(level, logEntry);

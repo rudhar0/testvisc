@@ -35,32 +35,90 @@ export class RenderRegistry {
     for (let i = 0; i <= currentStep && i < trace.length; i++) {
       const step = trace[i];
 
-      // Globals
-      if (step.type === 'global_declaration') {
-        globals[step.variable] = { type: step.dataType, value: step.value ?? '?' };
-      }
-      if (step.state?.globals) {
-        Object.assign(globals, step.state.globals);
-      }
+      // Always apply the full state snapshot if available
+      if (step.state) {
+        // Clear globals and stack to rebuild from snapshot
+        // This is important for ensuring the state at 'currentStep' is accurately reflected,
+        // rather than cumulatively adding from previous steps which might be incorrect
+        // if variables go out of scope or are re-declared.
+        Object.keys(globals).forEach(key => delete globals[key]); // Clear globals
+        stack.length = 0; // Clear stack
 
-      // Stack Operations
-      if (step.type === 'function_call') {
-        stack.push({ name: step.function, variables: {} });
-      } else if (step.type === 'function_return') {
-        stack.pop();
-      }
-
-      // Local Variables
-      if (step.type === 'variable_declaration') {
-        const frame = stack[stack.length - 1];
-        if (frame) {
-          frame.variables[step.variable] = { type: step.dataType, value: step.value ?? '?' };
+        // Handle globals - can be Record<string, Variable> or array
+        if (step.state.globals) {
+          if (Array.isArray(step.state.globals)) {
+            // Old format: array
+            step.state.globals.forEach((globalVar: any) => {
+              globals[globalVar.name] = { 
+                type: globalVar.type, 
+                value: globalVar.value, 
+                address: globalVar.address 
+              };
+            });
+          } else {
+            // New format: Record<string, Variable>
+            Object.entries(step.state.globals).forEach(([name, globalVar]: [string, any]) => {
+              globals[name] = { 
+                type: globalVar.type || globalVar.primitive, 
+                value: globalVar.value, 
+                address: globalVar.address 
+              };
+            });
+          }
         }
-      }
 
-      // Updates from state snapshot
-      if (step.state?.locals && stack.length > 0) {
-        Object.assign(stack[stack.length - 1].variables, step.state.locals);
+        // Handle stack frames - prefer callStack, fallback to stack
+        const frames = step.state.callStack || step.state.stack || [];
+        frames.forEach((frame: any) => {
+          const frameVariables: Record<string, any> = {};
+          
+          // Handle locals - can be Record<string, Variable> or array
+          if (frame.locals) {
+            if (Array.isArray(frame.locals)) {
+              frame.locals.forEach((localVar: any) => {
+                frameVariables[localVar.name] = { 
+                  type: localVar.type || localVar.primitive, 
+                  value: localVar.value, 
+                  address: localVar.address 
+                };
+              });
+            } else {
+              Object.entries(frame.locals).forEach(([name, localVar]: [string, any]) => {
+                frameVariables[name] = { 
+                  type: localVar.type || localVar.primitive, 
+                  value: localVar.value, 
+                  address: localVar.address 
+                };
+              });
+            }
+          }
+          
+          // Handle params if they exist
+          if (frame.params) {
+            if (Array.isArray(frame.params)) {
+              frame.params.forEach((paramVar: any) => {
+                frameVariables[paramVar.name] = { 
+                  type: paramVar.type || paramVar.primitive, 
+                  value: paramVar.value, 
+                  address: paramVar.address 
+                };
+              });
+            } else {
+              Object.entries(frame.params).forEach(([name, paramVar]: [string, any]) => {
+                frameVariables[name] = { 
+                  type: paramVar.type || paramVar.primitive, 
+                  value: paramVar.value, 
+                  address: paramVar.address 
+                };
+              });
+            }
+          }
+          
+          stack.push({ 
+            name: frame.function || frame.name || 'unknown', 
+            variables: frameVariables 
+          });
+        });
       }
     }
 

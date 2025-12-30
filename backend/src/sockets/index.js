@@ -1,233 +1,167 @@
-import clangAnalyzerService from '../services/clang-analyzer.service.js';
-import TraceService from '../services/trace-simple.service.js';
-import ASTWalker from '../parsers/ast-walker.js';
+import GdbDebugger from '../services/gdb-debugger.service.js';
 import { chunkService } from '../services/chunk.service.js';
-import { traceCompressor } from '../middleware/trace-compression.middleware.js';
 import { SOCKET_EVENTS } from '../constants/events.js';
+import inputManagerService from '../services/input-manager.service.js';
+
+console.log('✅ GdbDebugger imported:', typeof GdbDebugger);
 
 /**
- * Setup Socket.io event handlers with Clang + LibTooling
- * Clang is system-built and requires no download
+ * Setup Socket.io event handlers with GDB Integration
  */
 export function setupSocketHandlers(io) {
-  const traceService = new TraceService();
-
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
 
-    // Send initial status - Clang is always available
+    // Send initial status
     socket.emit(SOCKET_EVENTS.COMPILER_STATUS, {
-      compiler: 'clang',
+      compiler: 'gdb',
       available: true,
       ready: true,
-      message: 'Clang + LibTooling ready'
+      message: 'GDB debugger ready'
     });
 
     /**
-     * Request Clang status
+     * Request Compiler status
      */
     socket.on(SOCKET_EVENTS.COMPILER_STATUS_REQUEST, () => {
       socket.emit(SOCKET_EVENTS.COMPILER_STATUS, {
-        compiler: 'clang',
+        compiler: 'gdb',
         available: true,
         ready: true,
-        message: 'Clang + LibTooling ready'
+        message: 'GDB debugger ready'
       });
     });
 
     /**
-     * Handle code chunks with advanced semantic analysis
-     */
-    socket.on(SOCKET_EVENTS.CODE_ANALYZE_CHUNK, async (data) => {
-      try {
-        const result = chunkService.handleChunk(socket.id, data);
-
-        if (result.complete) {
-          // All chunks received, proceed with analysis
-          const { code } = result;
-          const language = data.language || 'c';
-          const inputs = data.inputs || [];
-
-          // Send progress update
-          socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
-            stage: 'semantic_analysis',
-            progress: 10
-          });
-
-          // Extract semantic visualization info
-          socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
-            stage: 'analyzing',
-            progress: 50
-          });
-
-          // Generate execution trace (includes validation with fallback)
-          const trace = await traceService.generateTrace(code, language, inputs);
-          
-          socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
-            stage: 'compressing',
-            progress: 80
-          });
-
-          // Compress and chunk the trace
-          console.log(`📊 Original trace size: ${traceCompressor.estimateSize(trace)} bytes`);
-          const chunks = traceCompressor.chunkTrace(trace);
-          console.log(`📦 Compressed into ${chunks.length} chunks`);
-
-          // Send chunks one by one
-          for (const chunk of chunks) {
-            socket.emit(SOCKET_EVENTS.CODE_TRACE_CHUNK, chunk);
-            
-            // Small delay between chunks to avoid overwhelming
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
-
-          // Send completion signal
-          socket.emit(SOCKET_EVENTS.CODE_TRACE_COMPLETE, {
-            totalChunks: chunks.length,
-            totalSteps: trace.length || 0
-          });
-
-        } else {
-          // Still waiting for more chunks
-          console.log(`⏳ Chunk progress: ${result.progress.toFixed(2)}%`);
-        }
-
-      } catch (error) {
-        console.error('Chunk processing error:', error);
-        socket.emit(SOCKET_EVENTS.CODE_TRACE_ERROR, {
-          message: error.message
-        });
-      }
-    });
-
-    /**
-     * Analyze code syntax with Clang semantic checking
-     */
-    socket.on(SOCKET_EVENTS.CODE_ANALYZE_SYNTAX, async (data) => {
-      try {
-        const { code, language = 'c' } = data;
-
-        // Try Clang validation first, fallback to tree-sitter
-        let valid = false;
-        let errors = [];
-        let analyzer = 'unknown';
-
-        try {
-          const result = await clangAnalyzerService.validateCode(code, language);
-          valid = result.valid;
-          errors = result.errors;
-          analyzer = 'clang+libtooling';
-        } catch (clangError) {
-          // Clang not available, try tree-sitter
-          try {
-            const walker = new ASTWalker(language);
-            walker.parse(code);
-            valid = true;
-            errors = [];
-            analyzer = 'tree-sitter';
-          } catch (tsError) {
-            valid = false;
-            errors = [{ message: tsError.message }];
-            analyzer = 'tree-sitter';
-          }
-        }
-        
-        socket.emit(SOCKET_EVENTS.CODE_SYNTAX_RESULT, {
-          valid,
-          errors,
-          language,
-          analyzer
-        });
-      } catch (error) {
-        socket.emit(SOCKET_EVENTS.CODE_SYNTAX_ERROR, {
-          message: error.message
-        });
-      }
-    });
-
-    /**
-     * Generate execution trace (with compression)
+     * Generate execution trace using GDB
      */
     socket.on(SOCKET_EVENTS.CODE_TRACE_GENERATE, async (data) => {
+      let debuggerInstance = null;
+      
       try {
         const { code, language = 'c', inputs = [] } = data;
 
-        console.log(`📝 Generating trace for ${language.toUpperCase()} code (${code.length} bytes)`);
-
-        // Emit progress updates
-        socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
-          stage: 'parsing',
-          progress: 25
-        });
-
-        // Validate first
-        const validationResult = await clangAnalyzerService.validateCode(code, language);
-        if (!validationResult.valid) {
-          socket.emit(SOCKET_EVENTS.CODE_SYNTAX_ERROR, {
-            errors: validationResult.errors
+        if (!code || !code.trim()) {
+          socket.emit(SOCKET_EVENTS.CODE_TRACE_ERROR, {
+            message: 'No code provided'
           });
           return;
         }
 
+        console.log(`📝 Generating trace for ${language.toUpperCase()} code (${code.length} bytes)`);
+
+        // Progress: Starting
         socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
-          stage: 'analyzing',
+          stage: 'initializing',
+          progress: 5
+        });
+
+        // Create debugger instance, passing the client's socket
+        debuggerInstance = new GdbDebugger(socket);
+        
+        // Progress: Compiling
+        socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
+          stage: 'compiling',
+          progress: 15
+        });
+        
+        // Compile code
+        await debuggerInstance.compile(code, language);
+        
+        // Progress: Starting debugger
+        socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
+          stage: 'starting_debugger',
+          progress: 30
+        });
+
+        // Start debugger
+        await debuggerInstance.start();
+
+        // Progress: Executing
+        socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
+          stage: 'executing',
           progress: 50
         });
 
         // Generate trace
-        const trace = await traceService.generateTrace(code, language, inputs);
+        const trace = await debuggerInstance.generateTrace(inputs);
 
+        if (!trace || trace.length === 0) {
+          throw new Error('No trace generated - execution may have failed');
+        }
+
+        console.log(`✅ Generated ${trace.length} execution steps`);
+
+        // Progress: Formatting
         socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
-          stage: 'compressing',
+          stage: 'formatting',
           progress: 80
         });
 
-        // Compress and chunk the trace
-        console.log(`📊 Original trace size: ${traceCompressor.estimateSize(trace)} bytes`);
-        const chunks = traceCompressor.chunkTrace(trace);
-        console.log(`📦 Compressed into ${chunks.length} chunks`);
+        // Format trace for frontend (match expected format)
+        const formattedTrace = {
+          steps: trace,
+          totalSteps: trace.length,
+          globals: extractGlobals(trace),
+          functions: extractFunctions(trace)
+        };
 
-        // Send chunks
-        for (const chunk of chunks) {
-          socket.emit(SOCKET_EVENTS.CODE_TRACE_CHUNK, chunk);
-          await new Promise(resolve => setTimeout(resolve, 10));
-        }
-
-        socket.emit(SOCKET_EVENTS.CODE_TRACE_COMPLETE, {
-          totalChunks: chunks.length,
-          totalSteps: trace.length || 0
+        // Progress: Sending
+        socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
+          stage: 'sending',
+          progress: 90
         });
+
+        // Send in single chunk (no compression for now)
+        socket.emit(SOCKET_EVENTS.CODE_TRACE_CHUNK, {
+          chunkId: 0,
+          totalChunks: 1,
+          steps: formattedTrace.steps,
+          totalSteps: formattedTrace.totalSteps,
+          globals: formattedTrace.globals,
+          functions: formattedTrace.functions,
+          metadata: {
+            compressed: false,
+            debugger: 'gdb'
+          }
+        });
+
+        // Send completion
+        socket.emit(SOCKET_EVENTS.CODE_TRACE_COMPLETE, {
+          totalChunks: 1,
+          totalSteps: formattedTrace.totalSteps
+        });
+
+        console.log(`✅ Trace sent successfully`);
 
       } catch (error) {
+        console.error('❌ Trace generation error:', error);
+        
         socket.emit(SOCKET_EVENTS.CODE_TRACE_ERROR, {
-          message: error.message
+          message: error.message || 'Failed to generate trace',
+          details: error.stack
         });
+      } finally {
+        // Cleanup
+        if (debuggerInstance) {
+          try {
+            await debuggerInstance.stop();
+          } catch (e) {
+            console.error('Cleanup error:', e);
+          }
+        }
       }
     });
 
     /**
-     * Request user input (for scanf/cin)
+     * Provide user input (for scanf/cin)
      */
     socket.on(SOCKET_EVENTS.EXECUTION_INPUT_PROVIDE, (data) => {
-      const { stepId, values } = data;
-      socket.emit(SOCKET_EVENTS.EXECUTION_INPUT_RECEIVED, {
-        stepId,
-        values
-      });
-    });
-
-    /**
-     * Pause execution
-     */
-    socket.on(SOCKET_EVENTS.EXECUTION_PAUSE, () => {
-      socket.emit(SOCKET_EVENTS.EXECUTION_PAUSED);
-    });
-
-    /**
-     * Resume execution
-     */
-    socket.on(SOCKET_EVENTS.EXECUTION_RESUME, () => {
-      socket.emit(SOCKET_EVENTS.EXECUTION_RESUMED);
+      const { values } = data;
+      console.log(`📥 Received input:`, values);
+      
+      // Pass the received input to the manager to resolve the pending promise
+      inputManagerService.provideInput(values);
     });
 
     /**
@@ -238,8 +172,52 @@ export function setupSocketHandlers(io) {
       chunkService.handleDisconnect(socket.id);
     });
   });
+}
 
-  // Clang is always available - no need for download broadcasting
+/**
+ * Extract global variables from trace
+ */
+function extractGlobals(trace) {
+  const globals = [];
+  const seen = new Set();
+
+  for (const step of trace) {
+    if (step.type === 'global_declaration' && step.variable) {
+      if (!seen.has(step.variable)) {
+        globals.push({
+          name: step.variable,
+          type: step.dataType || 'int',
+          value: step.value
+        });
+        seen.add(step.variable);
+      }
+    }
+  }
+
+  return globals;
+}
+
+/**
+ * Extract function information from trace
+ */
+function extractFunctions(trace) {
+  const functions = [];
+  const seen = new Set();
+
+  for (const step of trace) {
+    if (step.type === 'function_call' && step.function) {
+      if (!seen.has(step.function)) {
+        functions.push({
+          name: step.function,
+          returnType: step.returnType || 'int',
+          line: step.line
+        });
+        seen.add(step.function);
+      }
+    }
+  }
+
+  return functions;
 }
 
 export default setupSocketHandlers;

@@ -11,6 +11,8 @@ export interface VariableBoxProps {
   value: string | number;
   type?: string;
   color?: string;
+  address?: string;
+  isAlive?: boolean;
 }
 
 export const VariableBox: React.FC<VariableBoxProps> = ({
@@ -23,9 +25,11 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   value,
   type,
   color = '#1e293b',
+  address,
+  isAlive = true,
 }) => {
   return (
-    <Group id={id} x={x} y={y}>
+    <Group id={id} x={x} y={y} opacity={isAlive ? 1 : 0.5} listening={false}>
       <Rect
         name="box-bg"
         width={width}
@@ -37,6 +41,7 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         shadowColor="black"
         shadowBlur={5}
         shadowOpacity={0.2}
+        shadowForStrokeEnabled={false}
       />
       <Text
         x={10}
@@ -45,8 +50,9 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         fontSize={12}
         fontStyle="bold"
         fill="#94a3b8"
-        width={width - 20}
+        width={Math.max(0, width - 20)}
         ellipsis={true}
+        perfectDrawEnabled={false}
       />
       <Text
         x={10}
@@ -55,9 +61,24 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         fontSize={16}
         fontFamily="monospace"
         fill="#f8fafc"
-        width={width - 20}
+        width={Math.max(0, width - 20)}
         ellipsis={true}
+        perfectDrawEnabled={false}
+        name="variable-value" // Added name prop
       />
+      {address && (
+        <Text
+          x={10}
+          y={height - 15}
+          text={address}
+          fontSize={10}
+          fontFamily="monospace"
+          fill="#64748b"
+          width={Math.max(0, type ? width - 50 : width - 20)}
+          ellipsis={true}
+          perfectDrawEnabled={false}
+        />
+      )}
       {type && (
         <Text
           x={10}
@@ -66,7 +87,8 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
           fontSize={10}
           fill="#64748b"
           align="right"
-          width={width - 20}
+          width={Math.max(0, width - 20)}
+          perfectDrawEnabled={false}
         />
       )}
     </Group>

@@ -1,6 +1,7 @@
 import express from 'express';
 import compilerRoutes from './compiler.routes.js';
 import analyzeRoutes from './analyze.routes.js';
+import debugRoutes from './debug.routes.js';
 
 const router = express.Router();
 
@@ -16,5 +17,6 @@ router.get('/health', (req, res) => {
 // Mount routes
 router.use('/compiler', compilerRoutes);
 router.use('/analyze', analyzeRoutes);
+router.use('/debug', debugRoutes);
 
 export default router;

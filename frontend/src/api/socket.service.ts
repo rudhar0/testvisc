@@ -6,7 +6,7 @@
 import { io, Socket } from 'socket.io-client';
 import { API_CONFIG } from '@config/api.config';
 import { SOCKET_EVENTS } from '@constants/index';
-import type { ExecutionTrace, GCCStatus } from '@types/index';
+import type { GCCStatus } from '@types/index';
 
 export type SocketEventCallback = (data: any) => void;
 
@@ -42,7 +42,7 @@ class SocketService {
         console.log('✅ Socket.io connected:', this.socket?.id);
         this.reconnectAttempts = 0;
         this.isConnectedFlag = true;
-        this.emit('connection:state', { connected: true });
+        this.emitToListeners('connection:state', { connected: true });
         resolve(this.socket!);
       });
 
@@ -51,7 +51,7 @@ class SocketService {
         console.error('❌ Socket.io connection error:', error);
         this.reconnectAttempts++;
         this.isConnectedFlag = false;
-        this.emit('connection:state', { connected: false });
+        this.emitToListeners('connection:state', { connected: false });
         
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
           reject(new Error('Failed to connect after maximum attempts'));
@@ -62,7 +62,7 @@ class SocketService {
       this.socket.on('disconnect', (reason) => {
         console.log('🔌 Socket.io disconnected:', reason);
         this.isConnectedFlag = false;
-        this.emit('connection:state', { connected: false });
+        this.emitToListeners('connection:state', { connected: false });
       });
 
       // Reconnection attempt
@@ -95,60 +95,37 @@ class SocketService {
   }
 
   /**
-   * Setup event listeners
+   * Setup event listeners for server-sent events
    */
   private setupEventListeners() {
     if (!this.socket) return;
 
-    // Compiler Status Events (Clang + LibTooling)
-    this.socket.on(SOCKET_EVENTS.COMPILER_STATUS, (data: GCCStatus) => {
-      this.emit('compiler:status', data);
-    });
+    // Generic handler to forward events
+    const forwardEvent = (event: string) => {
+      this.socket?.on(event, (data: any) => {
+        this.emitToListeners(event, data);
+      });
+    };
 
-    // Code Analysis Events
-    this.socket.on(SOCKET_EVENTS.CODE_SYNTAX_RESULT, (data) => {
-      this.emit('code:syntax:result', data);
-    });
+    // Events to forward
+    const eventsToForward = [
+      SOCKET_EVENTS.COMPILER_STATUS,
+      SOCKET_EVENTS.CODE_SYNTAX_RESULT,
+      SOCKET_EVENTS.CODE_SYNTAX_ERROR,
+      SOCKET_EVENTS.CODE_TRACE_PROGRESS,
+      SOCKET_EVENTS.CODE_TRACE_CHUNK,
+      SOCKET_EVENTS.CODE_TRACE_COMPLETE,
+      SOCKET_EVENTS.CODE_TRACE_ERROR,
+      'execution:input_required', // Forward input required event
+    ];
 
-    this.socket.on(SOCKET_EVENTS.CODE_SYNTAX_ERROR, (data) => {
-      this.emit('code:syntax:error', data);
-    });
-
-    // Trace Events
-    this.socket.on(SOCKET_EVENTS.CODE_TRACE_PROGRESS, (data) => {
-      this.emit('code:trace:progress', data);
-    });
-
-    this.socket.on(SOCKET_EVENTS.CODE_TRACE_CHUNK, (data) => {
-      this.emit('code:trace:chunk', data);
-    });
-
-    this.socket.on(SOCKET_EVENTS.CODE_TRACE_COMPLETE, (data) => {
-      this.emit('code:trace:complete', data);
-    });
-
-    this.socket.on(SOCKET_EVENTS.CODE_TRACE_ERROR, (data) => {
-      this.emit('code:trace:error', data);
-    });
-
-    // Execution Events
-    this.socket.on(SOCKET_EVENTS.EXECUTION_INPUT_RECEIVED, (data) => {
-      this.emit('execution:input:received', data);
-    });
-
-    this.socket.on(SOCKET_EVENTS.EXECUTION_PAUSED, () => {
-      this.emit('execution:paused', {});
-    });
-
-    this.socket.on(SOCKET_EVENTS.EXECUTION_RESUMED, () => {
-      this.emit('execution:resumed', {});
-    });
+    eventsToForward.forEach(forwardEvent);
   }
 
   /**
-   * Emit custom event to listeners
+   * Emit custom event to local listeners
    */
-  private emit(event: string, data: any) {
+  private emitToListeners(event: string, data: any) {
     const listeners = this.eventListeners.get(event);
     if (listeners) {
       listeners.forEach(callback => callback(data));
@@ -183,67 +160,38 @@ class SocketService {
   // ============================================
 
   /**
+   * Emit an event to the server.
+   */
+  emit(event: string, data: any) {
+    this.socket?.emit(event, data);
+  }
+
+  /**
    * Request Compiler status
    */
   requestCompilerStatus() {
-    this.socket?.emit(SOCKET_EVENTS.COMPILER_STATUS_REQUEST);
+    this.emit(SOCKET_EVENTS.COMPILER_STATUS_REQUEST, {});
   }
 
   /**
    * Analyze code syntax
    */
   analyzeSyntax(code: string, language: string) {
-    this.socket?.emit(SOCKET_EVENTS.CODE_ANALYZE_SYNTAX, {
-      code,
-      language
-    });
+    this.emit(SOCKET_EVENTS.CODE_ANALYZE_SYNTAX, { code, language });
   }
 
   /**
-   * Generate execution trace (Socket.io - for large code)
+   * Generate execution trace
    */
-  generateTrace(code: string, language: string, inputs: any[] = []) {
-    this.socket?.emit(SOCKET_EVENTS.CODE_TRACE_GENERATE, {
-      code,
-      language,
-      inputs
-    });
-  }
-
-  /**
-   * Send code chunk (for large files)
-   */
-  sendCodeChunk(chunkId: number, totalChunks: number, code: string, language: string) {
-    this.socket?.emit(SOCKET_EVENTS.CODE_ANALYZE_CHUNK, {
-      chunkId,
-      totalChunks,
-      code,
-      language
-    });
+  generateTrace(code: string, language: string) {
+    this.emit(SOCKET_EVENTS.CODE_TRACE_GENERATE, { code, language });
   }
 
   /**
    * Provide user input (for scanf/cin)
    */
-  provideInput(stepId: number, values: any[]) {
-    this.socket?.emit(SOCKET_EVENTS.EXECUTION_INPUT_PROVIDE, {
-      stepId,
-      values
-    });
-  }
-
-  /**
-   * Pause execution
-   */
-  pauseExecution() {
-    this.socket?.emit(SOCKET_EVENTS.EXECUTION_PAUSE);
-  }
-
-  /**
-   * Resume execution
-   */
-  resumeExecution() {
-    this.socket?.emit(SOCKET_EVENTS.EXECUTION_RESUME);
+  provideInput(value: string | number) {
+    this.emit(SOCKET_EVENTS.EXECUTION_INPUT_PROVIDE, { value });
   }
 }
 

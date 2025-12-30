@@ -3,16 +3,7 @@ import { analyzeService } from '../services/analyze.service.js';
 
 const router = express.Router();
 
-// POST /api/analyze - Execute code and return trace
-router.post('/analyze', async (req, res) => {
-  try {
-    const { code, language, inputs } = req.body;
-    const result = await analyzeService.analyze({ code, language, inputs });
-    res.json(result);
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+
 
 // POST /api/validate - Check syntax only
 router.post('/validate', async (req, res) => {

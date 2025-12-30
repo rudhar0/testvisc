@@ -5,7 +5,6 @@ import cors from 'cors';
 import morgan from 'morgan';
 import { config } from './config/index.js';
 import routes from './routes/index.js';
-import clangAnalyzerService from './services/clang-analyzer.service.js';
 import { setupSocketHandlers } from './sockets/index.js';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 import { logger } from './utils/logger.js';
@@ -42,26 +41,12 @@ async function startServer() {
   try {
     logger.info('🚀 Starting C/C++ Visualizer Backend...');
     
-    // Check Clang availability asynchronously (don't block startup)
-    logger.info('🔍 Checking Clang + LibTooling availability...');
-    clangAnalyzerService.getSummary('int main(){return 0;}', 'c').then(summary => {
-      if (summary.success) {
-        logger.success('✅ Clang + LibTooling is available');
-      } else {
-        logger.warn('⚠️  Clang not found - code analysis will not work');
-        logger.warn('   Install clang: https://clang.llvm.org/get_started.html');
-      }
-    }).catch(err => {
-      logger.warn('⚠️  Clang check failed:', err.message);
-    });
-
     // Start server immediately
     httpServer.listen(config.port, () => {
       logger.success(`🚀 Server running on port ${config.port}`);
       logger.info(`📡 Socket.io ready for connections`);
       logger.info(`🌍 Environment: ${config.env}`);
       logger.info(`🔗 Allowed origins: ${config.allowedOrigins.join(', ')}`);
-      logger.info(`🔬 Using: Clang + LibTooling for semantic analysis`);
     });
   } catch (error) {
     logger.error('❌ Failed to start server:', { error: error.message });

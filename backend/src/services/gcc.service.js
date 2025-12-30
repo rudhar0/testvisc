@@ -2,6 +2,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs-extra';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
 import extractZip from 'extract-zip';
@@ -194,12 +195,59 @@ class GCCService {
     });
   }
 
+  async compile(code, language = 'c', options = []) {
+    if (!this.available) {
+      await this.initialize();
+      if (!this.available) {
+        console.log('⚠️ GCC not found. Attempting automatic download...');
+        try {
+          await this.downloadGCC();
+        } catch (err) {
+          throw new Error(`GCC not available and download failed: ${err.message}`);
+        }
+      }
+    }
+
+    const tempDir = os.tmpdir();
+    await fs.ensureDir(tempDir);
+
+    const ext = language === 'cpp' ? 'cpp' : 'c';
+    const sourceFile = path.join(tempDir, `temp_${Date.now()}.${ext}`);
+    const executableFile = sourceFile.replace(`.${ext}`, '.exe');
+
+    try {
+      await fs.writeFile(sourceFile, code, 'utf-8');
+
+      const compileCmd = `"${this.gccPath}" ${options.join(' ')} -o "${executableFile}" "${sourceFile}"`;
+      
+      const { stdout, stderr } = await execAsync(compileCmd);
+
+      await fs.remove(sourceFile);
+
+      return {
+        success: true,
+        executablePath: executableFile,
+        errors: stderr || '',
+        warnings: stdout || ''
+      };
+
+    } catch (error) {
+      await fs.remove(sourceFile);
+
+      return {
+        success: false,
+        errors: error.stderr || error.message,
+        warnings: error.stdout || ''
+      };
+    }
+  }
+
   async compileCode(code, language = 'c') {
     if (!this.available) {
       throw new Error('GCC not available');
     }
 
-    const tempDir = path.join(process.cwd(), 'temp');
+    const tempDir = os.tmpdir();
     await fs.ensureDir(tempDir);
 
     const ext = language === 'cpp' ? 'cpp' : 'c';
@@ -231,52 +279,7 @@ class GCCService {
     }
   }
 
-  async getASTDump(code, language = 'c') {
-    if (!this.available) {
-      throw new Error('GCC not available');
-    }
 
-    const tempDir = path.join(process.cwd(), 'temp');
-    await fs.ensureDir(tempDir);
-
-    const ext = language === 'cpp' ? 'cpp' : 'c';
-    const sourceFile = path.join(tempDir, `temp_${Date.now()}.${ext}`);
-
-    try {
-      await fs.writeFile(sourceFile, code, 'utf-8');
-
-      const dumpCmd = `"${this.gccPath}" -fdump-tree-original -c "${sourceFile}"`;
-      
-      await execAsync(dumpCmd);
-
-      const dumpFile = sourceFile.replace(`.${ext}`, `.c.004t.original`);
-      
-      let astContent = '';
-      if (await fs.pathExists(dumpFile)) {
-        astContent = await fs.readFile(dumpFile, 'utf-8');
-        await fs.remove(dumpFile);
-      }
-
-      await fs.remove(sourceFile);
-      const objFile = sourceFile.replace(`.${ext}`, '.o');
-      if (await fs.pathExists(objFile)) {
-        await fs.remove(objFile);
-      }
-
-      return {
-        success: true,
-        ast: astContent
-      };
-
-    } catch (error) {
-      await fs.remove(sourceFile);
-
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  }
 
   isAvailable() {
     return this.available;
@@ -294,3 +297,4 @@ class GCCService {
 }
 
 export const gccService = new GCCService();
+export default GCCService;

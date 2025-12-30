@@ -59,9 +59,14 @@ export interface Variable {
   value: any;
   address: string;
   scope: 'global' | 'local' | 'parameter';
+  primitive: 'int' | 'float' | 'char' | 'double' | 'bool' | 'pointer' | 'array' | 'struct';
+  isInitialized: boolean;
   isAlive: boolean;
   birthStep?: number;
   deathStep?: number;
+  declarationType: 'with_value' | 'without_value' | 'multiple';
+  isAccessed?: boolean; // For highlighting when read/written
+  accessType?: 'read' | 'write';
 }
 
 export interface GlobalVariable extends Variable {

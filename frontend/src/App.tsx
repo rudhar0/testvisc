@@ -3,6 +3,7 @@ import MainLayout from '@components/layout/MainLayout';
 import { useSocket } from '@hooks/useSocket';
 import { useEffect } from 'react';
 import { APP_CONFIG } from '@config/app.config';
+import { InputPromptModal } from '@components/modals/InputPromptModal';
 
 function App() {
   const { connect, disconnect, isConnected } = useSocket();
@@ -28,6 +29,9 @@ function App() {
       
       <MainLayout />
       
+      {/* Modals */}
+      <InputPromptModal />
+
       {/* Toast notifications */}
       <Toaster
         position="top-right"
