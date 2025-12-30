@@ -11,7 +11,6 @@ export class Variable extends CanvasElement {
     constructor(id: string, parentId: string, layer: Konva.Layer, payload: any) {
         super(id, parentId, layer);
         this.elementType = 'Variable';
-        this.subType = payload.name;
         this.layout = {
             x: 0,
             y: 0,
@@ -101,7 +100,7 @@ export class Variable extends CanvasElement {
             duration: 600, // ms
             from: oldValue,
             to: newValue,
-            konvaObject: this.container,
+            konvaContainer: this.container,
             valueTextNode: this.textNode,
             backgroundRect: this.backgroundRect,
         };

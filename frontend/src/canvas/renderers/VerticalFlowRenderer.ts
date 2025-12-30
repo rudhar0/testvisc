@@ -21,7 +21,6 @@ import { Loop } from '../elements/Loop';
 import { Condition } from '../elements/Condition';
 import { Output } from '../elements/Output';
 import { Input } from '../elements/Input';
-import { FunctionCall } from '../elements/FunctionCall';
 import { VerticalFlowLayout } from '../managers/VerticalFlowLayout';
 import { CanvasElement } from '../core/CanvasElement';
 import { Animation, AnimationSequence } from '../../types/animation.types';
@@ -34,7 +33,6 @@ const elementFactory: Record<string, any> = {
   conditional_start: Condition,
   output: Output,
   input_request: Input,
-  function_call: FunctionCall,
 };
 
 export interface CanvasState {
@@ -129,7 +127,6 @@ export class VerticalFlowRenderer {
    * Process a single step
    */
   public async processStep(step: ExecutionStep, animate: boolean = true): Promise<AnimationSequence | void> {
-    console.log(`[VerticalFlowRenderer] Processing step ${step.id} with type ${step.type}`);
     if (!this.state.root || !this.state.mainFunction) {
       this.initialize();
     }
@@ -146,7 +143,6 @@ export class VerticalFlowRenderer {
     // Handle element creation
     const ElementClass = elementFactory[type];
     if (ElementClass) {
-      console.log(`[VerticalFlowRenderer] Creating element of type: ${type}`); // LOG 7
       let elementId: string;
 
       // Determine ID based on element type
@@ -156,8 +152,6 @@ export class VerticalFlowRenderer {
         elementId = `output-${step.id}`;
       } else if (type === 'input_request') {
         elementId = `input-${step.id}`;
-      } else if (type === 'function_call') {
-        elementId = `call-${step.id}`;
       } else {
         elementId = `step-${step.id}`;
       }
@@ -188,12 +182,10 @@ export class VerticalFlowRenderer {
 
       // Update parent layout (non-animating visual update)
       VerticalFlowLayout.updateParentSize(parent);
-    } // Handle element updates (e.g., assignments)
+    }
+    // Handle element updates (e.g., assignments)
     else if (type === 'assignment') {
       const varName = (payload as any).name;
-      console.log('[VerticalFlowRenderer] Assignment payload:', JSON.stringify(payload, null, 2)); // LOG 5
-      console.log('[VerticalFlowRenderer] Current elements:', Array.from(this.state.elements.keys())); // LOG 6
-      
       // We need to find the specific element related to the assignment
       // This assumes 'Variable' elements have an id like 'var-address' or contain the varName
       const elementToUpdate = Array.from(this.state.elements.values()).find(
@@ -203,7 +195,6 @@ export class VerticalFlowRenderer {
       );
 
       if (elementToUpdate) {
-        console.log('[VerticalFlowRenderer] Found element to update:', elementToUpdate.id); // LOG 1
         if (!animate) {
             elementToUpdate.update(payload); // Call non-animating update
             this.layer.draw();
@@ -213,23 +204,9 @@ export class VerticalFlowRenderer {
         // If animating, get animation description
         const updateAnimation = elementToUpdate.getUpdateAnimation(payload);
         if (updateAnimation) {
-            console.log('[VerticalFlowRenderer] Created update animation:', updateAnimation); // LOG 2
             animations.push(updateAnimation);
-        } else {
-            console.log('[VerticalFlowRenderer] getUpdateAnimation returned nothing'); // LOG 3
         }
-      } else {
-          console.log('[VerticalFlowRenderer] No element found to update for assignment:', payload); // LOG 4
       }
-    } else if (type === 'line_execution') {
-        if (animate) {
-            animations.push({
-                type: 'line_execution',
-                target: parent.id,
-                duration: 300,
-                konvaObject: parent.container
-            });
-        }
     }
 
     this.state.currentStep = step.id;

@@ -1,8 +1,3 @@
-// ============================================
-// frontend/src/components/canvas/elements/VariableBox.tsx
-// Individual variable visualization with animations
-// ============================================
-
 import React, { useRef, useEffect, useState } from 'react';
 import { Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
@@ -79,34 +74,54 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
     const node = groupRef.current;
     if (!node) return;
 
-    if (isNew && isInitialMount.current) {
+    if (isNew) {
+      console.log(`[VariableBox] Animating new variable: ${name}`);
       node.opacity(0);
-      node.scale({ x: 0.8, y: 0.8 });
-      node.to({
+      node.scaleX(0.8);
+      node.scaleY(0.8);
+      
+      const anim = new Konva.Tween({
+        node,
         opacity: 1,
         scaleX: 1,
         scaleY: 1,
-        duration: 0.4,
-        easing: Konva.Easings.BackEaseOut
+        duration: 0.5,
+        easing: Konva.Easings.EaseOut,
+        onFinish: () => {
+          const rect = rectRef.current;
+          if (rect) {
+            rect.to({
+              stroke: sectionColors.DEFAULT,
+              duration: 0.2,
+            });
+          }
+        }
       });
+      anim.play();
+      isInitialMount.current = false;
+    } else if (isInitialMount.current) {
+      // If not new but first mount, just set final state
+      node.opacity(1);
+      node.scaleX(1);
+      node.scaleY(1);
       isInitialMount.current = false;
     }
-  }, [isNew]);
+  }, [isNew, sectionColors.DEFAULT, name]);
 
   // 2. POSITION ANIMATION (when x or y changes)
   useEffect(() => {
     const node = groupRef.current;
     if (!node) return;
 
-    const posChanged = prevPosRef.current.x !== x || prevPosRef.current.y !== y;
-    
-    if (posChanged && !isInitialMount.current) {
-      node.to({
-        x: x,
-        y: y,
-        duration: 0.5,
-        easing: Konva.Easings.EaseInOut
+    if (prevPosRef.current.x !== x || prevPosRef.current.y !== y) {
+      const anim = new Konva.Tween({
+        node,
+        x,
+        y,
+        duration: 0.3,
+        easing: Konva.Easings.EaseInOut,
       });
+      anim.play();
       prevPosRef.current = { x, y };
     }
   }, [x, y]);
@@ -115,41 +130,20 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   useEffect(() => {
     if (isUpdated && rectRef.current) {
       const rect = rectRef.current;
+      const originalFill = rect.fill();
       
-      // Flash sequence
-      rect.to({
-        stroke: COLORS.highlight,
-        strokeWidth: 4,
-        shadowColor: COLORS.highlight,
-        shadowBlur: 20,
-        shadowOpacity: 0.8,
+      const flashAnim = new Konva.Tween({
+        node: rect,
+        fill: COLORS.highlight,
         duration: 0.15,
+        yoyo: true,
+        repeat: 1,
         onFinish: () => {
-          rect.to({
-            stroke: sectionColors.DEFAULT,
-            strokeWidth: 2,
-            shadowColor: sectionColors.DEFAULT,
-            shadowBlur: 8,
-            shadowOpacity: 0.4,
-            duration: 0.4
-          });
+          rect.fill(originalFill);
         }
       });
-
-      // Show value transition
-      if (previousValue !== undefined) {
-        const group = groupRef.current;
-        if (group) {
-          group.to({
-            scaleX: 1.05,
-            scaleY: 1.05,
-            duration: 0.1,
-            yoyo: true
-          });
-        }
-      }
+      flashAnim.play();
     }
-    
     prevValueRef.current = value;
   }, [value, isUpdated, previousValue, sectionColors.DEFAULT]);
 
@@ -204,87 +198,46 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
 
       {/* Variable Name */}
       <Text
-        x={12}
-        y={12}
         text={name}
+        x={12}
+        y={8}
         fontSize={14}
         fontStyle="bold"
         fill={sectionColors.light}
-        listening={false}
+        fontFamily="monospace"
       />
 
       {/* Variable Type */}
       <Text
-        x={12}
-        y={32}
         text={type}
+        x={12}
+        y={26}
         fontSize={11}
         fill={COLORS.text.secondary}
-        listening={false}
-      />
-
-      {/* Value Display */}
-      <Text
-        x={12}
-        y={50}
-        text={displayValue}
-        fontSize={fontSize}
-        fontStyle="bold"
         fontFamily="monospace"
-        fill={showExpression ? COLORS.highlight : COLORS.text.primary}
-        width={width - 24}
-        ellipsis={true}
-        listening={false}
       />
 
-      {/* Address */}
+      {/* Value */}
       <Text
-        x={width - 12}
-        y={height - 18}
-        text={address}
-        fontSize={10}
-        fill={COLORS.text.tertiary}
-        align="right"
-        width={width - 24}
-        listening={false}
+        text={displayValue}
+        x={12}
+        y={42}
+        fontSize={fontSize}
+        fill={COLORS.text.primary}
+        fontFamily="monospace"
+        fontStyle={isUpdated ? 'bold' : 'normal'}
       />
 
-      {/* New Indicator Badge */}
-      {isNew && (
-        <>
-          <Rect
-            x={width - 50}
-            y={8}
-            width={42}
-            height={18}
-            fill={sectionColors.DEFAULT}
-            cornerRadius={4}
-            listening={false}
-          />
-          <Text
-            x={width - 48}
-            y={11}
-            text="NEW"
-            fontSize={10}
-            fontStyle="bold"
-            fill="#FFFFFF"
-            listening={false}
-          />
-        </>
-      )}
-
-      {/* Updated Indicator */}
-      {isUpdated && previousValue !== undefined && (
-        <Text
-          x={12}
-          y={height - 35}
-          text={`← was: ${formatValue(previousValue)}`}
-          fontSize={10}
-          fontStyle="italic"
-          fill={COLORS.text.tertiary}
-          listening={false}
-        />
-      )}
+      {/* Address (small, bottom right) */}
+      <Text
+        text={address}
+        x={width - 8}
+        y={height - 18}
+        fontSize={9}
+        fill={COLORS.text.tertiary}
+        fontFamily="monospace"
+        align="right"
+      />
     </Group>
   );
 };

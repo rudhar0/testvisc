@@ -22,11 +22,10 @@ class AnimationEngine {
     return AnimationEngine.instance;
   }
 
-  public initialize(stage: Konva.Stage, layer: Konva.Layer) {
+  public initialize(stage: Konva.Stage) {
     if (!this.sequenceManager) {
       this.sequenceManager = new SequenceManager(stage);
     }
-    this.animationQueue.setLayer(layer);
   }
 
   public createSequence(animations: AnimationSequence): gsap.core.Timeline {
@@ -56,15 +55,6 @@ class AnimationEngine {
   public get isAnimating(): boolean {
     return this.animationQueue.isAnimating;
   }
-
-  public skipCurrent(): void {
-    this.animationQueue.skipCurrent();
-  }
-
-  public getStatus(): { isPlaying: boolean; queueLength: number } {
-    return this.animationQueue.getStatus();
-  }
-
 
   public async waitForCompletion(): Promise<void> {
     return this.animationQueue.waitForCompletion();

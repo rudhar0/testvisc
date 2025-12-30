@@ -4,9 +4,12 @@ import { useSocket } from '@hooks/useSocket';
 import { useEffect } from 'react';
 import { APP_CONFIG } from '@config/app.config';
 import { InputPromptModal } from '@components/modals/InputPromptModal';
+import { useEditorStore } from '@store/slices/editorSlice';
+import { astService } from '@services/ast.service';
 
 function App() {
   const { connect, disconnect, isConnected } = useSocket();
+  const { language } = useEditorStore();
 
   useEffect(() => {
     // Connect to Socket.io on mount
@@ -21,6 +24,11 @@ function App() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [connect, disconnect]);
+
+  useEffect(() => {
+    console.log(`Language changed to: ${language}. Initializing AST parser.`);
+    astService.initialize(language);
+  }, [language]);
 
   return (
     <>
