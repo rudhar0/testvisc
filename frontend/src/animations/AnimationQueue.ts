@@ -1,12 +1,6 @@
 // frontend/src/animations/AnimationQueue.ts
 /**
- * AnimationQueue - Pause-aware animation queue system
- * 
- * This queue properly handles:
- * - Pause/Resume without losing state
- * - Sequential animation playback
- * - Queue clearing
- * - Animation completion callbacks
+ * AnimationQueue - Pause-aware animation queue system with Konva integration
  */
 
 import gsap from 'gsap';
@@ -18,25 +12,26 @@ export class AnimationQueue {
   private currentAnimation: gsap.core.Timeline | null = null;
   private pausePosition: number = 0;
   private layer: Konva.Layer | null = null;
-  private ticker: (() => void) | null = null;
+  private tickerFn: (() => void) | null = null;
 
   public setLayer(layer: Konva.Layer): void {
     this.layer = layer;
   }
 
   private startTicker(): void {
-    if (!this.ticker && this.layer) {
-      this.ticker = gsap.ticker.add(() => {
+    if (!this.tickerFn && this.layer) {
+      this.tickerFn = () => {
         this.layer?.batchDraw();
-      });
+      };
+      gsap.ticker.add(this.tickerFn);
       console.log('[AnimationQueue] GSAP ticker started');
     }
   }
 
   private stopTicker(): void {
-    if (this.ticker) {
-      gsap.ticker.remove(this.ticker);
-      this.ticker = null;
+    if (this.tickerFn) {
+      gsap.ticker.remove(this.tickerFn);
+      this.tickerFn = null;
       console.log('[AnimationQueue] GSAP ticker stopped');
     }
   }
@@ -53,6 +48,7 @@ export class AnimationQueue {
 
   private playNext = (): void => {
     if (this.isPlaying) {
+      console.log('[AnimationQueue] Already playing, skipping playNext');
       return;
     }
     
@@ -67,17 +63,25 @@ export class AnimationQueue {
     const nextSequence = this.queue.shift();
 
     if (nextSequence) {
+      console.log('[AnimationQueue] Playing next sequence...');
       this.currentAnimation = nextSequence;
       
+      // If we paused mid-animation, resume from that position
       if (this.pausePosition > 0) {
         nextSequence.progress(this.pausePosition);
         this.pausePosition = 0;
       }
 
       nextSequence.eventCallback('onComplete', () => {
+        console.log('[AnimationQueue] Sequence complete');
         this.isPlaying = false;
         this.currentAnimation = null;
-        this.playNext();
+        
+        // Force a final draw
+        this.layer?.batchDraw();
+        
+        // Play next in queue
+        setTimeout(() => this.playNext(), 10);
       });
 
       nextSequence.play();
@@ -122,8 +126,6 @@ export class AnimationQueue {
     console.log('[AnimationQueue] Queue cleared');
   }
   
-  // ... (keep remaining methods: isAnimating, length, skipCurrent, getStatus, waitForCompletion)
-  
   public get isAnimating(): boolean {
     return this.isPlaying;
   }
@@ -164,4 +166,3 @@ export class AnimationQueue {
     });
   }
 }
-

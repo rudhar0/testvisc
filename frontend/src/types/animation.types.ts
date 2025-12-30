@@ -11,7 +11,8 @@ export type AnimationType =
   | 'memory_allocation'
   | 'memory_deallocation'
   | 'array_access'
-  | 'element_destroy'; // New animation type
+  | 'element_destroy'
+  | 'line_execution';
 
 export interface BaseAnimation {
   type: AnimationType;
@@ -30,6 +31,10 @@ export interface VariableUpdateAnimation extends BaseAnimation {
   to: any;
   valueTextNode?: Konva.Text;
   backgroundRect?: Konva.Rect;
+}
+
+export interface LineExecutionAnimation extends BaseAnimation {
+  type: 'line_execution';
 }
 
 export interface VariableAccessAnimation extends BaseAnimation {
@@ -76,6 +81,7 @@ export type Animation =
   | LoopIterationAnimation
   | MemoryAllocationAnimation
   | ArrayAccessAnimation
-  | ElementDestroyAnimation; // Include new type
+  | ElementDestroyAnimation
+  | LineExecutionAnimation;
 
 export type AnimationSequence = Animation[];

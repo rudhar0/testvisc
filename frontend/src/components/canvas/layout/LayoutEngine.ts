@@ -1,80 +1,76 @@
-// frontend/src/components/canvas/layout/LayoutEngine.ts
-
-// A very basic layout engine to place globals and stack frames.
-// This is a placeholder and would need to be much more sophisticated.
+const PADDING = 20;
+const FRAME_PADDING = 20;
+const VAR_HEIGHT = 100;
+const VAR_WIDTH = 200;
 
 export const LayoutEngine = {
-    calculateLayout: (state: any, width: number, height: number, prevLayout: any) => {
-        const globals: any[] = [];
-        const stack: any[] = [];
-        const heap: any[] = [];
+  calculateLayout: (state: any, width: number, height: number, prevLayout: any) => {
+    const globals: any[] = [];
+    const stack: any[] = [];
+    const heap: any[] = [];
+    const output: any[] = [];
 
-        // Layout globals
-        let yOffset = 50;
-        Object.entries(state.globals || {}).forEach(([name, data], index) => {
+    let y_cursor = PADDING;
+
+    // Globals
+    let x_cursor = width - VAR_WIDTH - PADDING;
+    if (state.globals) {
+        Object.values(state.globals).forEach((variable: any) => {
             globals.push({
-                id: `global-${name}`,
-                x: 50,
-                y: yOffset,
-                width: 200,
-                height: 50,
-                name: name,
-                ...data,
+                ...variable,
+                id: `global-${variable.name}`,
+                x: x_cursor,
+                y: y_cursor,
+                width: VAR_WIDTH,
+                height: VAR_HEIGHT,
+                section: 'global',
             });
-            yOffset += 60;
+            y_cursor += VAR_HEIGHT + PADDING;
         });
-
-        // Layout stack frames
-        let stackXOffset = 300;
-        (state.callStack || []).forEach((frame: any, frameIndex: number) => {
-            const frameWidth = 250;
-            const frameHeight = 80 + Object.keys(frame.locals).length * 50;
-            const frameLayout = {
-                id: `frame-${frame.func_name}-${frameIndex}`,
-                x: stackXOffset,
-                y: 50,
-                width: frameWidth,
-                height: frameHeight,
-                name: frame.func_name,
-                return_address: frame.returnAddress,
-                active: frame.isActive,
-                locals: [],
-                output: [],
-            };
-            
-            let localYOffset = 80;
-            Object.entries(frame.locals || {}).forEach(([name, data]) => {
-                frameLayout.locals.push({
-                    id: `local-${frame.func_name}-${name}`,
-                    x: stackXOffset + 10,
-                    y: 50 + localYOffset,
-                    width: frameWidth - 20,
-                    height: 40,
-                    name: name,
-                    ...data
-                } as any);
-                localYOffset += 50;
-            });
-
-            stack.push(frameLayout);
-            stackXOffset += frameWidth + 20;
-        });
-
-        // Layout heap blocks
-        let heapYOffset = 50;
-        Object.entries(state.heap || {}).forEach(([address, blockData]) => {
-            heap.push({
-                id: `heap-${address}`,
-                x: stackXOffset + 50, // Place heap to the right
-                y: heapYOffset,
-                width: 250,
-                height: 90,
-                address: address,
-                ...blockData,
-            });
-            heapYOffset += 100;
-        });
-
-        return { globals, stack, heap };
     }
+    
+    y_cursor = PADDING;
+    x_cursor = PADDING;
+
+    // Stack
+    if (state.callStack) {
+      state.callStack.forEach((frame: any, frameIndex: number) => {
+        const frameHeight = Object.keys(frame.locals).length * (VAR_HEIGHT + PADDING) + FRAME_PADDING * 2;
+        const frameLayout = {
+          id: `frame-${frameIndex}`,
+          x: x_cursor,
+          y: y_cursor,
+          width: VAR_WIDTH + FRAME_PADDING * 2,
+          height: frameHeight,
+          name: frame.function,
+          locals: [],
+        };
+
+        y_cursor += FRAME_PADDING;
+
+        Object.values(frame.locals).forEach((variable: any) => {
+          frameLayout.locals.push({
+            ...variable,
+            id: `local-${frameIndex}-${variable.name}`,
+            x: x_cursor + FRAME_PADDING,
+            y: y_cursor,
+            width: VAR_WIDTH,
+            height: VAR_HEIGHT,
+            section: 'stack',
+          });
+          y_cursor += VAR_HEIGHT + PADDING;
+        });
+
+        stack.push(frameLayout);
+        y_cursor += FRAME_PADDING;
+      });
+    }
+
+    return {
+      globals,
+      stack,
+      heap,
+      output,
+    };
+  }
 };

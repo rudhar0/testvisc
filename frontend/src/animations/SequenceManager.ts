@@ -10,7 +10,8 @@ import {
     createFunctionReturnAnimation,
     createLoopIterationAnimation,
     createMemoryAllocationAnimation,
-    createElementDestroyAnimation, // Import the new function
+    createElementDestroyAnimation,
+    createLineExecutionAnimation,
 } from './Timelines';
 import Konva from 'konva';
 
@@ -72,6 +73,8 @@ export class SequenceManager {
         return createMemoryAllocationAnimation(animation);
       case 'element_destroy': // Handle the new animation type
         return createElementDestroyAnimation(animation);
+      case 'line_execution':
+        return createLineExecutionAnimation(animation);
       // Add other animation types here
       default:
         console.warn(`Unknown animation type: ${animation.type}`);

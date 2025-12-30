@@ -7,7 +7,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+    "test": "jest"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
@@ -16,7 +17,6 @@
     "@radix-ui/react-slider": "^1.2.1",
     "@radix-ui/react-tabs": "^1.1.1",
     "@radix-ui/react-tooltip": "^1.1.4",
-
     "allotment": "^1.20.2",
     "axios": "^1.13.2",
     "browser-fs-access": "^0.35.0",
@@ -24,6 +24,7 @@
     "elkjs": "^0.9.3",
     "gsap": "^3.12.5",
     "immer": "^10.1.1",
+    "jest": "^30.2.0",
     "konva": "^9.3.22",
     "lucide-react": "^0.460.0",
     "monaco-editor": "^0.50.0",

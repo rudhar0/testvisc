@@ -1,16 +1,16 @@
+// backend/src/services/gdb-debugger.service.js
 import { spawn } from 'child_process';
-import { writeFile, unlink, mkdir } from 'fs/promises';
+import { writeFile, unlink, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import inputManagerService from './input-manager.service.js';
 
 /**
- * GDB Debugger Service
- * Uses GDB to execute and trace C/C++ code
+ * GDB Debugger Service - FIXED VERSION with correct step types
  */
 export default class GdbDebugger {
-  constructor(socket) { // Accept socket object
+  constructor(socket) {
     this.process = null;
     this.outputBuffer = '';
     this.commandQueue = [];
@@ -23,17 +23,16 @@ export default class GdbDebugger {
     this.stepId = 0;
     this.variableAddresses = new Map();
     this.inputManager = inputManagerService;
-    this.inputManager.setSocket(socket); // Pass socket to the manager
+    this.inputManager.setSocket(socket);
     this.isWaitingForInputStep = false;
     this.inputStepPromise = {};
+    this.previousVariables = {};
+    this.sourceCode = '';
   }
 
-  /**
-   * Preprocess code to ensure it has newlines for stepping
-   */
   preprocessCode(code) {
     let formatted = '';
-    let state = 'normal'; // normal, string, char, line_comment, block_comment
+    let state = 'normal';
     
     for (let i = 0; i < code.length; i++) {
       const char = code[i];
@@ -73,9 +72,6 @@ export default class GdbDebugger {
     return formatted;
   }
 
-  /**
-   * Compile source code with debug symbols
-   */
   async compile(code, language = 'c') {
     console.log('🔨 Compiling code...');
     
@@ -83,7 +79,6 @@ export default class GdbDebugger {
     const ext = language === 'cpp' ? 'cpp' : 'c';
     const compiler = language === 'cpp' ? 'g++' : 'gcc';
 
-    // Ensure temp directory exists
     if (!existsSync(this.tempDir)) {
       await mkdir(this.tempDir, { recursive: true });
     }
@@ -91,15 +86,13 @@ export default class GdbDebugger {
     this.sourceFile = path.join(this.tempDir, `${sessionId}.${ext}`);
     this.executable = path.join(this.tempDir, `${sessionId}.out`);
 
-    // Write source file
     const formattedCode = this.preprocessCode(code);
     await writeFile(this.sourceFile, formattedCode, 'utf-8');
+    this.sourceCode = formattedCode; // Store source code
     console.log('📝 Source file written:', this.sourceFile);
 
-    // Statically analyze for input calls
     this.inputManager.scanCode(formattedCode);
 
-    // Compile with debug symbols
     return new Promise((resolve, reject) => {
       const args = ['-g', '-O0', this.sourceFile, '-o', this.executable];
       const compilation = spawn(compiler, args);
@@ -126,9 +119,6 @@ export default class GdbDebugger {
     });
   }
 
-  /**
-   * Start GDB process
-   */
   async start() {
     console.log('🚀 Starting GDB...');
     
@@ -157,7 +147,6 @@ export default class GdbDebugger {
         reject(error);
       });
 
-      // Wait for GDB to be ready
       setTimeout(() => {
         this.isRunning = true;
         console.log('✅ GDB started successfully');
@@ -166,9 +155,6 @@ export default class GdbDebugger {
     });
   }
 
-  /**
-   * Handle GDB output
-   */
   handleOutput(data) {
     this.outputBuffer += data;
     
@@ -197,9 +183,6 @@ export default class GdbDebugger {
     }
   }
 
-  /**
-   * Send command to GDB
-   */
   sendCommand(command) {
     return new Promise((resolve, reject) => {
       this.commandQueue.push({ command, resolve, reject });
@@ -209,9 +192,6 @@ export default class GdbDebugger {
     });
   }
 
-  /**
-   * Process command queue
-   */
   processQueue() {
     if (this.commandQueue.length === 0 || this.currentCommand) {
       return;
@@ -221,7 +201,6 @@ export default class GdbDebugger {
     console.log('GDB <', this.currentCommand.command);
     this.process.stdin.write(this.currentCommand.command + '\n');
 
-    // Timeout after 5 seconds
     setTimeout(() => {
       if (this.currentCommand) {
         console.warn('⚠️  Command timeout:', this.currentCommand.command);
@@ -232,10 +211,6 @@ export default class GdbDebugger {
     }, 5000);
   }
 
-  /**
-   * Handles stepping over a line that requires stdin input.
-   * It sends the 'next' command, provides the input, and waits for GDB to stop.
-   */
   stepOverInput(inputValue) {
     return new Promise((resolve, reject) => {
         this.isWaitingForInputStep = true;
@@ -246,7 +221,7 @@ export default class GdbDebugger {
                 this.isWaitingForInputStep = false;
                 reject(new Error('Input step timed out'));
             }
-        }, 10000); // 10s timeout for input execution
+        }, 10000);
 
         console.log('GDB <', '-exec-next');
         this.process.stdin.write('-exec-next\n');
@@ -255,39 +230,33 @@ export default class GdbDebugger {
     });
   }
 
-  /**
-   * Generate execution trace
-   */
   async generateTrace(inputs = []) {
     console.log('🎬 Generating execution trace...');
     this.trace = [];
     this.stepId = 0;
     this.variableAddresses.clear();
+    this.previousVariables = {};
 
     try {
-      // Set breakpoint at main
       await this.sendCommand('-break-insert main');
       
-      // Set breakpoints on all input lines
       for (const lineNumber of this.inputManager.inputLines.keys()) {
         await this.sendCommand(`-break-insert ${lineNumber}`);
       }
       
-      // Start execution and wait for breakpoint
       const runResult = await this.sendCommand('-exec-run');
       
       if (!runResult.data.includes('reason="breakpoint-hit"')) {
-          this.addStep({
-              type: 'program_end',
-              line: 1,
-              explanation: 'Program finished before main breakpoint.',
-              state: this.captureState()
-          });
-          console.warn('⚠️  Program did not stop at main breakpoint.');
-          return this.trace;
+        this.addStep({
+          type: 'program_end',
+          line: 1,
+          explanation: 'Program finished before main breakpoint.',
+          state: this.captureState({}, [])
+        });
+        console.warn('⚠️  Program did not stop at main breakpoint.');
+        return this.trace;
       }
 
-      // First step: at the beginning of main
       let currentStopInfo = this.parseStoppedInfo(runResult.data);
       let locals = await this.getLocals();
       let frames = await this.getFrames();
@@ -295,11 +264,11 @@ export default class GdbDebugger {
       this.addStep({
         type: 'function_call',
         line: currentStopInfo.line,
+        function: 'main',
         explanation: `Execution starts at main on line ${currentStopInfo.line}`,
         state: this.captureState(locals, frames)
       });
 
-      // Step through execution
       let maxSteps = 100;
       let stepCount = 0;
 
@@ -307,7 +276,6 @@ export default class GdbDebugger {
         let result;
         const currentLine = currentStopInfo.line;
 
-        // Check if the next line to be executed requires input
         if (this.inputManager.isInputLine(currentLine)) {
           const inputInfo = this.inputManager.getInputInfo(currentLine);
           
@@ -319,7 +287,6 @@ export default class GdbDebugger {
             result = { status: 'error', data: 'Input step failed' };
           }
         } else {
-          // Normal step
           result = await this.sendCommand('-exec-step');
         }
 
@@ -328,7 +295,6 @@ export default class GdbDebugger {
           break;
         }
 
-        // Check for runtime errors like segfaults
         if (result.data.includes('reason="signal-received"')) {
           console.error('💥 Runtime Error Detected:', result.data);
           const signalName = result.data.match(/signal-name="([^"]+)"/)?.[1];
@@ -336,87 +302,48 @@ export default class GdbDebugger {
           const stoppedInfo = this.parseStoppedInfo(result.data);
           
           this.addStep({
-              type: 'runtime_error',
-              line: stoppedInfo.line,
-              explanation: `Runtime Error: ${signalMeaning || signalName || 'Unknown Signal'}`,
-              state: this.captureState(await this.getLocals(), await this.getFrames())
+            type: 'runtime_error',
+            line: stoppedInfo.line,
+            explanation: `Runtime Error: ${signalMeaning || signalName || 'Unknown Signal'}`,
+            state: this.captureState(await this.getLocals(), await this.getFrames())
           });
-          break; // Stop trace generation
+          break;
         }
 
-        // Parse stopped info from the result of the step
         const stoppedInfo = this.parseStoppedInfo(result.data);
         
         if (!stoppedInfo || !stoppedInfo.line) {
-          console.warn('⚠️  No line info, stopping trace. Breaking loop.');
+          console.warn('⚠️  No line info, stopping trace.');
           break;
         }
         currentStopInfo = stoppedInfo;
 
-        // Capture state
         const newLocals = await this.getLocals();
         const newFrames = await this.getFrames();
-        const oldState = this.trace[this.trace.length - 1].state;
-        const oldLocals = oldState.callStack[0] ? oldState.callStack[0].locals : {};
+        
+        const lineOfCode = this.sourceCode.split('\n')[stoppedInfo.line - 1] || '';
 
-        let stepType = 'line_execution'; // default
-        let stepPayload = {};
-        let explanation = `Executing line ${stoppedInfo.line}`;
-
-        // Find changes
-        const newVarNames = Object.keys(newLocals);
-        const oldVarNames = Object.keys(oldLocals);
-
-        if (newVarNames.length > oldVarNames.length) {
-            stepType = 'variable_declaration';
-            const newVarName = newVarNames.find(name => !oldVarNames.includes(name));
-            if (newVarName) {
-                const newVar = newLocals[newVarName];
-                explanation = `Declare variable ${newVar.name}`;
-                stepPayload = {
-                    name: newVar.name,
-                    value: newVar.value,
-                    type: newVar.type,
-                    address: newVar.address,
-                };
-            }
-        } else {
-            // Check for value changes
-            for (const varName in newLocals) {
-                if (oldLocals[varName] && oldLocals[varName].value !== newLocals[varName].value) {
-                    stepType = 'assignment';
-                    const newVar = newLocals[varName];
-                    explanation = `Assign to ${newVar.name}`;
-                    stepPayload = {
-                        name: newVar.name,
-                        value: newVar.value,
-                        address: newVar.address,
-                    };
-                    break;
-                }
-            }
-        }
+        // FIXED: Detect what changed and create appropriate step type
+        const stepInfo = this.detectStepType(newLocals, this.previousVariables, lineOfCode);
+        
+        console.log('📋 Step info generated:', stepInfo);
         
         this.addStep({
-          type: stepType,
+          ...stepInfo,
           line: stoppedInfo.line,
-          explanation: explanation,
-          state: this.captureState(newLocals, newFrames),
-          ...stepPayload
+          state: this.captureState(newLocals, newFrames)
         });
 
-        locals = newLocals;
+        this.previousVariables = { ...newLocals };
         stepCount++;
-        console.log(`Looped, stepCount is now ${stepCount}`);
       }
 
-      // Program end
       const lastStep = this.trace.length > 0 ? this.trace[this.trace.length - 1] : null;
       this.addStep({
         type: 'program_end',
         line: lastStep?.line || 1,
         explanation: 'Program execution completed',
-        state: lastStep ? JSON.parse(JSON.stringify(lastStep.state)) : this.captureState()
+        state: lastStep ? JSON.parse(JSON.stringify(lastStep.state)) : this.captureState({}, [])
       });
 
       console.log(`✅ Generated ${this.trace.length} execution steps`);
@@ -429,8 +356,120 @@ export default class GdbDebugger {
   }
 
   /**
-   * Get local variables
+   * FIXED: Detect what changed between steps - CORRECT VERSION
    */
+  detectStepType(newLocals, oldLocals, lineOfCode) {
+    const newVarNames = Object.keys(newLocals);
+    const oldVarNames = Object.keys(oldLocals);
+
+    // Trim the line of code to remove leading/trailing whitespace
+    const trimmedLine = lineOfCode.trim();
+
+    // Loop detection
+    if (trimmedLine.match(/^(for|while|do)\s*\(/)) {
+      return {
+        type: 'loop_start',
+        explanation: `Starting a loop: ${trimmedLine}`
+      };
+    }
+
+    // Conditional detection
+    if (trimmedLine.match(/^if\s*\(/)) {
+      return {
+        type: 'conditional_start',
+        explanation: `Starting a conditional block: ${trimmedLine}`
+      };
+    }
+    
+    // Function call
+    const functionCallMatch = trimmedLine.match(/(\w+)\s*\((.*)\)/);
+    if (functionCallMatch && !trimmedLine.startsWith('if') && !trimmedLine.startsWith('for') && !trimmedLine.startsWith('while')) {
+        const functionName = functionCallMatch[1];
+        // This is a naive check. A better approach would be to check if functionName is a known function.
+        // For now, we assume any pattern like `word()` is a function call unless it's a keyword.
+        if (functionName !== 'if' && functionName !== 'for' && functionName !== 'while' && functionName !== 'sizeof') {
+            return {
+                type: 'function_call',
+                function: functionName,
+                explanation: `Calling function ${functionName}`
+            };
+        }
+    }
+
+
+    // Variable declaration
+    if (newVarNames.length > oldVarNames.length) {
+      const newVarName = newVarNames.find(name => !oldVarNames.includes(name));
+      if (newVarName) {
+        const newVar = newLocals[newVarName];
+        
+        if (newVar.type.includes('*')) {
+            return {
+                type: 'pointer_declaration',
+                explanation: `Declared pointer ${newVar.name}`,
+                variable: newVar.name,
+                name: newVar.name,
+                dataType: newVar.type,
+                primitive: newVar.type,
+                value: newVar.value,
+                address: newVar.address,
+                scope: 'local'
+            };
+        }
+        
+        if (newVar.type.match(/\[\d*\]/)) {
+            return {
+                type: 'array_declaration',
+                explanation: `Declared array ${newVar.name}`,
+                variable: newVar.name,
+                name: newVar.name,
+                dataType: newVar.type,
+                primitive: newVar.type,
+                value: newVar.value,
+                address: newVar.address,
+                scope: 'local'
+            };
+        }
+        
+        return {
+          type: 'variable_declaration',
+          explanation: `Declared variable ${newVar.name}`,
+          variable: newVar.name,
+          name: newVar.name,
+          dataType: newVar.type,
+          primitive: newVar.type,
+          value: newVar.value,
+          address: newVar.address,
+          scope: 'local'
+        };
+      }
+    }
+
+    // Assignment (value changed)
+    for (const varName in newLocals) {
+      if (oldLocals[varName] && oldLocals[varName].value !== newLocals[varName].value) {
+        const newVar = newLocals[varName];
+        return {
+          type: 'assignment',
+          explanation: `Assigned ${newVar.value} to ${newVar.name}`,
+          variable: newVar.name,
+          name: newVar.name,
+          dataType: newVar.type,
+          primitive: newVar.type,
+          value: newVar.value,
+          address: newVar.address,
+          scope: 'local'
+        };
+      }
+    }
+
+    // Default to line execution
+    return {
+      type: 'line_execution',
+      explanation: 'Executing line'
+    };
+  }
+
   async getLocals() {
     try {
       const result = await this.sendCommand('-stack-list-variables --simple-values');
@@ -440,9 +479,6 @@ export default class GdbDebugger {
     }
   }
 
-  /**
-   * Get stack frames
-   */
   async getFrames() {
     try {
       const result = await this.sendCommand('-stack-list-frames');
@@ -452,9 +488,6 @@ export default class GdbDebugger {
     }
   }
 
-  /**
-   * Parse stopped info from GDB output
-   */
   parseStoppedInfo(output) {
     const lineMatch = output.match(/line="(\d+)"/);
     const funcMatch = output.match(/func="([^"]+)"/);
@@ -467,13 +500,9 @@ export default class GdbDebugger {
     };
   }
 
-  /**
-   * Parse variables from GDB output - ENHANCED
-   */
   parseVariables(output) {
     const variables = {};
     
-    // Match: {name="x",value="10",type="int"}
     const regex = /\{[^}]*name="([^"]+)"[^}]*value="([^"]+)"[^}]*(?:type="([^"]+)")?[^}]*\}/g;
     let match;
 
@@ -496,20 +525,14 @@ export default class GdbDebugger {
       };
     }
 
-    console.log('📊 Parsed variables:', variables);
     return variables;
   }
 
-  /**
-   * Parse value based on type
-   */
   parseValue(value, type) {
-    // Remove quotes if string
     if (value.startsWith('"') && value.endsWith('"')) {
       return value.slice(1, -1);
     }
     
-    // Parse number
     if (/^-?\d+$/.test(value)) {
       return parseInt(value, 10);
     }
@@ -521,9 +544,6 @@ export default class GdbDebugger {
     return value;
   }
 
-  /**
-   * Parse stack frames from GDB output
-   */
   parseFrames(output) {
     const frames = [];
     const frameRegex = /frame=\{.*?func="([^"]+)".*?\}/g;
@@ -538,41 +558,29 @@ export default class GdbDebugger {
     return frames;
   }
 
-  /**
-   * Capture current state - FIXED FORMAT
-   */
   captureState(locals = {}, frames = []) {
     const state = {
       globals: {},
-      stack: [],      // Legacy, keep empty
+      stack: [],
       heap: {},
       callStack: []
     };
 
-    // Build proper callStack
     if (frames.length > 0 || Object.keys(locals).length > 0) {
       state.callStack = [{
         function: frames[0]?.function || 'main',
         returnType: 'int',
         params: {},
-        locals: locals,          // ← This must be the parsed variables object
+        locals: locals,
         frameId: 'frame_0',
         returnAddress: null,
         isActive: true
       }];
     }
 
-    console.log('📸 Captured state:', {
-      hasCallStack: state.callStack.length > 0,
-      localsCount: Object.keys(state.callStack[0]?.locals || {}).length
-    });
-
     return state;
   }
 
-  /**
-   * Add step to trace
-   */
   addStep(stepData) {
     const { type, line, explanation, state, ...payload } = stepData;
     this.trace.push({
@@ -581,7 +589,7 @@ export default class GdbDebugger {
       line: line,
       explanation: explanation,
       state: state,
-      ...payload, // Spread the rest of the properties
+      ...payload,
       animation: {
         type: 'highlight',
         target: 'line',
@@ -590,29 +598,21 @@ export default class GdbDebugger {
     });
   }
 
-  /**
-   * Stop debugger and cleanup
-   */
   async stop() {
     console.log('🛑 Stopping GDB...');
     
     if (this.process && !this.process.killed) {
-      // Create a promise that resolves when the GDB process fully closes.
-      // This is crucial to ensure file handles are released before we try to delete them.
       const closePromise = new Promise(resolve => {
         this.process.on('close', resolve);
       });
 
-      // Attempt a graceful exit, then kill the process to ensure the 'close' event fires.
       this.process.stdin.write('quit\n');
       this.process.kill();
       this.process = null;
 
-      // Wait for the process to actually terminate before proceeding.
       await closePromise;
     }
 
-    // Cleanup temp files
     try {
       if (this.sourceFile && existsSync(this.sourceFile)) {
         await unlink(this.sourceFile);
@@ -621,10 +621,9 @@ export default class GdbDebugger {
         await unlink(this.executable);
       }
     } catch (error) {
-      console.warn(`⚠️  Cleanup failed for temp files: ${error.message}`);
+      console.warn(`⚠️  Cleanup failed: ${error.message}`);
     }
   }
 }
 
-// Named export for consistency
 export { GdbDebugger };

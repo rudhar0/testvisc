@@ -1,14 +1,34 @@
-// frontend/src/components/canvas/elements/OutputElement.tsx
-import React from 'react';
-import { Rect, Text } from 'react-konva';
 
-const OutputElement = (props: any) => {
-    const { x, y, width, height, content } = props;
-    return (
-        <>
-            <Rect x={x} y={y} width={width} height={height} fill="#000" />
-            <Text text={content} x={x+5} y={y+5} fill="white" fontFamily="monospace" />
-        </>
-    )
+import React from 'react';
+import { Group, Rect, Text } from 'react-konva';
+
+interface OutputElementProps {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  content: string;
 }
+
+const OutputElement: React.FC<OutputElementProps> = ({ x, y, width, height, content }) => {
+  return (
+    <Group x={x} y={y}>
+      <Rect
+        width={width}
+        height={height}
+        fill="#334155"
+        cornerRadius={8}
+      />
+      <Text
+        text={content}
+        x={10}
+        y={10}
+        fontSize={14}
+        fill="#F1F5F9"
+        fontFamily="monospace"
+      />
+    </Group>
+  );
+};
+
 export default OutputElement;

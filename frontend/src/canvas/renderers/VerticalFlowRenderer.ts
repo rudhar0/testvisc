@@ -21,6 +21,7 @@ import { Loop } from '../elements/Loop';
 import { Condition } from '../elements/Condition';
 import { Output } from '../elements/Output';
 import { Input } from '../elements/Input';
+import { FunctionCall } from '../elements/FunctionCall';
 import { VerticalFlowLayout } from '../managers/VerticalFlowLayout';
 import { CanvasElement } from '../core/CanvasElement';
 import { Animation, AnimationSequence } from '../../types/animation.types';
@@ -33,6 +34,7 @@ const elementFactory: Record<string, any> = {
   conditional_start: Condition,
   output: Output,
   input_request: Input,
+  function_call: FunctionCall,
 };
 
 export interface CanvasState {
@@ -154,6 +156,8 @@ export class VerticalFlowRenderer {
         elementId = `output-${step.id}`;
       } else if (type === 'input_request') {
         elementId = `input-${step.id}`;
+      } else if (type === 'function_call') {
+        elementId = `call-${step.id}`;
       } else {
         elementId = `step-${step.id}`;
       }
@@ -184,8 +188,7 @@ export class VerticalFlowRenderer {
 
       // Update parent layout (non-animating visual update)
       VerticalFlowLayout.updateParentSize(parent);
-    }
-    // Handle element updates (e.g., assignments)
+    } // Handle element updates (e.g., assignments)
     else if (type === 'assignment') {
       const varName = (payload as any).name;
       console.log('[VerticalFlowRenderer] Assignment payload:', JSON.stringify(payload, null, 2)); // LOG 5
@@ -218,6 +221,15 @@ export class VerticalFlowRenderer {
       } else {
           console.log('[VerticalFlowRenderer] No element found to update for assignment:', payload); // LOG 4
       }
+    } else if (type === 'line_execution') {
+        if (animate) {
+            animations.push({
+                type: 'line_execution',
+                target: parent.id,
+                duration: 300,
+                konvaObject: parent.container
+            });
+        }
     }
 
     this.state.currentStep = step.id;

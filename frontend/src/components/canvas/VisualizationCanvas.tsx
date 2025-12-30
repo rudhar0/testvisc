@@ -1,378 +1,440 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Stage, Layer, Group, Line } from 'react-konva';
+// ============================================
+// Replace frontend/src/components/canvas/VisualizationCanvas.tsx with this
+// COMPLETE INTEGRATED VERSION
+// ============================================
+
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { Stage, Layer, Group, Rect, Line, Text, Circle, Arrow } from 'react-konva';
 import Konva from 'konva';
+import { ZoomIn, ZoomOut, Maximize2, Move, Hand } from 'lucide-react';
 import { useExecutionStore } from '@store/slices/executionSlice';
-import AnimationEngine from '../../animations/AnimationEngine';
-import { VerticalFlowRenderer } from '../../canvas/renderers/VerticalFlowRenderer';
-import { InputDialog } from './InputDialog';
-import { Input } from '../../canvas/elements/Input';
-import { socketService } from '../../api/socket.service';
-import { SOCKET_EVENTS } from '../../constants/events';
-import { useAnimationController } from '@/hooks/useAnimationController';
-import { COLORS } from '../../config/theme.config';
+import { useCanvasStore } from '@store/slices/canvasSlice';
 
-const WelcomePlaceholder = () => (
-    <div style={{
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: '#0F172A',
-      color: '#94A3B8',
-      fontFamily: 'system-ui'
-    }}>
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: '64px', marginBottom: '20px', opacity: 0.5 }}>🎨</div>
-        <div style={{ fontSize: '20px', fontWeight: 600, marginBottom: '12px', color: '#F1F5F9' }}>
-          C++ Visualizer
-        </div>
-        <div style={{ fontSize: '14px', color: '#64748B' }}>
-          Run your code to see the new vertical execution flow
-        </div>
-        <div style={{ 
-          marginTop: '24px', 
-          padding: '12px 24px', 
-          backgroundColor: '#1E293B',
-          borderRadius: '8px',
-          border: '1px solid #334155',
-          display: 'inline-block'
-        }}>
-          <div style={{ fontSize: '12px', color: '#64748B', marginBottom: '8px' }}>
-            Try this sample:
-          </div>
-          <pre style={{ 
-            textAlign: 'left', 
-            fontSize: '12px', 
-            fontFamily: 'monospace',
-            color: '#F1F5F9',
-            margin: 0
-          }}>
-{`int main() {
-    int x = 10;
-    int* p = &x;
-    *p = 20;
-    return 0;
-}`}
-          </pre>
-        </div>
-      </div>
-    </div>
-);
-
+// Import individual components (these need to be created as separate files)
+import { VariableBox } from './elements/VariableBox';
+import { ArrayView } from './elements/ArrayView';
+import StackFrame from './elements/StackFrame';
+import { PointerArrow } from './elements/PointerArrow';
+import { HeapBlock } from './elements/HeapBlock';
+import OutputElement from './elements/OutputElement';
+import { LayoutEngine } from './layout/LayoutEngine';
 
 export default function VisualizationCanvas() {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const stageRef = useRef<Konva.Stage>(null);
-    const layerRef = useRef<Konva.Layer>(null);
-    const rendererRef = useRef<VerticalFlowRenderer | null>(null);
-    const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-    const [inputDialogOpen, setInputDialogOpen] = useState(false);
-    const [inputDialogProps, setInputDialogProps] = useState<any>(null);
-    const [stageScale, setStageScale] = useState(1);
-    const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
-    const isDragging = useRef(false);
-    const lastPointerPosition = useRef({ x: 0, y: 0 });
-    
-    // Call the animation controller hook
-    const { addAnimationSequence } = useAnimationController(stageRef.current, layerRef.current);
-    
-    // Store selectors
-    const executionTrace = useExecutionStore((state) => state.executionTrace);
-    const currentStepIndex = useExecutionStore((state) => state.currentStep);
-    const isPlaying = useExecutionStore((state) => state.isPlaying);
-    const needsCanvasRebuild = useExecutionStore((state) => state.needsCanvasRebuild);
-    const markCanvasRebuildComplete = useExecutionStore((state) => state.markCanvasRebuildComplete);
-    const previousStep = useRef<number>(-1); // Use a local ref for tracking previous step in this component
-    
+  const containerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<Konva.Stage>(null);
 
-    // Responsive sizing & renderer initialization
-    useEffect(() => {
-        if (!containerRef.current) return;
+  // Real stores
+  const { getCurrentStep } = useExecutionStore();
+  const { setCanvasSize, zoom, setZoom, position, setPosition } = useCanvasStore();
 
-        const updateSize = () => {
-            if (containerRef.current) {
-                const { width, height } = containerRef.current.getBoundingClientRect();
-                setDimensions({ width, height });
-            }
-        };
+  // Local state
+  const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
+  const [dragMode, setDragMode] = useState(false);
+  const prevLayoutRef = useRef<any>(null);
 
-        updateSize();
-        const resizeObserver = new ResizeObserver(updateSize);
-        resizeObserver.observe(containerRef.current);
+  const currentStep = getCurrentStep();
+  const state = currentStep?.state;
 
-        if (layerRef.current && !rendererRef.current) {
-            rendererRef.current = new VerticalFlowRenderer(layerRef.current);
-            rendererRef.current.initialize();
-        }
+  // Calculate layout with animation detection
+  const layout = useMemo(() => {
+    if (!state) return null;
+    const newLayout = LayoutEngine.calculateLayout(
+      state, 
+      dimensions.width, 
+      dimensions.height, 
+      prevLayoutRef.current
+    );
+    return newLayout;
+  }, [state, dimensions.width, dimensions.height]);
 
-        return () => resizeObserver.disconnect();
-    }, []);
+  // Update prevLayout after render
+  useEffect(() => {
+    if (layout) {
+      prevLayoutRef.current = layout;
+    }
+  }, [layout]);
 
-    // Handle canvas rebuild when jumping steps or resetting
-    useEffect(() => {
-        if (!rendererRef.current || !layerRef.current || executionTrace.length === 0) {
-            return;
-        }
-
-        if (needsCanvasRebuild) {
-            console.log(`[VisualizationCanvas] Rebuilding canvas to step ${currentStepIndex}`);
-            AnimationEngine.clearQueue();
-            
-            rendererRef.current
-                .rebuildToStep(executionTrace, currentStepIndex)
-                .then(() => {
-                    markCanvasRebuildComplete();
-                    previousStep.current = currentStepIndex;
-                })
-                .catch((error) => {
-                    console.error('[VisualizationCanvas] Error rebuilding canvas:', error);
-                    markCanvasRebuildComplete();
-                });
-        }
-    }, [needsCanvasRebuild, currentStepIndex, executionTrace, markCanvasRebuildComplete]);
-
-    // Listen for input_required event from backend (during trace generation)
-    useEffect(() => {
-        const handleInputRequired = (data: any) => {
-            console.log('[VisualizationCanvas] Input required event received:', data);
-            // Pause execution while waiting for input
-            useExecutionStore.getState().pause();
-            
-            setInputDialogProps({
-                prompt: data.prompt || 'Enter input:',
-                format: data.format || '%d',
-                expectedType: data.type || 'int',
-                varName: data.varName,
-                line: data.line,
-            });
-            setInputDialogOpen(true);
-        };
-
-        socketService.on('execution:input_required', handleInputRequired);
-
-        return () => {
-            socketService.off('execution:input_required', handleInputRequired);
-        };
-    }, []);
-
-    // Handle step-by-step updates during normal playback
-    useEffect(() => {
-        if (
-            !rendererRef.current ||
-            !layerRef.current ||
-            executionTrace.length === 0 ||
-            currentStepIndex === previousStep.current ||
-            needsCanvasRebuild
-        ) {
-            return;
-        }
-
-        const currentStep = executionTrace[currentStepIndex];
-        if (!currentStep) {
-            return;
-        }
-
-        // Only process if we're moving forward one step (normal playback)
-        if (currentStepIndex === previousStep.current + 1) {
-            console.log(`[VisualizationCanvas] Processing step ${currentStepIndex}: ${currentStep.type}`);
-            
-            rendererRef.current
-                .processStep(currentStep, true) // true = animate
-                .then((animations) => {
-                    if (animations && animations.length > 0) {
-                        addAnimationSequence(animations); // Use the addAnimationSequence from the hook
-                    }
-                    previousStep.current = currentStepIndex; // Update the local previousStep ref
-                    
-                    // Check if this step requires input (for playback mode)
-                    if (currentStep.type === 'input_request' || currentStep.pauseExecution) {
-                        const inputElement = rendererRef.current?.getWaitingInput();
-                        if (inputElement) {
-                            setInputDialogProps({
-                                prompt: inputElement.prompt || currentStep.inputRequest?.prompt || 'Enter input:',
-                                format: inputElement.format || currentStep.inputRequest?.format || '%d',
-                                expectedType: inputElement.expectedType || currentStep.inputRequest?.expectedTypes?.[0] || 'int',
-                                inputElement: inputElement,
-                            });
-                            setInputDialogOpen(true);
-                        }
-                    }
-                })
-                .catch((error) => {
-                    console.error('[VisualizationCanvas] Error processing step:', error);
-                });
-        }
-    }, [currentStepIndex, executionTrace, needsCanvasRebuild, isPlaying, addAnimationSequence]);
-
-    // Handle input dialog submission
-    const handleInputSubmit = (value: string | number) => {
-        console.log('[VisualizationCanvas] Submitting input:', value);
-        
-        // Update input element if it exists (for playback mode)
-        if (inputDialogProps?.inputElement) {
-            const inputElement = inputDialogProps.inputElement as Input;
-            inputElement.setValue(value);
-        }
-        
-        // Send input to backend - this will continue trace generation
-        socketService.provideInput(value);
-        
-        // Close dialog
-        setInputDialogOpen(false);
-        setInputDialogProps(null);
-        
-        // Note: Don't resume playback here - backend will continue trace generation
-        // and send new steps via code:trace:chunk or code:trace:complete
-        // The isAnalyzing flag will be cleared when code:trace:complete is received
+  // Responsive sizing
+  useEffect(() => {
+    const updateSize = () => {
+      if (containerRef.current) {
+        const { width, height } = containerRef.current.getBoundingClientRect();
+        setDimensions({ width, height });
+        setCanvasSize(width, height);
+      }
     };
 
-    const hasTrace = executionTrace.length > 0;
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    const resizeObserver = new ResizeObserver(updateSize);
+    
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
 
-    // Effect to center the canvas initially or when trace changes
-    useEffect(() => {
-        if (!hasTrace || !stageRef.current || !layerRef.current || dimensions.width === 0 || dimensions.height === 0) {
-            return;
-        }
+    return () => {
+      window.removeEventListener('resize', updateSize);
+      resizeObserver.disconnect();
+    };
+  }, [setCanvasSize]);
 
-        // Use a timeout to ensure elements are rendered before calculating bounding box
-        const timeoutId = setTimeout(() => {
-            const stage = stageRef.current;
-            const layer = layerRef.current;
-            if (!stage || !layer) return;
+  // Zoom & Pan controls
+  const handleZoomIn = useCallback(() => {
+    setZoom(Math.min(zoom + 0.1, 3));
+  }, [zoom, setZoom]);
 
-            // Get bounding box of all elements in the layer
-            const bbox = layer.getClientRect();
+  const handleZoomOut = useCallback(() => {
+    setZoom(Math.max(zoom - 0.1, 0.3));
+  }, [zoom, setZoom]);
 
-            // Calculate center position
-            const centerX = dimensions.width / 2 - (bbox.x + bbox.width / 2);
-            const centerY = dimensions.height / 2 - (bbox.y + bbox.height / 2);
+  const handleFitToScreen = useCallback(() => {
+    setZoom(1);
+    setPosition({ x: 0, y: 0 });
+  }, [setZoom, setPosition]);
 
-            setStagePos({ x: centerX, y: centerY });
-            setStageScale(1); // Reset scale to 1 on re-center
-        }, 100); // Small delay to allow Konva to render elements
+  const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
+    e.evt.preventDefault();
+    const stage = stageRef.current;
+    if (!stage) return;
 
-        return () => clearTimeout(timeoutId);
-    }, [hasTrace, executionTrace, dimensions]); // Re-center when trace or dimensions change
+    const oldScale = stage.scaleX();
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return;
 
-    // Zoom and Pan Handlers
-    const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
-        e.evt.preventDefault();
-        const stage = e.target.getStage();
-        if (!stage) return;
+    const mousePointTo = {
+      x: (pointer.x - stage.x()) / oldScale,
+      y: (pointer.y - stage.y()) / oldScale
+    };
 
-        const oldScale = stage.scaleX();
-        const pointer = stage.getPointerPosition();
-        if (!pointer) return;
+    const direction = e.evt.deltaY > 0 ? -1 : 1;
+    const newScale = direction > 0 
+      ? Math.min(oldScale * 1.1, 3) 
+      : Math.max(oldScale / 1.1, 0.3);
 
-        const mousePointTo = {
-            x: (pointer.x - stage.x()) / oldScale,
-            y: (pointer.y - stage.y()) / oldScale,
-        };
+    setZoom(newScale);
+    setPosition({
+      x: pointer.x - mousePointTo.x * newScale,
+      y: pointer.y - mousePointTo.y * newScale
+    });
+  }, [setZoom, setPosition]);
 
-        const newScale = e.evt.deltaY > 0 ? oldScale * 0.9 : oldScale * 1.1; // Zoom out/in
-        const clampedScale = Math.max(0.1, Math.min(newScale, 5)); // Clamp scale between 0.1 and 5
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === ' ') {
+        e.preventDefault();
+        setDragMode(true);
+      } else if (e.key === '+' || e.key === '=') {
+        handleZoomIn();
+      } else if (e.key === '-' || e.key === '_') {
+        handleZoomOut();
+      } else if (e.key === '0') {
+        handleFitToScreen();
+      }
+    };
 
-        setStageScale(clampedScale);
-        setStagePos({
-            x: pointer.x - mousePointTo.x * clampedScale,
-            y: pointer.y - mousePointTo.y * clampedScale,
-        });
-    }, []);
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === ' ') {
+        setDragMode(false);
+      }
+    };
 
-    const handleMouseDown = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-        if (e.evt.button === 0) { // Left mouse button
-            isDragging.current = true;
-            lastPointerPosition.current = { x: e.evt.clientX, y: e.evt.clientY };
-        }
-    }, []);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
 
-    const handleMouseMove = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
-        if (!isDragging.current || !stageRef.current) return;
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [handleZoomIn, handleZoomOut, handleFitToScreen]);
 
-        const dx = e.evt.clientX - lastPointerPosition.current.x;
-        const dy = e.evt.clientY - lastPointerPosition.current.y;
-
-        setStagePos((prevPos) => ({
-            x: prevPos.x + dx,
-            y: prevPos.y + dy,
-        }));
-
-        lastPointerPosition.current = { x: e.evt.clientX, y: e.evt.clientY };
-    }, []);
-
-    const handleMouseUp = useCallback(() => {
-        isDragging.current = false;
-    }, []);
-
-
+  if (!state || !layout) {
     return (
-        <>
-            <div 
-                ref={containerRef} 
-                style={{ 
-                    width: '100%', 
-                    height: '100%', 
-                    backgroundColor: '#0F172A',
-                    position: 'relative',
-                    overflow: 'hidden'
-                }}
-            >
-                {!hasTrace ? (
-                    <WelcomePlaceholder />
-                ) : (
-                    dimensions.width > 0 && dimensions.height > 0 && (
-                        <Stage 
-                            ref={stageRef}
-                            width={dimensions.width} 
-                            height={dimensions.height}
-                            onWheel={handleWheel}
-                            onMouseDown={handleMouseDown}
-                            onMouseMove={handleMouseMove}
-                            onMouseUp={handleMouseUp}
-                            scaleX={stageScale}
-                            scaleY={stageScale}
-                            x={stagePos.x}
-                            y={stagePos.y}
-                        >
-                            <Layer ref={layerRef}>
-                                {/* Grid Lines */}
-                                <Group>
-                                    {Array.from({ length: Math.floor(dimensions.width / 20) }).map((_, i) => (
-                                        <Line
-                                            key={`v-grid-${i}`}
-                                            points={[i * 20, 0, i * 20, dimensions.height]}
-                                            stroke={COLORS.dark.border.secondary}
-                                            strokeWidth={0.5}
-                                        />
-                                    ))}
-                                    {Array.from({ length: Math.floor(dimensions.height / 20) }).map((_, i) => (
-                                        <Line
-                                            key={`h-grid-${i}`}
-                                            points={[0, i * 20, dimensions.width, i * 20]}
-                                            stroke={COLORS.dark.border.secondary}
-                                            strokeWidth={0.5}
-                                        />
-                                    ))}
-                                </Group>
-                            </Layer>
-                        </Stage>
-                    )
-                )}
+      <div 
+        ref={containerRef}
+        style={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: '#0F172A',
+          color: '#94A3B8',
+          fontFamily: 'system-ui'
+        }}
+      >
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '64px', marginBottom: '20px', opacity: 0.5 }}>🎨</div>
+          <div style={{ fontSize: '20px', fontWeight: 600, marginBottom: '12px', color: '#F1F5F9' }}>
+            Responsive Canvas Ready
+          </div>
+          <div style={{ fontSize: '14px', color: '#64748B' }}>
+            Run your code to see animated visualization
+          </div>
+          <div style={{ 
+            marginTop: '24px', 
+            padding: '12px 24px', 
+            backgroundColor: '#1E293B',
+            borderRadius: '8px',
+            border: '1px solid #334155',
+            display: 'inline-block'
+          }}>
+            <div style={{ fontSize: '12px', color: '#64748B', marginBottom: '8px' }}>
+              Try this sample:
             </div>
-            
-            {/* Input Dialog */}
-            <InputDialog
-                isOpen={inputDialogOpen}
-                prompt={inputDialogProps?.prompt || 'Enter input:'}
-                format={inputDialogProps?.format || '%d'}
-                expectedType={inputDialogProps?.expectedType || 'int'}
-                onClose={() => {
-                    setInputDialogOpen(false);
-                    setInputDialogProps(null);
-                }}
-                onSubmit={handleInputSubmit}
-            />
-        </>
+            <pre style={{ 
+              textAlign: 'left', 
+              fontSize: '12px', 
+              fontFamily: 'monospace',
+              color: '#F1F5F9',
+              margin: 0
+            }}>
+{`int main() {
+    int x = 10;
+    int y = 20;
+    int sum = x + y;
+    return 0;
+}`}
+            </pre>
+          </div>
+        </div>
+      </div>
     );
+  }
+
+  return (
+    <div ref={containerRef} style={{ 
+      width: '100%', 
+      height: '100%', 
+      backgroundColor: '#0F172A',
+      position: 'relative',
+      overflow: 'hidden'
+    }}>
+      {/* Figma-style Controls */}
+      <div style={{
+        position: 'absolute',
+        top: 16,
+        right: 16,
+        zIndex: 100,
+        display: 'flex',
+        gap: '8px',
+        backgroundColor: '#1E293B',
+        padding: '10px',
+        borderRadius: '10px',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+        border: '1px solid #334155'
+      }}>
+        <button
+          onClick={() => setDragMode(!dragMode)}
+          style={{
+            padding: '8px 12px',
+            backgroundColor: dragMode ? '#3B82F6' : '#334155',
+            border: 'none',
+            borderRadius: '6px',
+            color: '#F1F5F9',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '12px',
+            fontWeight: 600,
+            transition: 'all 0.2s'
+          }}
+          title="Pan Mode (Space)"
+        >
+          {dragMode ? <Hand size={16} /> : <Move size={16} />}
+          {dragMode ? 'Pan' : 'Select'}
+        </button>
+
+        <div style={{ width: '1px', backgroundColor: '#475569', margin: '4px 0' }} />
+
+        <button 
+          onClick={handleZoomOut} 
+          style={buttonStyle} 
+          title="Zoom Out (-)"
+        >
+          <ZoomOut size={16} />
+        </button>
+        
+        <div style={{
+          padding: '6px 12px',
+          backgroundColor: '#0F172A',
+          borderRadius: '6px',
+          color: '#F1F5F9',
+          fontSize: '13px',
+          fontFamily: 'monospace',
+          fontWeight: 700,
+          minWidth: '60px',
+          textAlign: 'center',
+          border: '1px solid #334155'
+        }}>
+          {Math.round(zoom * 100)}%
+        </div>
+
+        <button 
+          onClick={handleZoomIn} 
+          style={buttonStyle} 
+          title="Zoom In (+)"
+        >
+          <ZoomIn size={16} />
+        </button>
+
+        <button 
+          onClick={handleFitToScreen} 
+          style={buttonStyle} 
+          title="Fit to Screen (0)"
+        >
+          <Maximize2 size={16} />
+        </button>
+      </div>
+
+      {/* Step Info */}
+      {currentStep && (
+        <div style={{
+          position: 'absolute',
+          bottom: 16,
+          left: 16,
+          zIndex: 100,
+          backgroundColor: '#1E293B',
+          padding: '16px 20px',
+          borderRadius: '10px',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+          maxWidth: '500px',
+          border: '1px solid #334155'
+        }}>
+          <div style={{ 
+            fontSize: '11px', 
+            color: '#64748B', 
+            marginBottom: '6px', 
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px'
+          }}>
+            Step {currentStep.id + 1} • Line {currentStep.line} • {currentStep.type}
+          </div>
+          <div style={{ fontSize: '15px', color: '#F1F5F9', fontWeight: 500 }}>
+            {currentStep.explanation}
+          </div>
+        </div>
+      )}
+
+      {/* Canvas Stage */}
+      <Stage
+        ref={stageRef}
+        width={dimensions.width}
+        height={dimensions.height}
+        scaleX={zoom}
+        scaleY={zoom}
+        x={position.x}
+        y={position.y}
+        draggable={dragMode}
+        onWheel={handleWheel}
+        onDragEnd={(e) => {
+          setPosition({ x: e.target.x(), y: e.target.y() });
+        }}
+        style={{ cursor: dragMode ? 'grab' : 'default' }}
+      >
+        <Layer>
+          {/* Background */}
+          <Rect
+            x={-position.x / zoom - 1000}
+            y={-position.y / zoom - 1000}
+            width={dimensions.width / zoom + 2000}
+            height={dimensions.height / zoom + 2000}
+            fill="#0F172A"
+          />
+
+          {/* Grid */}
+          {Array.from({ length: 100 }).map((_, i) => (
+            <React.Fragment key={`grid-${i}`}>
+              <Line
+                points={[
+                  i * 50 - position.x / zoom,
+                  -position.y / zoom,
+                  i * 50 - position.x / zoom,
+                  dimensions.height / zoom
+                ]}
+                stroke="#1E293B"
+                strokeWidth={1 / zoom}
+              />
+              <Line
+                points={[
+                  -position.x / zoom,
+                  i * 50 - position.y / zoom,
+                  dimensions.width / zoom,
+                  i * 50 - position.y / zoom
+                ]}
+                stroke="#1E293B"
+                strokeWidth={1 / zoom}
+              />
+            </React.Fragment>
+          ))}
+
+          {/* Section Labels */}
+          {layout.globals.length > 0 && (
+            <Text
+              x={40}
+              y={20}
+              text="GLOBAL MEMORY"
+              fontSize={16}
+              fill="#2DD4BF"
+              fontStyle="bold"
+              letterSpacing={1}
+              listening={false}
+            />
+          )}
+
+          {layout.stack.length > 0 && (
+            <Text
+              x={layout.stack[0]?.x || 300}
+              y={20}
+              text="CALL STACK"
+              fontSize={16}
+              fill="#3B82F6"
+              fontStyle="bold"
+              letterSpacing={1}
+              listening={false}
+            />
+          )}
+
+          {/* Render all elements using the actual components */}
+          {layout.globals.map((variable: any) => (
+            <VariableBox key={variable.id} {...variable} />
+          ))}
+
+          {layout.stack.map((frame: any) => (
+            <Group key={frame.id}>
+              <StackFrame {...frame} />
+              {frame.locals.map((variable: any) => (
+                <VariableBox key={variable.id} {...variable} />
+              ))}
+              {frame.output && frame.output.map((output: any) => (
+                <OutputElement 
+                  key={output.id} 
+                  x={output.x} 
+                  y={output.y} 
+                  width={output.width} 
+                  height={output.height} 
+                  content={output.text} 
+                />
+              ))}
+            </Group>
+          ))}
+        </Layer>
+      </Stage>
+    </div>
+  );
 }
+
+const buttonStyle: React.CSSProperties = {
+  padding: '8px',
+  backgroundColor: '#334155',
+  border: 'none',
+  borderRadius: '6px',
+  color: '#F1F5F9',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  transition: 'all 0.2s'
+};

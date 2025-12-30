@@ -1,13 +1,14 @@
-// frontend/src/canvas/elements/FunctionCall.ts
 import { CanvasElement } from "../core/CanvasElement";
 import Konva from 'konva';
-import AnimationEngine from "../../animations/AnimationEngine";
-import { FunctionCallAnimation as FunctionCallAnimationType } from "../../types/animation.types"; // Aliasing to avoid conflict
+import { FunctionCallAnimation as FunctionCallAnimationType, Animation } from "../../types/animation.types"; // Aliasing to avoid conflict
 
 export class FunctionCall extends CanvasElement {
-    constructor(id: string, parentId: string, layer: Konva.Layer, name: string) {
+    private text: Konva.Text;
+
+    constructor(id: string, parentId: string, layer: Konva.Layer, payload: any) {
         super(id, parentId, layer);
         this.elementType = 'FunctionCall';
+        this.subType = payload.function;
         this.layout = {
             x: 0,
             y: 0,
@@ -16,8 +17,8 @@ export class FunctionCall extends CanvasElement {
             cursorY: 30,
         };
 
-        const text = new Konva.Text({
-            text: `call ${name}()`,
+        this.text = new Konva.Text({
+            text: `call ${payload.function}()`,
             x: 0,
             y: 5,
             fill: '#a855f7',
@@ -25,19 +26,25 @@ export class FunctionCall extends CanvasElement {
             fontStyle: 'italic',
         });
         
-        this.container.add(text);
+        this.container.add(this.text);
     }
     
-    async create(payload: any): Promise<void> {
-        const animation: FunctionCallAnimationType = {
+    create(payload: any): void {
+        this.container.opacity(1);
+    }
+
+    update(payload: any): void {}
+
+    getCreateAnimation(payload: any): Animation {
+        return {
             type: 'function_call',
             target: this.id,
             konvaObject: this.container,
             duration: 300,
-        };
-        const timeline = AnimationEngine.createSequence([animation]);
-        AnimationEngine.addSequence(timeline);
+        } as FunctionCallAnimationType;
     }
-    async update(payload: any): Promise<void> {}
-    async animate(type: any, payload?: any): Promise<void> {}
+    
+    getUpdateAnimation(payload: any): Animation {
+        return null;
+    }
 }

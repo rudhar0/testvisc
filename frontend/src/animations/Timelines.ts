@@ -1,3 +1,4 @@
+// frontend/src/animations/Timelines.ts
 import gsap from 'gsap';
 import {
   VariableCreateAnimation,
@@ -7,18 +8,10 @@ import {
   FunctionReturnAnimation,
   LoopIterationAnimation,
   MemoryAllocationAnimation,
-  ElementDestroyAnimation, // Import new animation type
+  ElementDestroyAnimation,
+  LineExecutionAnimation,
 } from '../types/animation.types';
 import Konva from 'konva';
-
-// Helper function to get layer and redraw during GSAP animations
-const getLayerAndRedraw = (konvaObject: Konva.Node): Konva.Layer | null => {
-  const layer = konvaObject.getLayer();
-  if (layer) {
-    layer.batchDraw();
-  }
-  return layer;
-};
 
 export const createVariableAnimation = (animation: VariableCreateAnimation) => {
   const { konvaObject, duration } = animation;
@@ -26,7 +19,7 @@ export const createVariableAnimation = (animation: VariableCreateAnimation) => {
   
   if (!konvaObject) {
     console.warn('[Timelines] No konvaObject provided for variable animation');
-    return gsap.timeline(); // Return empty timeline
+    return gsap.timeline();
   }
   
   const tl = gsap.timeline();
@@ -34,11 +27,7 @@ export const createVariableAnimation = (animation: VariableCreateAnimation) => {
   if (konvaObject instanceof Konva.Group) {
     console.log('[Timelines] Animating Konva.Group:', konvaObject.id());
     
-    // GSAP can animate Konva objects directly
-    // Get the layer for redrawing
-    const layer = konvaObject.getLayer();
-    
-    // Use GSAP ticker to continuously redraw during animation
+    // Animate using GSAP directly on Konva properties
     tl.fromTo(
       konvaObject,
       { 
@@ -51,21 +40,31 @@ export const createVariableAnimation = (animation: VariableCreateAnimation) => {
         scaleX: 1, 
         scaleY: 1, 
         duration: duration / 1000,
-        ease: 'power2.out',
+        ease: 'back.out(1.7)',
+        onUpdate: () => {
+          // Force Konva to recognize the changes
+          konvaObject.getLayer()?.batchDraw();
+        }
       }
     );
     
+    // Flash the border
     const rect = konvaObject.findOne<Konva.Rect>('.box-bg');
     if (rect) {
+      const originalStroke = rect.stroke();
       tl.to(rect, {
-        stroke: '#4ade80', // green-400
-        duration: 0.2,
-        yoyo: true,
-        repeat: 1,
-      }, "<0.1"); // Start slightly before the main animation ends
+        stroke: '#4ade80',
+        duration: 0.15,
+        onUpdate: () => konvaObject.getLayer()?.batchDraw()
+      }, "<0.3")
+      .to(rect, {
+        stroke: originalStroke,
+        duration: 0.15,
+        onUpdate: () => konvaObject.getLayer()?.batchDraw()
+      });
     }
     
-    console.log('[Timelines] Variable animation timeline created, duration:', duration / 1000);
+    console.log('[Timelines] Variable animation timeline created');
   } else {
     console.warn('[Timelines] konvaObject is not a Konva.Group:', konvaObject);
   }
@@ -73,123 +72,230 @@ export const createVariableAnimation = (animation: VariableCreateAnimation) => {
   return tl;
 };
 
+export const createLineExecutionAnimation = (animation: LineExecutionAnimation) => {
+  const { konvaObject, duration } = animation;
+  console.log('[Timelines] createLineExecutionAnimation - duration:', duration);
+  
+  const tl = gsap.timeline();
+  
+  if (konvaObject instanceof Konva.Group) {
+    const rect = konvaObject.findOne<Konva.Rect>('.box-bg');
+    if (rect) {
+      const originalFill = rect.fill();
+      tl.to(rect, {
+        fill: '#facc15',
+        duration: 0.15,
+        onUpdate: () => rect.getLayer()?.batchDraw()
+      })
+      .to(rect, {
+        fill: originalFill,
+        duration: 0.15,
+        onUpdate: () => rect.getLayer()?.batchDraw()
+      });
+    }
+  }
+  
+  return tl;
+};
+
 export const createVariableUpdateAnimation = (animation: VariableUpdateAnimation) => {
-    const { konvaObject, valueTextNode, backgroundRect, duration, from, to } = animation;
-    console.log('[Timelines] createVariableUpdateAnimation - konvaObject:', konvaObject, 'valueTextNode:', valueTextNode, 'backgroundRect:', backgroundRect);
-    const tl = gsap.timeline();
-    
-    // 1. Color flash on the background rectangle
-    if (backgroundRect) {
-      tl.to(backgroundRect, {
-        fill: '#facc15', // yellow-400
-        duration: 0.2,
-        yoyo: true,
-        repeat: 1,
-      });
-    }
+  const { konvaObject, valueTextNode, backgroundRect, duration, from, to } = animation;
+  console.log('[Timelines] createVariableUpdateAnimation - duration:', duration);
   
-    // 2. Old value -> New value transition on the value text node
-    if (valueTextNode instanceof Konva.Text) {
-      tl.to(valueTextNode, {
-          opacity: 0,
-          duration: (duration / 1000) / 2,
-          onComplete: () => {
-            valueTextNode.text(String(to));
-          }
-      }).to(valueTextNode, {
-          opacity: 1,
-          duration: (duration / 1000) / 2,
-      });
-    }
+  const tl = gsap.timeline();
   
-    return tl;
-  };
+  // 1. Flash the background
+  if (backgroundRect) {
+    const originalFill = backgroundRect.fill();
+    tl.to(backgroundRect, {
+      fill: '#facc15',
+      duration: 0.15,
+      onUpdate: () => backgroundRect.getLayer()?.batchDraw()
+    })
+    .to(backgroundRect, {
+      fill: originalFill,
+      duration: 0.15,
+      onUpdate: () => backgroundRect.getLayer()?.batchDraw()
+    });
+  }
+
+  // 2. Fade out old value, change text, fade in new value
+  if (valueTextNode instanceof Konva.Text) {
+    tl.to(valueTextNode, {
+      opacity: 0,
+      duration: (duration / 1000) / 2,
+      onUpdate: () => valueTextNode.getLayer()?.batchDraw(),
+      onComplete: () => {
+        valueTextNode.text(String(to));
+        valueTextNode.getLayer()?.batchDraw();
+      }
+    }, "<")
+    .to(valueTextNode, {
+      opacity: 1,
+      duration: (duration / 1000) / 2,
+      onUpdate: () => valueTextNode.getLayer()?.batchDraw()
+    });
+  }
+
+  // 3. Pulse the container slightly
+  if (konvaObject) {
+    tl.to(konvaObject, {
+      scaleX: 1.05,
+      scaleY: 1.05,
+      duration: 0.1,
+      onUpdate: () => konvaObject.getLayer()?.batchDraw()
+    }, "<")
+    .to(konvaObject, {
+      scaleX: 1,
+      scaleY: 1,
+      duration: 0.1,
+      onUpdate: () => konvaObject.getLayer()?.batchDraw()
+    });
+  }
+  
+  return tl;
+};
 
 export const createFunctionCallAnimation = (animation: FunctionCallAnimation) => {
-    const { konvaObject, duration } = animation;
-    console.log('createFunctionCallAnimation - konvaObject:', konvaObject);
-    const tl = gsap.timeline();
-    if (konvaObject) {
-        tl.from(konvaObject, {
-            y: '-=100',
-            opacity: 0,
-            duration: duration / 1000,
-            ease: 'power2.out'
-        });
-    }
-    return tl;
+  const { konvaObject, duration } = animation;
+  console.log('[Timelines] createFunctionCallAnimation');
+  
+  const tl = gsap.timeline();
+  
+  if (konvaObject) {
+    const startY = konvaObject.y();
+    
+    tl.fromTo(konvaObject, 
+      {
+        y: startY - 100,
+        opacity: 0
+      },
+      {
+        y: startY,
+        opacity: 1,
+        duration: duration / 1000,
+        ease: 'power2.out',
+        onUpdate: () => konvaObject.getLayer()?.batchDraw()
+      }
+    );
+  }
+  
+  return tl;
 };
 
 export const createFunctionReturnAnimation = (animation: FunctionReturnAnimation) => {
-    const { konvaObject, duration } = animation;
-    console.log('createFunctionReturnAnimation - konvaObject:', konvaObject);
-    const tl = gsap.timeline();
-    if (konvaObject) {
-        tl.to(konvaObject, {
-            y: '-=100',
-            opacity: 0,
-            duration: duration / 1000,
-            ease: 'power2.in'
-        });
-    }
-    return tl;
+  const { konvaObject, duration } = animation;
+  console.log('[Timelines] createFunctionReturnAnimation');
+  
+  const tl = gsap.timeline();
+  
+  if (konvaObject) {
+    tl.to(konvaObject, {
+      y: konvaObject.y() - 100,
+      opacity: 0,
+      duration: duration / 1000,
+      ease: 'power2.in',
+      onUpdate: () => konvaObject.getLayer()?.batchDraw()
+    });
+  }
+  
+  return tl;
 };
 
 export const createLoopIterationAnimation = (animation: LoopIterationAnimation) => {
-    const { konvaObject, iteration, totalIterations } = animation;
-    console.log('createLoopIterationAnimation - konvaObject:', konvaObject);
-    const tl = gsap.timeline();
+  const { konvaObject, iteration, totalIterations } = animation;
+  console.log('[Timelines] createLoopIterationAnimation');
+  
+  const tl = gsap.timeline();
 
-    if (konvaObject instanceof Konva.Text) {
-        konvaObject.text(`Iteration ${iteration}/${totalIterations}`);
-        tl.fromTo(konvaObject, { opacity: 0 }, { opacity: 1, duration: 0.2, yoyo: true, repeat: 1, repeatDelay: 0.4 });
-    }
+  if (konvaObject instanceof Konva.Rect) {
+    // Flash the loop container
+    const originalFill = konvaObject.fill();
+    tl.to(konvaObject, {
+      opacity: 0.5,
+      duration: 0.15,
+      onUpdate: () => konvaObject.getLayer()?.batchDraw()
+    })
+    .to(konvaObject, {
+      opacity: 1,
+      duration: 0.15,
+      onUpdate: () => konvaObject.getLayer()?.batchDraw()
+    });
+  }
 
-    return tl;
+  return tl;
 };
 
 export const createMemoryAllocationAnimation = (animation: MemoryAllocationAnimation) => {
-    const { konvaObject, duration } = animation;
-    console.log('createMemoryAllocationAnimation - konvaObject:', konvaObject);
-    const tl = gsap.timeline();
-    if (konvaObject) {
-        tl.from(konvaObject, {
-            opacity: 0,
-            scaleX: 0.5,
-            scaleY: 0.5,
-            duration: duration / 1000
-        });
-    }
-    return tl;
+  const { konvaObject, duration } = animation;
+  console.log('[Timelines] createMemoryAllocationAnimation');
+  
+  const tl = gsap.timeline();
+  
+  if (konvaObject) {
+    tl.fromTo(konvaObject,
+      {
+        opacity: 0,
+        scaleX: 0.5,
+        scaleY: 0.5
+      },
+      {
+        opacity: 1,
+        scaleX: 1,
+        scaleY: 1,
+        duration: duration / 1000,
+        ease: 'back.out(1.7)',
+        onUpdate: () => konvaObject.getLayer()?.batchDraw()
+      }
+    );
+  }
+  
+  return tl;
 };
 
 export const createArrayAccessAnimation = (animation: ArrayAccessAnimation) => {
-    const { konvaObject, index } = animation;
-    console.log('createArrayAccessAnimation - konvaObject:', konvaObject);
-    const tl = gsap.timeline();
-    if (konvaObject instanceof Konva.Rect) {
-        tl.to(konvaObject, {
-            fill: '#60a5fa', // blue-400
-            duration: 0.2,
-            yoyo: true,
-            repeat: 1
-        });
-    }
-    return tl;
+  const { konvaObject, index } = animation;
+  console.log('[Timelines] createArrayAccessAnimation - index:', index);
+  
+  const tl = gsap.timeline();
+  
+  if (konvaObject instanceof Konva.Rect) {
+    const originalFill = konvaObject.fill();
+    tl.to(konvaObject, {
+      fill: '#60a5fa',
+      duration: 0.2,
+      onUpdate: () => konvaObject.getLayer()?.batchDraw()
+    })
+    .to(konvaObject, {
+      fill: originalFill,
+      duration: 0.2,
+      onUpdate: () => konvaObject.getLayer()?.batchDraw()
+    });
+  }
+  
+  return tl;
 };
 
 export const createElementDestroyAnimation = (animation: ElementDestroyAnimation) => {
-    const { konvaObject, duration } = animation;
-    console.log('createElementDestroyAnimation - konvaObject:', konvaObject);
-    const tl = gsap.timeline();
-    if (konvaObject) {
-        tl.to(konvaObject, {
-            opacity: 0,
-            duration: duration / 1000,
-            onComplete: () => {
-                konvaObject.destroy();
-            }
-        });
-    }
-    return tl;
+  const { konvaObject, duration } = animation;
+  console.log('[Timelines] createElementDestroyAnimation');
+  
+  const tl = gsap.timeline();
+  
+  if (konvaObject) {
+    tl.to(konvaObject, {
+      opacity: 0,
+      scaleX: 0.8,
+      scaleY: 0.8,
+      duration: duration / 1000,
+      ease: 'power2.in',
+      onUpdate: () => konvaObject.getLayer()?.batchDraw(),
+      onComplete: () => {
+        konvaObject.destroy();
+        konvaObject.getLayer()?.batchDraw();
+      }
+    });
+  }
+  
+  return tl;
 };
