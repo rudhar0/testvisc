@@ -1,5 +1,6 @@
 import { Toaster } from 'react-hot-toast';
 import MainLayout from '@components/layout/MainLayout';
+import { useExecutionTrace } from '@hooks/useExecutionTrace';
 import { useSocket } from '@hooks/useSocket';
 import { useEffect } from 'react';
 import { APP_CONFIG } from '@config/app.config';
@@ -10,6 +11,7 @@ import { astService } from '@services/ast.service';
 function App() {
   const { connect, disconnect, isConnected } = useSocket();
   const { language } = useEditorStore();
+  useExecutionTrace();
 
   useEffect(() => {
     // Connect to Socket.io on mount

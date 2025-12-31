@@ -3,6 +3,7 @@ import { socketService } from '../api/socket.service';
 import { useExecutionStore } from '../store/slices/executionSlice';
 import { ExecutionTrace, SocketIOError } from '../types';
 import { SOCKET_EVENTS } from '../constants/events';
+import toast from 'react-hot-toast';
 
 export const useExecutionTrace = () => {
   const {
@@ -31,8 +32,7 @@ export const useExecutionTrace = () => {
         clearTrace();
         setAnalyzing(false);
         // Display an error message to the user
-        // This part needs a UI component to show the error. For now, we log it.
-        alert('Failed to generate a valid execution trace. The code may have issues or not produce any executable steps.');
+        toast.error('Failed to generate a valid execution trace. The code may have issues or not produce any executable steps.');
       }
     };
 
@@ -47,7 +47,7 @@ export const useExecutionTrace = () => {
       clearTrace();
       setAnalyzing(false);
       // Optionally display error message to user
-      alert(`An error occurred during trace generation: ${error.message}`);
+      toast.error(`An error occurred during trace generation: ${error.message}`);
     };
 
     // Subscribe to events
@@ -65,7 +65,7 @@ export const useExecutionTrace = () => {
       socketService.off(SOCKET_EVENTS.CODE_TRACE_COMPLETE, handleTraceComplete);
       socketService.off(SOCKET_EVENTS.CODE_TRACE_ERROR, handleTraceError);
     };
-  }, [setTrace, clearTrace, setAnalyzing, setAnalysisProgress, startAnalysis]);
+  }, [setTrace, clearTrace, setAnalyzing, setAnalysisProgress]);
 
   return {
     executionTrace,
