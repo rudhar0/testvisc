@@ -5,6 +5,9 @@ export type AnimationType =
   | 'variable_create'
   | 'variable_update'
   | 'variable_access'
+  | 'variable_single_initial'
+  | 'array_initial'
+  | 'pointer_arrow'
   | 'function_call'
   | 'function_return'
   | 'loop_iteration'
@@ -23,6 +26,20 @@ export interface BaseAnimation {
 
 export interface VariableCreateAnimation extends BaseAnimation {
   type: 'variable_create';
+}
+
+export interface VariableSingleInitialAnimation extends BaseAnimation {
+  type: 'variable_single_initial';
+}
+
+export interface ArrayInitialAnimation extends BaseAnimation {
+  type: 'array_initial';
+}
+
+export interface PointerArrowAnimation extends BaseAnimation {
+    type: 'pointer_arrow';
+    sourceId: string;
+    targetId: string;
 }
 
 export interface VariableUpdateAnimation extends BaseAnimation {
@@ -76,6 +93,9 @@ export type Animation =
   | VariableCreateAnimation
   | VariableUpdateAnimation
   | VariableAccessAnimation
+  | VariableSingleInitialAnimation
+  | ArrayInitialAnimation
+  | PointerArrowAnimation
   | FunctionCallAnimation
   | FunctionReturnAnimation
   | LoopIterationAnimation

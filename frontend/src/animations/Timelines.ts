@@ -7,7 +7,9 @@ import {
   FunctionReturnAnimation,
   LoopIterationAnimation,
   MemoryAllocationAnimation,
-  ElementDestroyAnimation, // Import new animation type
+  ElementDestroyAnimation,
+  VariableSingleInitialAnimation,
+  ArrayInitialAnimation,
 } from '../types/animation.types';
 import Konva from 'konva';
 
@@ -18,6 +20,35 @@ const getLayerAndRedraw = (konvaObject: Konva.Node): Konva.Layer | null => {
     layer.batchDraw();
   }
   return layer;
+};
+
+export const createVariableSingleInitialAnimation = (animation: VariableSingleInitialAnimation) => {
+    const { konvaObject, duration } = animation;
+    const tl = gsap.timeline();
+    if (konvaObject) {
+        tl.from(konvaObject, {
+            opacity: 0,
+            duration: duration / 1000,
+            ease: 'power2.out',
+            onUpdate: () => getLayerAndRedraw(konvaObject),
+        });
+    }
+    return tl;
+};
+
+export const createArrayInitialAnimation = (animation: ArrayInitialAnimation) => {
+    const { konvaObject, duration } = animation;
+    const tl = gsap.timeline();
+    if (konvaObject) {
+        const width = konvaObject.width();
+        tl.from(konvaObject, {
+            clipWidth: 0,
+            duration: duration / 1000,
+            ease: 'power2.out',
+            onUpdate: () => getLayerAndRedraw(konvaObject),
+        });
+    }
+    return tl;
 };
 
 export const createVariableAnimation = (animation: VariableCreateAnimation) => {

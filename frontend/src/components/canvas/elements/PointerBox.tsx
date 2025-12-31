@@ -1,43 +1,38 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
 
-interface VariableBoxProps {
+interface PointerBoxProps {
   id: string;
   name: string;
   type: string;
   value: any;
-  address: string;
   x: number;
   y: number;
   width: number;
   height: number;
-  section: 'global' | 'stack' | 'heap';
   isNew?: boolean;
   isUpdated?: boolean;
-  previousValue?: any;
-  expression?: string;
   onClick?: () => void;
 }
 
-// Colors from user specification for "1A. Single Variable - Initial Declaration"
+// Colors from user specification for "5A. Pointer - Initial Declaration"
 const COLORS = {
-  background: "#e3f2fd",
-  border: "#1976d2",
-  text: "#333",
+  background: "#fce4ec",
+  border: "#e91e63",
+  text: "#c2185b",
   uninitialized: "#999",
   highlight: {
-    pulse: "#ffeb3b",
-    glow: "#4caf50",
+    flash: "#e91e63",
+    glow: "#e91e63",
   },
 };
 
-export const VariableBox: React.FC<VariableBoxProps> = ({
+export const PointerBox: React.FC<PointerBoxProps> = ({
   id,
   name,
   type,
   value,
-  address,
   x,
   y,
   width,
@@ -49,12 +44,10 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   const groupRef = useRef<Konva.Group>(null);
   const rectRef = useRef<Konva.Rect>(null);
 
-  const isInitialized = value !== undefined && value !== null;
-  const nameLabel = `${type} ${name}`;
-  const valueLabel = isInitialized ? String(value) : "uninitialized";
-  const valueStyle = isInitialized ? 'normal' : 'italic';
+  const isInitialized = value !== undefined && value !== null && value !== 'NULL';
+  const valueLabel = isInitialized ? String(value) : "NULL";
 
-  // Entry Animation (fade-in)
+  // Entry Animation
   useEffect(() => {
     const node = groupRef.current;
     if (isNew && node) {
@@ -72,8 +65,8 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
     if (isUpdated && rectRef.current) {
       const rect = rectRef.current;
       rect.to({
-        fill: COLORS.highlight.pulse,
-        duration: 0.2,
+        fill: COLORS.highlight.flash,
+        duration: 0.15,
         yoyo: true,
         repeat: 1,
         onFinish: () => {
@@ -100,35 +93,46 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         fill={COLORS.background}
         stroke={COLORS.border}
         strokeWidth={2}
-        cornerRadius={4} // from spec
+        cornerRadius={4}
       />
 
-      {/* Name and Type Label (Left) */}
+      {/* Pointer Icon */}
       <Text
-        text={nameLabel}
-        x={15}
-        y={height / 2 - 7} // Centered vertically
+        text="*"
+        x={10}
+        y={height / 2 - 10}
+        fontSize={20}
+        fontFamily="monospace"
+        fill={COLORS.text}
+        listening={false}
+      />
+
+      {/* Name and Type Label */}
+      <Text
+        text={name}
+        x={25}
+        y={height / 2 - 7}
         fontSize={14}
         fontFamily="'Courier New', monospace"
         fill={COLORS.text}
         listening={false}
       />
-
-      {/* Value Label (Right) */}
+      
+      {/* Value (Address) */}
       <Text
         text={valueLabel}
         x={width - 15}
-        y={height / 2 - 7} // Centered vertically
-        fontSize={14}
+        y={height / 2 - 7}
+        fontSize={12}
         fontFamily="'Courier New', monospace"
+        fontStyle="italic"
         fill={isInitialized ? COLORS.text : COLORS.uninitialized}
-        fontStyle={valueStyle}
         align="right"
-        width={width / 2 - 30} // Constrain width to stay inside the box
+        width={width / 2 - 30}
         listening={false}
       />
     </Group>
   );
 };
 
-export default VariableBox;
+export default PointerBox;

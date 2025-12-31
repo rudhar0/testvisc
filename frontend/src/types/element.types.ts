@@ -28,7 +28,8 @@ export type FunctionSubtype =
 export type LoopSubtype =
   | 'loop_single'               // Single loop (for, while, do-while)
   | 'loop_nested'               // Nested loops
-  | 'loop_skip';                // Skip/continue iteration
+  | 'loop_skip'                 // Skip/continue iteration
+  | 'loop_compression';         // Compression/skip iterations
 
 export type ConditionSubtype =
   | 'condition_if'              // if statement
@@ -95,14 +96,16 @@ export class ElementTypeDetector {
    * Detect variable subtype from execution step
    */
   static detectVariableSubtype(step: any, variable: any, previousVariable?: any): VariableSubtype {
-    // Check if multiple variables declared in same step
-    if (step.declarationType === 'multiple') {
-      return 'variable_multiple_init';
+    // Check if variable already existed and value changed (assignment)
+    if (previousVariable && 
+        previousVariable.isAlive && 
+        previousVariable.value !== variable.value) {
+      return 'variable_value_change';
     }
     
-    // Check if variable already existed (value change)
-    if (previousVariable && previousVariable.isAlive) {
-      return 'variable_value_change';
+    // Check if multiple variables declared in same step
+    if (step.declarationType === 'multiple' || step.isMultiple) {
+      return 'variable_multiple_init';
     }
     
     // Single initialization
@@ -112,13 +115,19 @@ export class ElementTypeDetector {
   /**
    * Detect function subtype from execution step
    */
-  static detectFunctionSubtype(step: any, frame: any, isMain: boolean): FunctionSubtype {
-    if (isMain) {
+  static detectFunctionSubtype(step: any, frame: any, isInMain: boolean): FunctionSubtype {
+    // If this is a function call inside main (not the main function itself)
+    if (step.type === 'function_call' && isInMain && frame.function !== 'main') {
+      return 'function_call';
+    }
+    
+    // If function body is inside main (nested function)
+    if (isInMain && frame.function !== 'main') {
       return 'function_body_main';
     }
     
-    // Check if function is in global scope
-    if (frame.function !== 'main') {
+    // If function is in global scope (outside main)
+    if (!isInMain || frame.function !== 'main') {
       return 'function_body_global';
     }
     
@@ -134,10 +143,12 @@ export class ElementTypeDetector {
       return 'loop_nested';
     }
     
-    // Check if step indicates skip/continue
-    if (step.explanation?.toLowerCase().includes('skip') || 
-        step.explanation?.toLowerCase().includes('continue')) {
-      return 'loop_skip';
+    // Check if step indicates compression/skip
+    if (step.explanation?.toLowerCase().includes('compress') || 
+        step.explanation?.toLowerCase().includes('skip') ||
+        step.compressedIterations !== undefined ||
+        step.skipCount !== undefined) {
+      return step.compressedIterations !== undefined ? 'loop_compression' : 'loop_skip';
     }
     
     return 'loop_single';
@@ -147,19 +158,22 @@ export class ElementTypeDetector {
    * Detect pointer subtype from execution step
    */
   static detectPointerSubtype(step: any, previousPointer?: any): PointerSubtype {
+    // Check if showing arrow relationship (dereference or assignment)
+    if (step.showArrow || step.pointsTo || step.explanation?.includes('arrow') || step.explanation?.includes('points to')) {
+      return 'pointer_arrow';
+    }
+    
     // Check if pointer is being dereferenced
     if (step.type === 'pointer_deref' || step.explanation?.includes('*')) {
       return 'pointer_dereference';
     }
     
-    // Check if pointer value changed
-    if (previousPointer && previousPointer.pointsTo !== step.pointsTo) {
+    // Check if pointer value changed (address changed)
+    if (previousPointer && 
+        (previousPointer.address !== step.address || 
+         previousPointer.value !== step.value ||
+         previousPointer.pointsTo !== step.pointsTo)) {
       return 'pointer_value_change';
-    }
-    
-    // Check if showing arrow relationship
-    if (step.showArrow || step.explanation?.includes('arrow')) {
-      return 'pointer_arrow';
     }
     
     return 'pointer_initial';

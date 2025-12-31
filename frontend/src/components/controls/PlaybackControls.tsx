@@ -27,6 +27,7 @@ export default function PlaybackControls() {
     reset,
     canStepForward,
     canStepBackward,
+    isAnalyzing,
   } = useExecutionStore();
 
   const hasTrace = totalSteps > 0;
@@ -38,7 +39,7 @@ export default function PlaybackControls() {
       {/* Reset to Start */}
       <button
         onClick={reset}
-        disabled={!hasTrace || isAtStart}
+        disabled={!hasTrace || isAtStart || isAnalyzing}
         className="rounded p-2 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         title="Reset to Start"
       >
@@ -48,7 +49,7 @@ export default function PlaybackControls() {
       {/* Step Backward */}
       <button
         onClick={stepBackward}
-        disabled={!hasTrace || !canStepBackward()}
+        disabled={!hasTrace || !canStepBackward() || isAnalyzing}
         className="rounded p-2 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         title="Step Backward"
       >
@@ -58,7 +59,7 @@ export default function PlaybackControls() {
       {/* Play/Pause */}
       <button
         onClick={isPlaying ? pause : play}
-        disabled={!hasTrace || isAtEnd}
+        disabled={!hasTrace || isAtEnd || isAnalyzing}
         className="rounded-lg p-3 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
         style={{
           backgroundColor: isPlaying 
@@ -77,7 +78,7 @@ export default function PlaybackControls() {
       {/* Step Forward */}
       <button
         onClick={stepForward}
-        disabled={!hasTrace || !canStepForward()}
+        disabled={!hasTrace || !canStepForward() || isAnalyzing}
         className="rounded p-2 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         title="Step Forward"
       >
@@ -87,7 +88,7 @@ export default function PlaybackControls() {
       {/* Skip to End */}
       <button
         onClick={() => useExecutionStore.getState().jumpToStep(totalSteps - 1)}
-        disabled={!hasTrace || isAtEnd}
+        disabled={!hasTrace || isAtEnd || isAnalyzing}
         className="rounded p-2 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         title="Skip to End"
       >

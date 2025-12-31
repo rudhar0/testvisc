@@ -23,6 +23,9 @@ export const SOCKET_EVENTS = {
   CODE_TRACE_CHUNK: 'code:trace:chunk',
   CODE_TRACE_COMPLETE: 'code:trace:complete',
   CODE_TRACE_ERROR: 'code:trace:error',
+
+  EXECUTION_STEP: 'execution:step',
+  EXECUTION_VISUALIZE: 'execution:visualize',
   
   EXECUTION_INPUT_RECEIVED: 'execution:input:received',
   EXECUTION_PAUSED: 'execution:paused',

@@ -116,6 +116,8 @@ class SocketService {
       SOCKET_EVENTS.CODE_TRACE_CHUNK,
       SOCKET_EVENTS.CODE_TRACE_COMPLETE,
       SOCKET_EVENTS.CODE_TRACE_ERROR,
+      SOCKET_EVENTS.EXECUTION_STEP,
+      SOCKET_EVENTS.EXECUTION_VISUALIZE,
       'execution:input_required', // Forward input required event
     ];
 

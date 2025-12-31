@@ -23,7 +23,7 @@ export const useExecutionTrace = () => {
 
     const handleTraceChunk = (trace: ExecutionTrace) => {
       console.log('Frontend: Received execution trace chunk', trace);
-      if (trace.steps && trace.steps.length > 2) {
+      if (trace.steps && trace.steps.length > 0) {
         setTrace(trace);
       } else {
         // Handle gracefully the case with very few steps, which indicates an issue.

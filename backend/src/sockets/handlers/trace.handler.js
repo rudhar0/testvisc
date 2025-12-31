@@ -1,5 +1,6 @@
 import DebuggerService from '../../services/debugger.service.js';
 import { logger } from '../../utils/logger.js';
+import { codePreprocessorService } from '../../services/code-preprocessor.service.js';
 
 let debuggerInstance = null;
 
@@ -16,7 +17,8 @@ export const handleTrace = (socket, io) => {
     debuggerInstance = new DebuggerService(io); 
 
     try {
-      await debuggerInstance.start(code, language);
+      const processedCode = codePreprocessorService.preprocess(code);
+      await debuggerInstance.start(processedCode, language);
       socket.emit('code:trace:started', { message: 'Debugger started successfully.' });
     } catch (error) {
       logger.error('Error starting debugger:', error);

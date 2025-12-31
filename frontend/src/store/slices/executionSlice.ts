@@ -7,6 +7,7 @@ import AnimationEngine from '../../animations/AnimationEngine';
 export interface ExecutionState {
   // Trace data
   executionTrace: ExecutionStep[];
+  visualizationSteps: any[];
   totalSteps: number;
   currentStep: number;
   
@@ -32,6 +33,7 @@ export interface ExecutionState {
   // Actions
   setTrace: (trace: ExecutionTrace) => void;
   addStep: (step: ExecutionStep) => void;
+  addVisualizationSteps: (steps: any[]) => void;
   clearTrace: () => void;
   setCurrentStep: (step: number) => void;
   stepForward: () => void;
@@ -56,6 +58,7 @@ export const useExecutionStore = create<ExecutionState>()(
   immer((set, get) => ({
     // Initial state
     executionTrace: [],
+    visualizationSteps: [],
     totalSteps: 0,
     currentStep: 0,
     isPlaying: false,
@@ -69,36 +72,20 @@ export const useExecutionStore = create<ExecutionState>()(
     needsCanvasRebuild: false,
 
     // Actions
-   setTrace: (trace: ExecutionTrace) =>
-  set((state) => {
-    state.executionTrace = trace.steps;
-    state.totalSteps = trace.totalSteps;
-    
-    // Find first meaningful step (skip GDB setup steps)
-    const firstMeaningfulStep = trace.steps.findIndex(step => 
-      step.type !== 'program_start' || step.line > 0
-    );
-    
-    state.currentStep = Math.max(0, firstMeaningfulStep);
-    state.isAnalyzing = false;
-    state.analysisProgress = 100;
-    state.analysisStage = 'complete';
-    state.needsCanvasRebuild = true; // Rebuild canvas when trace is loaded
-    
-    // Set initial state to first meaningful step
-    if (trace.steps.length > 0) {
-      state.currentState = trace.steps[state.currentStep].state;
-    }
-    
-    console.log('✅ Trace loaded:', {
-      totalSteps: trace.totalSteps,
-      startingAtStep: state.currentStep,
-      firstStep: trace.steps[state.currentStep],
-      hasState: !!trace.steps[state.currentStep]?.state,
-      hasCallStack: !!trace.steps[state.currentStep]?.state?.callStack
-    });
-  }),
-
+    setTrace: (trace: ExecutionTrace) =>
+      set((state) => {
+        // This is now used for setting the initial trace, but steps will be added dynamically
+        state.executionTrace = trace.steps;
+        state.totalSteps = trace.totalSteps;
+        state.currentStep = 0;
+        state.isAnalyzing = false;
+        state.analysisProgress = 100;
+        state.analysisStage = 'complete';
+        state.needsCanvasRebuild = true;
+        if (trace.steps.length > 0) {
+          state.currentState = trace.steps[0].state;
+        }
+      }),
 
     addStep: (step: ExecutionStep) => set(state => {
       state.executionTrace.push(step);
@@ -107,8 +94,13 @@ export const useExecutionStore = create<ExecutionState>()(
       state.currentState = step.state;
     }),
 
+    addVisualizationSteps: (steps: any[]) => set(state => {
+      state.visualizationSteps.push(...steps);
+    }),
+
     clearTrace: () => set(state => {
       state.executionTrace = [];
+      state.visualizationSteps = [];
       state.totalSteps = 0;
       state.currentStep = 0;
       state.currentState = null;
@@ -122,22 +114,8 @@ export const useExecutionStore = create<ExecutionState>()(
         const validStep = Math.max(0, Math.min(step, state.totalSteps - 1));
         state.currentStep = validStep;
         
-        // Update current state
         if (state.executionTrace[validStep]) {
           state.currentState = state.executionTrace[validStep].state;
-          
-          console.log('📍 Step updated:', {
-            step: validStep,
-            type: state.executionTrace[validStep].type,
-            hasState: !!state.executionTrace[validStep].state,
-            callStackLength: state.executionTrace[validStep].state?.callStack?.length || 0
-          });
-          
-          // Check if this step requires input pause
-          if (state.executionTrace[validStep].pauseExecution) {
-            state.isPaused = true;
-            state.isPlaying = false;
-          }
         }
       }),
 
@@ -145,32 +123,15 @@ export const useExecutionStore = create<ExecutionState>()(
       set((state) => {
         if (state.currentStep < state.totalSteps - 1) {
           state.currentStep++;
-          
-          // Update current state
           if (state.executionTrace[state.currentStep]) {
             state.currentState = state.executionTrace[state.currentStep].state;
-            
-            console.log('➡️ Step forward:', state.currentStep, {
-              type: state.executionTrace[state.currentStep].type,
-              line: state.executionTrace[state.currentStep].line,
-              pauseExecution: state.executionTrace[state.currentStep].pauseExecution,
-            });
-            
-            // Check if this step requires input pause
-            if (state.executionTrace[state.currentStep].pauseExecution) {
-              state.isPaused = true;
-              state.isPlaying = false;
-              console.log('⏸️ Playback paused due to pauseExecution flag on step:', state.currentStep);
-            }
           }
         } else {
-          // Reached end, stop playing
           state.isPlaying = false;
           if (state.playbackInterval) {
             clearInterval(state.playbackInterval);
             state.playbackInterval = null;
           }
-          console.log('⏸️ Reached end of trace');
         }
       }),
 
@@ -178,19 +139,10 @@ export const useExecutionStore = create<ExecutionState>()(
   set((state) => {
     if (state.currentStep > 0) {
       state.currentStep--;
-      state.needsCanvasRebuild = true; // Rebuild when going backward
-      
-      // Update current state
+      state.needsCanvasRebuild = true; 
       if (state.executionTrace[state.currentStep]) {
         state.currentState = state.executionTrace[state.currentStep].state;
-        console.log('⬅️ Step backward:', {
-          step: state.currentStep,
-          type: state.executionTrace[state.currentStep].type,
-          line: state.executionTrace[state.currentStep].line
-        });
       }
-      
-      // Pause playback when stepping backward manually
       if (state.isPlaying) {
         state.isPlaying = false;
         state.isPaused = true;
@@ -207,21 +159,16 @@ export const useExecutionStore = create<ExecutionState>()(
         const validStep = Math.max(0, Math.min(step, state.totalSteps - 1));
         const previousStep = state.currentStep;
         
-        // If jumping backwards or more than 1 step forward, we need to rebuild canvas
         if (validStep < previousStep || validStep > previousStep + 1) {
           state.needsCanvasRebuild = true;
-          console.log(`⏭️ Jumping to step ${validStep} (from ${previousStep}) - canvas rebuild required`);
         }
         
         state.currentStep = validStep;
         
-        // Update current state
         if (state.executionTrace[validStep]) {
           state.currentState = state.executionTrace[validStep].state;
-          console.log('⏭️ Jumped to step:', validStep);
         }
         
-        // Pause playback when jumping
         if (state.isPlaying) {
           state.isPlaying = false;
           state.isPaused = true;
@@ -234,30 +181,23 @@ export const useExecutionStore = create<ExecutionState>()(
 
     play: () =>
       set((state) => {
-        console.log('▶️ Starting playback at step:', state.currentStep);
         state.isPlaying = true;
         state.isPaused = false;
         
-        // Resume animations if paused
         AnimationEngine.resume();
         
-        // Clear any existing interval
         if (state.playbackInterval) {
           clearInterval(state.playbackInterval);
         }
         
-        // Calculate delay based on speed (1x = 1000ms, 2x = 500ms, etc.)
         const delay = 1000 / state.speed;
-        console.log('⏱️ Playback interval delay:', delay, 'ms');
         
-        // Start playback interval
         state.playbackInterval = setInterval(() => {
           const current = get();
           
           if (current.currentStep < current.totalSteps - 1) {
             get().stepForward();
           } else {
-            // End of trace
             get().pause();
           }
         }, delay);
@@ -265,35 +205,29 @@ export const useExecutionStore = create<ExecutionState>()(
 
     pause: () =>
       set((state) => {
-        console.log('⏸️ Pausing playback');
         state.isPlaying = false;
         state.isPaused = true;
         
-        // Clear interval
         if (state.playbackInterval) {
           clearInterval(state.playbackInterval);
           state.playbackInterval = null;
         }
         
-        // Pause animations
         AnimationEngine.pause();
       }),
 
     reset: () =>
       set((state) => {
-        console.log('⏮️ Resetting to start');
         state.currentStep = 0;
         state.isPlaying = false;
         state.isPaused = false;
-        state.needsCanvasRebuild = true; // Rebuild canvas on reset
+        state.needsCanvasRebuild = true; 
         
-        // Clear interval
         if (state.playbackInterval) {
           clearInterval(state.playbackInterval);
           state.playbackInterval = null;
         }
         
-        // Reset to initial state
         if (state.executionTrace.length > 0) {
           state.currentState = state.executionTrace[0].state;
         }
@@ -301,16 +235,14 @@ export const useExecutionStore = create<ExecutionState>()(
 
     setSpeed: (speed: number) =>
       set((state) => {
-        console.log('⚡ Speed changed to:', speed);
         state.speed = speed;
         
-        // If currently playing, restart interval with new speed
         if (state.isPlaying) {
           if (state.playbackInterval) {
             clearInterval(state.playbackInterval);
           }
           
-          const delay = 1000 / speed; // Corrected delay calculation
+          const delay = 1000 / speed;
           state.playbackInterval = setInterval(() => {
             const current = get();
             if (current.currentStep < current.totalSteps - 1) {
@@ -343,6 +275,7 @@ export const useExecutionStore = create<ExecutionState>()(
         state.analysisProgress = 0;
         state.analysisStage = 'parsing';
         state.executionTrace = [];
+        state.visualizationSteps = [];
         state.totalSteps = 0;
         state.currentStep = 0;
         state.currentState = null;
@@ -370,7 +303,3 @@ export const useExecutionStore = create<ExecutionState>()(
       }),
   }))
 );
-
-// Corrected delay calculation in setSpeed:
-// The original code had 2000 / speed, it should be 1000 / speed for consistency.
-// Also added console.log for pauseExecution in stepForward.

@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { Group, Rect, Text, Line } from 'react-konva';
+import React, { useRef, useEffect } from 'react';
+import { Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
 
 interface ArrayViewProps {
@@ -18,59 +18,49 @@ interface ArrayViewProps {
   onClick?: () => void;
 }
 
+// Colors from user specification for "2A. Array - Initial Declaration"
 const COLORS = {
-  bg: '#1E293B',
-  border: '#3B82F6',
-  borderLight: '#60A5FA',
-  text: { primary: '#F1F5F9', secondary: '#94A3B8' },
-  highlight: '#FCD34D',
-  cellBg: '#0F172A',
+  borderColor: "#1976d2",
+  backgroundColor: "#e3f2fd",
+  cell: {
+    uninitialized: "?",
+  },
+  indexLabel: {
+    font: "10px Arial",
+    color: "#666",
+  },
 };
+
+const CELL_WIDTH = 50;
+const CELL_HEIGHT = 40;
+const CELL_SPACING = 2;
+const INDEX_LABEL_OFFSET = 15;
 
 export const ArrayView: React.FC<ArrayViewProps> = ({
   id,
   name,
   type,
   values,
-  address,
   x,
   y,
-  width,
-  height,
   isNew = false,
-  isUpdated = false,
-  accessedIndex,
   onClick
 }) => {
   const groupRef = useRef<Konva.Group>(null);
-  const [isHovered, setIsHovered] = useState(false);
-  const cellWidth = 60;
-  const cellHeight = 40;
-  const headerHeight = 50;
+  const totalWidth = values.length * (CELL_WIDTH + CELL_SPACING) - CELL_SPACING;
 
+  // Entry Animation (expand_from_left)
   useEffect(() => {
     const node = groupRef.current;
-    if (!node) return;
-
-    if (isNew) {
-      node.opacity(0);
-      node.scaleX(0.8);
-      node.scaleY(0.8);
-      
-      const anim = new Konva.Tween({
-        node,
-        opacity: 1,
-        scaleX: 1,
-        scaleY: 1,
-        duration: 0.5,
+    if (isNew && node) {
+      node.clipWidth(0);
+      node.to({
+        clipWidth: totalWidth,
+        duration: 0.5, // 500ms from spec
         easing: Konva.Easings.EaseOut,
       });
-      anim.play();
     }
-  }, [isNew]);
-
-  const handleMouseEnter = () => setIsHovered(true);
-  const handleMouseLeave = () => setIsHovered(false);
+  }, [isNew, totalWidth]);
 
   return (
     <Group
@@ -78,79 +68,53 @@ export const ArrayView: React.FC<ArrayViewProps> = ({
       id={id}
       x={x}
       y={y}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
       onClick={onClick}
       onTap={onClick}
+      clipX={0}
+      clipY={0}
+      clipWidth={isNew ? 0 : totalWidth}
+      clipHeight={CELL_HEIGHT + INDEX_LABEL_OFFSET + 10}
     >
-      {/* Header */}
-      <Rect
-        width={width}
-        height={headerHeight}
-        fill={COLORS.bg}
-        stroke={COLORS.border}
-        strokeWidth={2}
-        cornerRadius={[8, 8, 0, 0]}
-      />
-      
-      <Text
-        text={`${type} ${name}[${values.length}]`}
-        x={12}
-        y={15}
-        fontSize={14}
-        fontStyle="bold"
-        fill={COLORS.text.primary}
-        fontFamily="monospace"
-      />
-
       {/* Array Cells */}
       {values.map((value, index) => {
-        const cellX = (index % Math.floor(width / cellWidth)) * cellWidth;
-        const cellY = headerHeight + Math.floor(index / Math.floor(width / cellWidth)) * cellHeight;
-        const isHighlighted = accessedIndex === index;
+        const cellX = index * (CELL_WIDTH + CELL_SPACING);
+        const isInitialized = value !== undefined && value !== null;
 
         return (
-          <Group key={index}>
+          <Group key={index} x={cellX} y={0}>
+            {/* Cell Rectangle */}
             <Rect
-              x={cellX}
-              y={cellY}
-              width={cellWidth}
-              height={cellHeight}
-              fill={isHighlighted ? COLORS.highlight : COLORS.cellBg}
-              stroke={isHighlighted ? COLORS.borderLight : COLORS.border}
-              strokeWidth={isHighlighted ? 2 : 1}
+              width={CELL_WIDTH}
+              height={CELL_HEIGHT}
+              fill={COLORS.backgroundColor}
+              stroke={COLORS.borderColor}
+              strokeWidth={1}
             />
+            {/* Value */}
             <Text
-              x={cellX + 5}
-              y={cellY + 12}
-              text={index.toString()}
+              text={isInitialized ? String(value) : COLORS.cell.uninitialized}
+              width={CELL_WIDTH}
+              height={CELL_HEIGHT}
+              align="center"
+              verticalAlign="middle"
+              fontSize={14}
+              fontFamily="'Courier New', monospace"
+              fill={isInitialized ? '#333' : '#999'}
+            />
+            {/* Index Label */}
+            <Text
+              text={String(index)}
+              x={0}
+              y={CELL_HEIGHT + 5}
+              width={CELL_WIDTH}
+              align="center"
               fontSize={10}
-              fill={COLORS.text.secondary}
-              fontFamily="monospace"
-            />
-            <Text
-              x={cellX + 5}
-              y={cellY + 25}
-              text={String(value)}
-              fontSize={12}
-              fill={COLORS.text.primary}
-              fontFamily="monospace"
+              fontFamily="Arial"
+              fill={COLORS.indexLabel.color}
             />
           </Group>
         );
       })}
-
-      {/* Border around array */}
-      <Rect
-        x={0}
-        y={headerHeight}
-        width={width}
-        height={height - headerHeight}
-        fill="transparent"
-        stroke={COLORS.border}
-        strokeWidth={2}
-        cornerRadius={[0, 0, 8, 8]}
-      />
     </Group>
   );
 };

@@ -6,6 +6,7 @@ import memoryMapperService from './memory-mapper.service.js';
 import inputManager from './input-manager.service.js';
 import { logger } from '../utils/logger.js';
 import codeValidatorService from '../validators/code-validator.service.js';
+import traceVisualizerService from '../visualizers/trace-visualizer.service.js';
 
 // Global tracker to ensure only one GDB instance runs at a time across all service instances
 let activeGdbSession = null;
@@ -16,6 +17,7 @@ class DebuggerService {
     this.gdb = null;
     this.parser = new GdbMiParser();
     this.memoryMapper = memoryMapperService; // Use the singleton instance
+    this.traceVisualizer = traceVisualizerService;
     this.stepCounter = 0;
     this.buffer = '';
     this.responseEmitter = new EventEmitter();
@@ -239,21 +241,22 @@ class DebuggerService {
         // Create the structured memory state using the new mapper
         const memoryState = this.memoryMapper.createMemoryState(variables, stack);
 
+        // Generate visualization steps
+        const visualizationSteps = this.traceVisualizer.generateVisualizationSteps(memoryState);
+        
         const executionStep = {
           id: ++this.stepCounter,
           line: line,
-          type: 'breakpoint-hit', // Standardize type
           explanation: `Stopped at line ${line} (reason: ${reason})`,
-          state: memoryState, // Use the new structured state
-          animation: { // Add a placeholder animation config
-            type: 'appear',
-            target: 'stack',
-            duration: 500,
-          }
         };
         
         logger.info(`Backend: Emitting execution step:`, executionStep);
         this.io.emit('execution:step', executionStep);
+
+        if (visualizationSteps.length > 0) {
+          logger.info(`Backend: Emitting ${visualizationSteps.length} visualization steps.`);
+          this.io.emit('execution:visualize', visualizationSteps);
+        }
 
       } catch(error) {
         // If the run was cancelled/replaced, don't emit error

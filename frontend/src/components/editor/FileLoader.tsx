@@ -29,9 +29,10 @@ export default function FileLoader() {
       setFileName(file.name);
       
       toast.success(`Loaded ${file.name}`);
-    } catch (error: any) {
+    } catch (error) {
+      const err = error as Error;
       // User cancelled
-      if (error.name === 'AbortError') {
+      if (err.name === 'AbortError') {
         return;
       }
       

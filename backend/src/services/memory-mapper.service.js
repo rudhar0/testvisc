@@ -25,15 +25,60 @@ class MemoryMapperService {
 
   /**
    * Extracts global variables.
-   * GDB's `-stack-list-variables` doesn't differentiate scopes well without addresses.
-   * We will have to make assumptions or improve variable fetching later.
-   * For now, we'll treat variables not found in any stack frame as globals (crude).
    */
   extractGlobals(gdbVariables) {
     const globals = {};
-    // This is a placeholder. A more robust solution needs address checking.
-    // Let's assume no globals for now to avoid misplacing variables.
     return globals;
+  }
+
+  /**
+   * Parses a GDB variable and extracts detailed information.
+   * @param {object} v - A variable object from GDB.
+   * @returns {object} A structured variable object for the frontend.
+   */
+  _parseVariable(v) {
+    const baseInfo = {
+      name: v.name,
+      type: v.type,
+      value: v.value,
+      address: v.addr || '0x0',
+      scope: 'local',
+      isInitialized: v.value !== undefined,
+      isAlive: true,
+    };
+
+    // Array parsing
+    if (v.type && v.type.includes('[') && v.type.includes(']')) {
+      const match = v.type.match(/(.*)\[(\d+)\]/);
+      if (match) {
+        const baseType = match[1].trim();
+        const size = parseInt(match[2], 10);
+        let elements = [];
+
+        if (v.value && v.value.startsWith('{') && v.value.endsWith('}')) {
+          elements = v.value.substring(1, v.value.length - 1).split(',').map(e => e.trim());
+        }
+
+        return {
+          ...baseInfo,
+          isArray: true,
+          baseType,
+          size,
+          elements,
+        };
+      }
+    }
+    
+    // Pointer parsing
+    if (v.type && v.type.includes('*')) {
+        return {
+            ...baseInfo,
+            isPointer: true,
+            pointsTo: v.value, // The value of a pointer is the address it points to
+        };
+    }
+
+    return { ...baseInfo, isArray: false, isPointer: false };
   }
 
   /**
@@ -49,31 +94,21 @@ class MemoryMapperService {
       return { stack, callStack };
     }
 
-    // GDB returns stack frames from top (current) to bottom (main).
     for (const frame of gdbStack) {
-      const frameId = frame.level; // Use level as a unique ID for the frame
+      const frameId = frame.level;
       const functionName = frame.func || 'unknown';
       const locals = {};
 
-      // Find variables belonging to this frame
       for (const v of gdbVariables) {
         if (v.frame === frameId) {
-          locals[v.name] = {
-            name: v.name,
-            type: v.type,
-            value: v.value,
-            address: v.addr || '0x0', // GDB might not provide an address
-            scope: 'local',
-            isInitialized: v.value !== undefined,
-            isAlive: true, // Assume alive if present
-          };
+          locals[v.name] = this._parseVariable(v);
         }
       }
 
       const stackFrame = {
         frameId: frameId,
         function: functionName,
-        returnType: '?', // Not easily available
+        returnType: '?',
         locals: locals,
         returnAddress: frame.addr,
       };
@@ -82,11 +117,11 @@ class MemoryMapperService {
       const callFrame = {
         function: functionName,
         returnType: '?',
-        params: {}, // We can't distinguish params from locals easily yet
+        params: {},
         locals: locals,
         frameId: frameId,
         returnAddress: frame.addr,
-        isActive: frame.level === '0', // The top frame is active
+        isActive: frame.level === '0',
       };
       callStack.push(callFrame);
     }

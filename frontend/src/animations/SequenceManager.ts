@@ -10,7 +10,9 @@ import {
     createFunctionReturnAnimation,
     createLoopIterationAnimation,
     createMemoryAllocationAnimation,
-    createElementDestroyAnimation, // Import the new function
+    createElementDestroyAnimation,
+    createVariableSingleInitialAnimation,
+    createArrayInitialAnimation,
 } from './Timelines';
 import Konva from 'konva';
 
@@ -58,6 +60,10 @@ export class SequenceManager {
     switch (animation.type) {
       case 'variable_create':
         return createVariableAnimation(animation);
+      case 'variable_single_initial':
+        return createVariableSingleInitialAnimation(animation);
+      case 'array_initial':
+        return createArrayInitialAnimation(animation);
       case 'variable_update':
         return createVariableUpdateAnimation(animation);
       case 'array_access':
