@@ -9,6 +9,7 @@ describe('VerticalFlowRenderer', () => {
 
   beforeEach(() => {
     layer = new Konva.Layer();
+    jest.spyOn(layer, 'batchDraw');
     renderer = new VerticalFlowRenderer(layer);
     renderer.initialize();
   });
@@ -28,5 +29,10 @@ describe('VerticalFlowRenderer', () => {
     const animation = animations[0];
     expect(animation.type).toBe('line_execution');
     expect(animation.target).toBe('main-function');
+
+    // Verify that visual elements were added to the layer
+    expect(layer.getChildren().length).toBeGreaterThan(0);
+    // Verify that the layer was instructed to redraw
+    expect(layer.batchDraw).toHaveBeenCalled();
   });
 });

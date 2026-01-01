@@ -140,6 +140,18 @@ export class VerticalFlowRenderer {
       return;
     }
 
+    // Handle line execution
+    if (type === 'line_execution') {
+      if (animate) {
+        animations.push({
+          type: 'line_execution',
+          target: parent.id, // Target the parent container (e.g., 'main-function')
+          payload: payload,
+        });
+      }
+      // No visual change for line execution, just an animation event
+    }
+
     // Handle element creation
     const ElementClass = elementFactory[type];
     if (ElementClass) {
@@ -210,8 +222,10 @@ export class VerticalFlowRenderer {
     }
 
     this.state.currentStep = step.id;
+    this.layer.batchDraw();
+
     if (animate) {
-        return animations;
+      return animations;
     }
   }
 

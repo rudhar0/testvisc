@@ -72,8 +72,10 @@ export default function VisualizationCanvas() {
     });
 
     if (newAnimations.length > 0) {
-      const sequence = AnimationEngine.createSequence(newAnimations);
-      AnimationEngine.addSequence(sequence);
+      setTimeout(() => {
+        const sequence = AnimationEngine.createSequence(newAnimations);
+        AnimationEngine.addSequence(sequence);
+      }, 100); // Small delay to allow Konva to render
     }
 
     prevLayoutElementsRef.current = layoutElements;
