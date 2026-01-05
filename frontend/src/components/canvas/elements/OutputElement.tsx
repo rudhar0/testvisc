@@ -30,39 +30,65 @@ export const OutputElement: React.FC<OutputElementProps> = ({
   isNew = false,
   subtype = 'output_printf'
 }) => {
-  const groupRef = useRef<Konva.Group>(null);
+  const groupRef = useRef<any>(null);
+
+  // Synchronous render-time log to confirm React is rendering this component
+  console.log('[OutputElement] render attempt:', { id, x, y, width, height, value, isNew, subtype });
 
   useEffect(() => {
-    const node = groupRef.current;
+    const node = groupRef.current as any;
+    console.debug('[OutputElement] render props:', { id, x, y, width, height, value, isNew, subtype });
     if (!node) return;
+
+    // Defensive: clear previous tweens on this node
+    try {
+      Konva.Tween.getAll().forEach(t => t && typeof t.kill === 'function' && t.kill());
+    } catch (e) {
+      // ignore
+    }
+
+    let tween: Konva.Tween | null = null;
 
     if (isNew) {
       console.log(`[OutputElement] Animating new output: ${value}`);
-      node.opacity(0);
-      const startX = x - 20;
-      node.x(startX);
-      
-      const anim = new Konva.Tween({
+      // Use setAttrs to avoid unexpected getters/setters
+      node.setAttrs({ opacity: 0 });
+      // compute startX relative to current x
+      const currentX = typeof node.x === 'function' ? node.x() : node.attrs?.x ?? 0;
+      const startX = currentX - 20;
+      node.setAttrs({ x: startX });
+
+      tween = new Konva.Tween({
         node,
         opacity: 1,
         x: x,
-        duration: 0.4,
+        duration: 0.36,
         easing: Konva.Easings.EaseOut,
       });
-      anim.play();
+      tween.play();
     } else {
-      node.opacity(1);
-      node.x(x);
+      // Ensure visible and positioned
+      node.setAttrs({ opacity: 1, x });
     }
-  }, [isNew, x, value]);
+
+    return () => {
+      if (tween) {
+        try { tween.pause(); tween.destroy(); } catch (e) { /* ignore */ }
+      }
+    };
+  }, [isNew, x, value, subtype, id]);
 
   const outputLabel = subtype === 'output_cout' ? 'cout <<' : subtype === 'output_endl' ? 'cout << endl' : 'printf';
+
+  // Fallbacks to prevent Konva from erroring if dimensions are invalid
+  const safeWidth = typeof width === 'number' && isFinite(width) ? width : 200;
+  const safeHeight = typeof height === 'number' && isFinite(height) ? height : 50;
 
   return (
     <Group ref={groupRef} id={id} x={x} y={y}>
       <Rect
-        width={width}
-        height={height}
+        width={safeWidth}
+        height={safeHeight}
         fill={COLORS.bg}
         stroke={COLORS.border}
         strokeWidth={2}

@@ -28,6 +28,8 @@ export default class GdbDebugger {
     this.inputStepPromise = {};
     this.previousVariables = {};
     this.sourceCode = '';
+    this.accumulatedOutput = '';
+    this.lastOutputStep = '';
   }
 
   preprocessCode(code) {
@@ -157,12 +159,11 @@ export default class GdbDebugger {
 
   handleOutput(data) {
     this.outputBuffer += data;
-    
+    this.accumulatedOutput += data;
     let newlineIndex;
     while ((newlineIndex = this.outputBuffer.indexOf('\n')) !== -1) {
       const line = this.outputBuffer.substring(0, newlineIndex).trim();
       this.outputBuffer = this.outputBuffer.substring(newlineIndex + 1);
-
       if (line) {
         if (this.isWaitingForInputStep) {
           if (line.startsWith('^done') || line.startsWith('^error') || line.startsWith('*stopped')) {
@@ -333,6 +334,23 @@ export default class GdbDebugger {
           line: stoppedInfo.line,
           state: this.captureState(newLocals, newFrames)
         });
+
+        // Output capturing logic
+        const currentOutput = this.accumulatedOutput;
+        if (currentOutput && currentOutput !== this.lastOutputStep) {
+          // Only emit new output
+          const newOutput = currentOutput.substring(this.lastOutputStep.length);
+          if (newOutput.trim().length > 0) {
+            this.addStep({
+              type: 'output',
+              stdout: newOutput,
+              line: stoppedInfo.line,
+              explanation: 'Program output',
+              state: this.captureState(newLocals, newFrames)
+            });
+          }
+          this.lastOutputStep = currentOutput;
+        }
 
         this.previousVariables = { ...newLocals };
         stepCount++;
@@ -583,6 +601,31 @@ export default class GdbDebugger {
 
   addStep(stepData) {
     const { type, line, explanation, state, ...payload } = stepData;
+
+    // Annotate newly-created variables in the provided state with a birthStep
+    // so the frontend/layout can know when each element first appears.
+    try {
+      if (state && state.callStack && state.callStack[0]) {
+        const locals = state.callStack[0].locals || {};
+
+        // For each local in the current state, if it wasn't present in previousVariables,
+        // mark it with a birthStep so the frontend knows when it first appeared.
+        Object.keys(locals).forEach((name) => {
+          try {
+            if (this.previousVariables === undefined || !Object.prototype.hasOwnProperty.call(this.previousVariables, name)) {
+              if (locals[name] && locals[name].birthStep === undefined) {
+                locals[name].birthStep = this.stepId;
+              }
+            }
+          } catch (innerE) {
+            // ignore individual failures
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('addStep: failed to annotate birthStep', e);
+    }
+
     this.trace.push({
       id: this.stepId++,
       type: type,

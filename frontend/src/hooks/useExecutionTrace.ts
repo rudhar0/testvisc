@@ -23,6 +23,56 @@ export const useExecutionTrace = () => {
 
     const handleTraceChunk = (trace: ExecutionTrace) => {
       console.log('Frontend: Received execution trace chunk', trace);
+      // Normalize steps to ensure locals is a record and populate birthStep when missing.
+      if (trace.steps && Array.isArray(trace.steps)) {
+        // Ensure locals are objects and collect first-seen birthStep per variable
+        const seenLocals = new Set<string>();
+        const seenGlobals = new Set<string>();
+
+        trace.steps.forEach((step) => {
+          try {
+            // Normalize callStack locals
+            if (step.state && step.state.callStack && step.state.callStack.length > 0) {
+              const frame = step.state.callStack[0];
+              if (Array.isArray(frame.locals)) {
+                const localsObj: Record<string, any> = {};
+                frame.locals.forEach((v: any) => { localsObj[v.name] = v; });
+                frame.locals = localsObj;
+              }
+
+              if (frame.locals && typeof frame.locals === 'object') {
+                Object.keys(frame.locals).forEach((name) => {
+                  const v = frame.locals[name];
+                  if (!seenLocals.has(name)) {
+                    // mark first-seen step as birthStep if backend didn't provide one
+                    if (v && v.birthStep === undefined) {
+                      v.birthStep = step.id;
+                    }
+                    seenLocals.add(name);
+                  }
+                });
+              }
+            }
+
+            // Normalize globals
+            if (step.state && step.state.globals && typeof step.state.globals === 'object') {
+              const globals = step.state.globals;
+              Object.keys(globals).forEach((gname) => {
+                const gv = globals[gname];
+                if (!seenGlobals.has(gname)) {
+                  if (gv && gv.birthStep === undefined) {
+                    gv.birthStep = step.id;
+                  }
+                  seenGlobals.add(gname);
+                }
+              });
+            }
+          } catch (e) {
+            // ignore normalization errors
+          }
+        });
+      }
+
       if (trace.steps && trace.steps.length > 2) {
         setTrace(trace);
       } else {
