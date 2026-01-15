@@ -1,0 +1,22 @@
+
+done - do itAdopt a standardized debugger protocol: use the Debug Adapter Protocol (DAP) between your backend and frontend (or reuse an existing adapter such as Microsoft’s cpptools or lldb-vscode). DAP gives stable JSON-like messages and richer variable metadata than ad-hoc MI parsing.
+
+done - Prefer structured debugger APIs, not regexes: fetch variables via debugger variable APIs (GDB/MI -var-create / -var-list-children, or DAP variables requests) and build objects by recursion — don’t parse MI text with brittle regexes.
+
+done - Use a proper MI parser or library: implement a tokenizer + recursive-descent parser for MI (strings, nested lists/maps) or reuse a battle-tested lib (pygdbmi, node-gdbmi2, or adapter-side parsers). That removes most quoting/nesting bugs.
+
+done - Enable pretty-printers for complex types: turn on libstdc++/libc++ pretty-printers and parse their output for STL and common C++ types (or request raw children via -var-list-children and interpret them with type-specific formatters).
+
+done - Track stable variable identities: use var-object IDs (not names) to detect renames/aliases and to follow references/pointers reliably across steps.
+
+done - Read memory when needed: for pointers/arrays/opaque objects, evaluate addresses and read memory (-data-evaluate-expression, -data-read-memory-bytes) rather than guessing addresses.
+
+done - Associate steps with threads: parse =thread-created|=thread-exited|*stopped events, track thread IDs, and capture per-thread stack/locals.
+
+Stream results & fallback gracefully: stream steps/chunks to client as you produce them; when full structured decoding fails, fall back to best-effort string output and mark the element as unparsed so UI still shows something.
+
+Use tokens and robust command/response correlation: prefix MI commands with tokens and match responses by token to avoid races and ambiguous buffers.
+
+Comprehensive testing: add smoke/unit tests with representative C++ cases (classes, vectors, strings, nested structs, references, threads, IO) and regression tests for MI parser and variable expansion.
+
+Operational concerns: enable pretty-printer loading on debugger start, limit retries/timeouts, and expose diagnostic logs for parser failures.

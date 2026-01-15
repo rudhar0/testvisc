@@ -1,0 +1,116 @@
+@import 'allotment/dist/style.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Colors */
+  --color-global: #2DD4BF;
+  --color-stack: #3B82F6;
+  --color-heap: #10B981;
+  --color-pointer: #EF4444;
+  --color-control: #A855F7;
+  --color-optimized: #F59E0B;
+  
+  /* Durations */
+  --duration-fast: 200ms;
+  --duration-normal: 500ms;
+  --duration-slow: 800ms;
+  
+  /* Z-index layers */
+  --z-canvas-base: 1;
+  --z-canvas-arrows: 10;
+  --z-canvas-overlay: 20;
+  --z-ui-controls: 100;
+  --z-modal: 1000;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Allotment customization */
+.split-view-view {
+  background: #0f172a;
+}
+
+.sash {
+  background: #1e293b !important;
+}
+
+.sash:hover {
+  background: #334155 !important;
+}
+
+/* Animation utilities */
+@keyframes pulse-highlight {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse-highlight {
+  animation: pulse-highlight 1s ease-in-out infinite;
+}
+
+/* Monaco Editor theme override */
+.monaco-editor {
+  background: #0f172a !important;
+}
+
+.monaco-editor .margin {
+  background: #1e293b !important;
+}
+
+/* Konva canvas container */
+.konva-canvas-container {
+  cursor: grab;
+}
+
+.konva-canvas-container:active {
+  cursor: grabbing;
+}

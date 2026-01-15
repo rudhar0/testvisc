@@ -1,0 +1,174 @@
+
+
+import { Globe, SquareFunction, Box, ChevronRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useExecutionStore } from '@store/slices/executionSlice';
+import { useCanvasStore } from '@store/slices/canvasSlice';
+import { COLORS } from '@config/theme.config';
+  
+export default function SymbolNavigator() {
+  const { executionTrace } = useExecutionStore();
+  const { selectElement } = useCanvasStore();
+  const [expandedSections, setExpandedSections] = useState({
+    globals: true,
+    functions: true,
+  });
+
+  const [globals, setGlobals] = useState({});
+  const [functions, setFunctions] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (executionTrace.length > 0) {
+      // Extract globals from the entire trace
+      const allGlobals: Record<string, any> = {};
+      executionTrace.forEach(step => {
+        if (step.type === 'global_declaration') {
+          allGlobals[(step as any).variable] = { type: (step as any).dataType };
+        }
+        if (step.state?.globals) {
+          Object.assign(allGlobals, step.state.globals);
+        }
+      });
+      setGlobals(allGlobals);
+
+      // Extract unique function names from the entire trace
+      const uniqueFunctions = Array.from(new Set(
+        executionTrace
+          .filter(step => step.type === 'function_call')
+          .map(step => String((step as any).function || 'unknown'))
+      ));
+      setFunctions(uniqueFunctions);
+    } else {
+      setGlobals({});
+      setFunctions([]);
+    }
+  }, [executionTrace]);
+
+  const toggleSection = (section: 'globals' | 'functions') => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [section]: !prev[section],
+    }));
+  };
+
+  const handleSymbolClick = (symbolName: string, type: 'global' | 'function') => {
+    selectElement(symbolName);
+    // TODO: Highlight in canvas and center view
+  };
+
+  if (executionTrace.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center p-4">
+        <div className="text-center text-sm text-slate-500">
+          <Box className="mx-auto mb-2 h-8 w-8 opacity-50" />
+          <p>No symbols available</p>
+          <p className="mt-1 text-xs">Run code to see symbols</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-y-auto p-3">
+      {/* Globals Section */}
+      <div className="mb-4">
+        <button
+          onClick={() => toggleSection('globals')}
+          className="mb-2 flex w-full items-center gap-2 rounded px-2 py-1 hover:bg-slate-800 transition-colors"
+        >
+          <ChevronRight
+            className={`h-4 w-4 text-slate-400 transition-transform ${
+              expandedSections.globals ? 'rotate-90' : ''
+            }`}
+          />
+          <Globe className="h-4 w-4" style={{ color: COLORS.memory.global.DEFAULT }} />
+          <span className="text-sm font-semibold text-slate-200">
+            Global Variables
+          </span>
+          <span className="ml-auto text-xs text-slate-500">
+            {Object.keys(globals).length}
+          </span>
+        </button>
+
+        {expandedSections.globals && (
+          <div className="ml-6 space-y-1">
+            {Object.entries(globals).map(([name, variable]: [string, any]) => (
+              <button 
+                key={name}
+                onClick={() => handleSymbolClick(name, 'global')}
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 transition-colors group"
+              >
+                <div
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: COLORS.memory.global.DEFAULT }}
+                />
+                <span className="text-sm text-slate-300 group-hover:text-white">
+                  {name}
+                </span>
+                <span className="ml-auto text-xs text-slate-500">
+                  {variable.type}
+                </span>
+              </button>
+            ))}
+            {Object.keys(globals).length === 0 && (
+              <div className="px-2 py-1 text-xs text-slate-500">
+                No global variables
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Functions Section */}
+      <div>
+        <button
+          onClick={() => toggleSection('functions')}
+          className="mb-2 flex w-full items-center gap-2 rounded px-2 py-1 hover:bg-slate-800 transition-colors"
+        >
+          <ChevronRight
+            className={`h-4 w-4 text-slate-400 transition-transform ${
+              expandedSections.functions ? 'rotate-90' : ''
+            }`}
+          />
+          <SquareFunction className="h-4 w-4" style={{ color: COLORS.memory.stack.DEFAULT }} />
+          <span className="text-sm font-semibold text-slate-200">
+            Functions
+          </span>
+          <span className="ml-auto text-xs text-slate-500">
+            {functions.length}
+          </span>
+        </button>
+
+        {expandedSections.functions && (
+          <div className="ml-6 space-y-1">
+            {functions.map((funcName) => (
+              <button 
+                key={funcName}
+                onClick={() => handleSymbolClick(funcName, 'function')}
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 transition-colors group"
+              >
+                <div
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: COLORS.memory.stack.DEFAULT }}
+                />
+                <span className="text-sm text-slate-300 group-hover:text-white">
+                  {funcName}()
+                </span>
+                {funcName === 'main' && (
+                  <span className="ml-auto text-xs text-blue-400 font-medium">
+                    entry
+                  </span>
+                )}
+              </button>
+            ))}
+            {functions.length === 0 && (
+              <div className="px-2 py-1 text-xs text-slate-500">
+                No functions
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
