@@ -8,6 +8,7 @@ import { socketService, type SocketEventCallback } from '@services/socket.servic
 import { useExecutionStore } from '@store/slices/executionSlice';
 import { useGCCStore } from '@store/slices/gccSlice';
 import toast from 'react-hot-toast';
+import { ExecutionTrace } from '@types/index';
 
 export function useSocket() {
   const [isConnected, setIsConnected] = useState(false);
@@ -86,22 +87,32 @@ export function useSocket() {
       console.log(`✅ Trace complete: ${data.totalSteps} total steps`);
       
       try {
+        // With the new backend, the entire trace might come in a single chunk.
+        // Or it might be sent on the 'data' of the complete event.
+        // For now, we assume it's in chunks.
         if (receivedChunks.length === 0) {
-          throw new Error('No trace data received');
+          // Fallback for if the trace is sent in the complete event data
+           if (data && data.steps) {
+             receivedChunks.push(data);
+           } else {
+            throw new Error('No trace data received');
+           }
         }
 
-        // Combine all chunks (usually just 1 for GDB)
-        const allSteps = receivedChunks.flatMap(chunk => chunk.steps || []);
-        const globals = receivedChunks[0]?.globals || [];
-        const functions = receivedChunks[0]?.functions || [];
+        // The new backend sends a single trace object, so we get it from the first chunk.
+        const traceData: ExecutionTrace = receivedChunks[0];
 
-        // Validate steps
+        const allSteps = traceData.steps || [];
+        const globals = traceData.globals || [];
+        const functions = traceData.functions || [];
+        const metadata = traceData.metadata;
+
+        // Validate steps - new backend has steps without state, so we relax the validation.
+        // A valid step must have an id and a type.
         const validSteps = allSteps.filter(step => 
           step && 
           typeof step.id === 'number' && 
-          step.type && 
-          step.line && 
-          step.state
+          step.type
         );
 
         if (validSteps.length === 0) {
@@ -112,12 +123,13 @@ export function useSocket() {
         console.log('📋 First step:', validSteps[0]);
         console.log('📋 Last step:', validSteps[validSteps.length - 1]);
 
-        // Set trace
+        // Set trace in the store
         setTrace({
           steps: validSteps,
           totalSteps: validSteps.length,
           globals,
-          functions
+          functions,
+          metadata
         });
         
         setAnalyzing(false);
@@ -141,7 +153,6 @@ export function useSocket() {
     const handleInputRequired: SocketEventCallback = (data) => {
       console.log('📥 Input required:', data);
       // Input will be handled by VisualizationCanvas component
-      // Don't set analyzing to false here - backend is still generating trace
     };
 
     // Register listeners

@@ -1,70 +1,112 @@
-export interface ExecutionStep {
-    id: number;
-    line: number;
-    type: string;
-    explanation: string;
-    state: MemoryState;
-    animation: any; // Define more strictly if format is known
-    inputRequest: InputRequest | null;
-    stdout: string;
-  }
-  
-  export interface MemoryState {
-    globals: Variable[];
-    stack: StackFrame[];
-    heap: HeapBlock[];
-    pointers: Pointer[];
-  }
-  
-  export interface Variable {
-    name: string;
-    value: any;
-    type: string;
-    address: string;
-  }
-  
-  export interface StackFrame {
-    name: string;
-    address: string;
-    locals: Variable[];
-  }
-  
-  export interface HeapBlock {
-    address: string;
-    size: number;
-    value: any;
-  }
-  
-  export interface Pointer {
-    from: string; // address of pointer variable
-    to: string;   // address it points to
-  }
-  
-  export interface InputRequest {
-    variable: string;
-    type: 'int' | 'float' | 'char' | 'string';
-  }
+export type StepType =
+  | 'object_creation'
+  | 'object_destruction'
+  | 'variable_declaration'
+  | 'assignment'
+  | 'pointer_declaration'
+  | 'pointer_deref'
+  | 'array_declaration'
+  | 'function_call'
+  | 'function_return'
+  | 'line_execution'
+  | 'loop_start'
+  | 'loop_end'
+  | 'conditional_start'
+  | 'conditional_branch'
+  | 'heap_allocation'
+  | 'heap_free'
+  | 'output'
+  | 'input_request'
+  | 'program_end';
 
-  export const StepType = {
-    DECLARATION: 'declaration',
-    ASSIGNMENT: 'assignment',
-    EXPRESSION: 'expression',
-    FUNCTION_CALL: 'function_call',
-    FUNCTION_RETURN: 'function_return',
-    LOOP_START: 'loop_start',
-    LOOP_ITERATION: 'loop_iteration',
-    LOOP_COMPRESSED: 'loop_compressed',
-    LOOP_END: 'loop_end',
-    CONDITION_CHECK: 'condition_check',
-    BRANCH_TAKEN: 'branch_taken',
-    BRANCH_NOT_TAKEN: 'branch_not_taken',
-    ARRAY_ACCESS: 'array_access',
-    POINTER_DEREF: 'pointer_deref',
-    MALLOC: 'malloc',
-    FREE: 'free',
-    INPUT_REQUEST: 'input_request',
-    OUTPUT: 'output',
-    PROGRAM_START: 'program_start',
-    PROGRAM_END: 'program_end'
-  };
+export interface ClassInfo {
+  members: Array<{ name: string; type: string; isField: boolean }>;
+  methods: Array<{ name: string; type: string }>;
+  hasConstructor: boolean;
+  hasDestructor: boolean;
+}
+
+export interface MemberVariable {
+  name: string;
+  type: string;
+  value: any;
+  address: string;
+}
+
+export interface Variable {
+  name: string;
+  type: string;
+  primitive?: 'class' | 'int' | 'pointer' | 'array' | string;
+  className?: string;
+  value: any | MemberVariable[];
+  address: string;
+  birthStep: number;
+}
+
+export interface StackFrame {
+  function: string;
+  line: number;
+  locals: { [key: string]: Variable };
+}
+
+export interface MemoryState {
+  callStack: StackFrame[];
+  globals: { [key: string]: Variable };
+  heap: { [key: string]: any }; // Assuming heap structure might be complex
+  // The old 'stack' seems to be replaced by 'callStack', and 'pointers' are now part of variables.
+}
+
+export interface ExecutionStep {
+  id: number;
+  type: StepType;
+  line: number;
+  explanation: string;
+  state: MemoryState;
+
+  // Optional fields based on step type
+  className?: string;
+  objectName?: string;
+  variable?: string;
+  name?: string;
+  dataType?: string;
+  primitive?: 'class' | 'int' | 'pointer' | 'array' | string;
+  value?: any | MemberVariable[];
+  address?: string;
+  scope?: 'local' | 'global';
+  classInfo?: ClassInfo;
+  function?: string;
   
+  // Note: birthStep is on the Variable, not the step itself
+}
+
+export interface GlobalVariable {
+  name: string;
+  type: string;
+  value: any;
+  address: string;
+}
+
+export interface FunctionInfo {
+  name: string;
+  signature: string;
+  line: number;
+  returnType: string;
+}
+
+export interface TraceMetadata {
+  debugger: string;
+  hasSemanticInfo: boolean;
+}
+
+export interface ExecutionTrace {
+  steps: ExecutionStep[];
+  totalSteps: number;
+  globals: GlobalVariable[];
+  functions: FunctionInfo[];
+  metadata: TraceMetadata;
+}
+
+export interface InputRequest {
+  variable: string;
+  type: 'int' | 'float' | 'char' | 'string';
+}

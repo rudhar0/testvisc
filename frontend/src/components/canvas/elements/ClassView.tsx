@@ -5,6 +5,7 @@ import Konva from 'konva';
 interface ClassViewProps {
   id: string;
   typeName: string;
+  objectName: string;
   x: number;
   y: number;
   width: number;
@@ -23,6 +24,7 @@ const COLORS = {
 export const ClassView: React.FC<ClassViewProps> = ({
   id,
   typeName,
+  objectName,
   x,
   y,
   width,
@@ -55,6 +57,8 @@ export const ClassView: React.FC<ClassViewProps> = ({
     }
   }, [isNew, typeName]);
 
+  const displayText = objectName ? `${typeName}: ${objectName}` : `class ${typeName}`;
+
   return (
     <Group ref={groupRef} id={id} x={x} y={y}>
       {/* Class Background */}
@@ -80,7 +84,7 @@ export const ClassView: React.FC<ClassViewProps> = ({
       />
       
       <Text
-        text={`class ${typeName}`}
+        text={displayText}
         x={15}
         y={8}
         fontSize={16}

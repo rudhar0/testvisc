@@ -8,9 +8,10 @@ services:
     image: cpp-visualizer-gateway
     container_name: cpp-visualizer-gateway
     ports:
-      - "3000:3000"
+      - "5000:5000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./temp:/app/temp
     environment:
       - NODE_ENV=docker
       - REDIS_HOST=redis
@@ -42,8 +43,7 @@ services:
       context: .
       dockerfile: docker/worker.Dockerfile
     image: cpp-visualizer-worker
-    # This service is not run directly, but its image is used by the gateway.
-    # We define it here so docker-compose builds the image.
+    # This service is not run directly, but its image is used by the gateway
     deploy:
       replicas: 0
 

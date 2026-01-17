@@ -6,10 +6,14 @@ export type StepType =
   | 'program_start'
   | 'global_declaration'
   | 'function_call'
+  | 'function_return'
   | 'variable_declaration'
   | 'assignment'
   | 'array_declaration'
   | 'pointer_declaration'
+  | 'pointer_deref'
+  | 'object_creation'
+  | 'object_destruction'
   | 'heap_allocation'
   | 'heap_free'
   | 'loop_start'
@@ -18,9 +22,9 @@ export type StepType =
   | 'loop_end'
   | 'conditional_start'
   | 'conditional_branch'
+  | 'line_execution'
   | 'input_request'
   | 'output'
-  | 'function_return'
   | 'program_end';
 
 export interface ExecutionStep {
@@ -29,7 +33,22 @@ export interface ExecutionStep {
   line: number;
   explanation: string;
   state: MemoryState;
-  animation: AnimationConfig;
+
+  // New optional fields for hybrid backend
+  className?: string;
+  objectName?: string;
+  variable?: string;
+  name?: string;
+  dataType?: string;
+  primitive?: 'class' | 'int' | 'pointer' | 'array' | string;
+  value?: any;
+  address?: string;
+  scope?: 'local' | 'global';
+  classInfo?: ClassInfo;
+  function?: string;
+
+  // Old fields
+  animation?: AnimationConfig;
   pauseExecution?: boolean;
   inputRequest?: InputRequest;
 }
@@ -39,6 +58,28 @@ export interface ExecutionTrace {
   totalSteps: number;
   globals: GlobalVariable[];
   functions: FunctionInfo[];
+  metadata?: {
+    debugger: string;
+    hasSemanticInfo: boolean;
+  };
+}
+
+// ============================================
+// CLASS & OBJECT TYPES
+// ============================================
+
+export interface ClassInfo {
+  members: Array<{ name: string; type: string; isField: boolean }>;
+  methods: Array<{ name: string; type: string }>;
+  hasConstructor: boolean;
+  hasDestructor: boolean;
+}
+
+export interface ClassMember {
+  name: string;
+  type: string;
+  value: any;
+  address?: string;
 }
 
 // ============================================
@@ -47,7 +88,7 @@ export interface ExecutionTrace {
 
 export interface MemoryState {
   globals: Record<string, Variable>;
-  stack: StackFrame[];
+  stack: StackFrame[]; // This might be deprecated in favor of callStack
   heap: Record<string, HeapBlock>;
   callStack: CallFrame[];
   stdout?: string;
@@ -56,17 +97,18 @@ export interface MemoryState {
 export interface Variable {
   name: string;
   type: string;
-  value: any;
+  value: any; // For classes, this could be an array of ClassMember
   address: string;
   scope: 'global' | 'local' | 'parameter';
-  primitive: 'int' | 'float' | 'char' | 'double' | 'bool' | 'pointer' | 'array' | 'struct';
+  primitive: 'int' | 'float' | 'char' | 'double' | 'bool' | 'pointer' | 'array' | 'struct' | 'class' | string;
   isInitialized: boolean;
   isAlive: boolean;
   birthStep?: number;
   deathStep?: number;
-  declarationType: 'with_value' | 'without_value' | 'multiple';
+  declarationType?: 'with_value' | 'without_value' | 'multiple';
   isAccessed?: boolean; // For highlighting when read/written
   accessType?: 'read' | 'write';
+  className?: string; // For class objects
 }
 
 export interface GlobalVariable extends Variable {
@@ -83,12 +125,13 @@ export interface StackFrame {
 
 export interface CallFrame {
   function: string;
-  returnType: string;
-  params: Record<string, Variable>;
+  line?: number;
+  returnType?: string;
+  params?: Record<string, Variable>;
   locals: Record<string, Variable>;
-  frameId: string;
-  returnAddress: string | null;
-  isActive: boolean;
+  frameId?: string;
+  returnAddress?: string | null;
+  isActive?: boolean;
 }
 
 export interface HeapBlock {
@@ -168,14 +211,15 @@ export interface InputRequest {
 
 export interface FunctionInfo {
   name: string;
+  signature?: string;
   returnType: string;
-  parameters: Parameter[];
+  parameters?: Parameter[];
   line: number;
-  isMain: boolean;
+  isMain?: boolean;
 }
 
 export interface Parameter {
-  name: string;
+  name:string;
   type: string;
 }
 
@@ -185,7 +229,7 @@ export interface Parameter {
 
 export interface Symbol {
   name: string;
-  type: 'function' | 'variable' | 'array' | 'pointer' | 'struct';
+  type: 'function' | 'variable' | 'array' | 'pointer' | 'struct' | 'class';
   dataType: string;
   line: number;
   scope: string;

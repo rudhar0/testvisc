@@ -1,5 +1,3 @@
-
-
 import { Globe, SquareFunction, Box, ChevronRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useExecutionStore } from '@store/slices/executionSlice';
@@ -14,30 +12,21 @@ export default function SymbolNavigator() {
     functions: true,
   });
 
-  const [globals, setGlobals] = useState({});
+  const [globals, setGlobals] = useState<Record<string, any>>({});
   const [functions, setFunctions] = useState<string[]>([]);
 
   useEffect(() => {
-    if (executionTrace.length > 0) {
-      // Extract globals from the entire trace
-      const allGlobals: Record<string, any> = {};
-      executionTrace.forEach(step => {
-        if (step.type === 'global_declaration') {
-          allGlobals[(step as any).variable] = { type: (step as any).dataType };
-        }
-        if (step.state?.globals) {
-          Object.assign(allGlobals, step.state.globals);
-        }
-      });
-      setGlobals(allGlobals);
+    if (executionTrace) {
+      // Use the top-level globals and functions from the trace object
+      const traceGlobals = executionTrace.globals || [];
+      const formattedGlobals = traceGlobals.reduce((acc, globalVar) => {
+        acc[globalVar.name] = { type: globalVar.type, value: globalVar.value };
+        return acc;
+      }, {} as Record<string, any>);
+      setGlobals(formattedGlobals);
 
-      // Extract unique function names from the entire trace
-      const uniqueFunctions = Array.from(new Set(
-        executionTrace
-          .filter(step => step.type === 'function_call')
-          .map(step => String((step as any).function || 'unknown'))
-      ));
-      setFunctions(uniqueFunctions);
+      const traceFunctions = executionTrace.functions || [];
+      setFunctions(traceFunctions.map(f => f.name));
     } else {
       setGlobals({});
       setFunctions([]);
@@ -56,7 +45,7 @@ export default function SymbolNavigator() {
     // TODO: Highlight in canvas and center view
   };
 
-  if (executionTrace.length === 0) {
+  if (!executionTrace || !executionTrace.steps || executionTrace.steps.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-4">
         <div className="text-center text-sm text-slate-500">
@@ -126,7 +115,7 @@ export default function SymbolNavigator() {
           className="mb-2 flex w-full items-center gap-2 rounded px-2 py-1 hover:bg-slate-800 transition-colors"
         >
           <ChevronRight
-            className={`h-4 w-4 text-slate-400 transition-transform ${
+            className={`h-4 w-4 text-slate-400 transition-.transform ${
               expandedSections.functions ? 'rotate-90' : ''
             }`}
           />

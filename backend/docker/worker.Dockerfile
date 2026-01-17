@@ -1,41 +1,49 @@
-# Base image
+# Base image with Clang, LLDB, and Python
 FROM ubuntu:22.04
 
-# Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies
+# Install all required tools
 RUN apt-get update && apt-get install -y \
-    gdb \
+    build-essential \
     gcc \
     g++ \
     clang \
+    lldb \
     python3 \
+    python3-pip \
+    python3-lldb \
     nodejs \
     npm \
     curl \
-    unzip \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install VS Code C/C++ tools (cpptools) DAP adapter
-RUN mkdir -p /app/cpptools && \
-    curl -L "https://github.com/microsoft/vscode-cpptools/releases/download/1.8.4/cpptools-linux.vsix" -o /tmp/cpptools.vsix && \
-    unzip /tmp/cpptools.vsix -d /tmp/cpptools-vsix && \
-    cp -r /tmp/cpptools-vsix/extension/debugAdapters/* /app/cpptools/ && \
-    rm -rf /tmp/cpptools.vsix /tmp/cpptools-vsix
+# Verify installations
+RUN clang --version && \
+    lldb --version && \
+    python3 --version && \
+    node --version
 
 # Set up the application directory
 WORKDIR /app
 
-# Copy backend application code
-COPY . .
+# Copy package files
+COPY package*.json ./
 
 # Install Node.js dependencies
 RUN npm install
 
-# This is the command that will be run by the worker-pool.service.js
-# We are not using CMD or ENTRYPOINT because the container is started and managed by Dockerode.
-# The worker service will be started by the main application.
+# Copy the rest of the application
+COPY . .
 
-# Expose a port for DAP communication if needed (though we use stdin/stdout by default)
-EXPOSE 4711
+# Make Python script executable
+RUN chmod +x src/python/lldb-tracer.py
+
+# Create temp directory
+RUN mkdir -p temp
+
+# Expose port
+EXPOSE 5000
+
+CMD ["node", "src/server.js"]

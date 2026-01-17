@@ -14,7 +14,7 @@ const CodeEditor: React.FC = () => {
   const setCode = useEditorStore((state) => state.setCode);
   
   const currentLine = useExecutionStore(
-    (state) => state.executionTrace[state.currentStep]?.line || 0
+    (state) => state.executionTrace?.steps[state.currentStep]?.line || 0
   );
 
   const handleEditorChange = (value: string | undefined) => {

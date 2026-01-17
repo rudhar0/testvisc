@@ -1,109 +1,77 @@
 // frontend/src/canvas/elements/Variable.ts
 import { CanvasElement } from "../core/CanvasElement";
 import Konva from 'konva';
-import { Animation, VariableCreateAnimation, VariableUpdateAnimation } from '../../types/animation.types';
 import { COLORS } from '../../config/theme.config';
+import { Variable as VariableData } from '@types/execution.types';
 
 export class Variable extends CanvasElement {
     private textNode: Konva.Text;
     private backgroundRect: Konva.Rect;
 
-    constructor(id: string, parentId: string, layer: Konva.Layer, payload: any) {
+    constructor(id: string, parentId: string, layer: Konva.Layer, data: VariableData & { isMember?: boolean }) {
         super(id, parentId, layer);
         this.elementType = 'Variable';
+        
+        const isMember = data.isMember || false;
+
         this.layout = {
             x: 0,
             y: 0,
-            width: 540,
-            height: 50,
+            width: isMember ? 520 : 540,
+            height: isMember ? 40 : 50,
         };
 
-        // Initial state for non-animated rendering (e.g., rebuildToStep)
-        this.container.opacity(1); 
-        this.container.scaleX(1);
-        this.container.scaleY(1);
+        this.container.opacity(1);
 
         this.backgroundRect = new Konva.Rect({
             name: 'box-bg',
             width: this.layout.width,
             height: this.layout.height,
-            fill: COLORS.memory.stack.DEFAULT, // Using theme color
-            stroke: COLORS.memory.stack.dark, // Using theme color
+            fill: isMember ? COLORS.memory.stack.MEMBER : COLORS.memory.stack.DEFAULT,
+            stroke: COLORS.memory.stack.dark,
             strokeWidth: 2,
             cornerRadius: 6,
             shadowColor: 'black',
-            shadowBlur: 5,
+            shadowBlur: isMember ? 2 : 5,
             shadowOpacity: 0.2,
         });
 
         this.textNode = new Konva.Text({
             name: 'variable-value',
-            text: `${payload.type || payload.primitive || 'int'} ${payload.name} = ${payload.value};`,
+            text: '', // Will be set by update
             x: 10,
-            y: 15,
-            fill: COLORS.dark.text.primary, // Using theme color
+            y: isMember ? 12 : 15,
+            fill: COLORS.dark.text.primary,
             fontFamily: 'monospace',
             fontSize: 14,
         });
         
         this.container.add(this.backgroundRect, this.textNode);
+
+        // Render initial state
+        this.update(data);
     }
     
-    // Non-animating creation: set the final state immediately
-    create(payload: any): void {
-        console.log('[Variable] Creating variable (non-animated) with payload:', payload);
-        const type = payload.type || payload.primitive || 'int';
-        const name = payload.name || '';
-        const value = payload.value !== undefined ? String(payload.value) : '?';
-        this.textNode.text(`${type} ${name} = ${value};`);
-        this.container.opacity(1);
-        this.container.scaleX(1);
-        this.container.scaleY(1);
-    }
+    update(data: Partial<VariableData>): void {
+        const type = data.type || data.primitive || 'unknown';
+        const name = data.name || '';
+        let valueStr = '?';
 
-    // Non-animating update: set the final state immediately
-    update(payload: any): void {
-        console.log('[Variable] Updating variable (non-animated) with payload:', payload);
-        const type = payload.type || payload.primitive || 'int';
-        const name = payload.name || '';
-        const value = payload.value !== undefined ? String(payload.value) : '?';
-        this.textNode.text(`${type} ${name} = ${value};`);
-    }
-
-    // Returns an animation description for creating the variable
-    getCreateAnimation(payload: any): Animation {
-        // Initial properties for animated rendering
-        this.container.opacity(0);
-        this.container.scaleX(0.8);
-        this.container.scaleY(0.8);
-
-        this.create(payload); // Apply final state for text, etc.
+        if (data.value !== undefined) {
+            if (typeof data.value === 'object' && data.value !== null) {
+                // For pointers, arrays, or complex objects, just show the type or address
+                if (data.primitive === 'pointer' || data.type?.includes('*')) {
+                    valueStr = data.value; // Show address
+                } else if (data.primitive === 'array') {
+                    valueStr = `[${(data.value as any[]).join(', ')}]`;
+                } else {
+                    valueStr = `{...}`; // Placeholder for other objects
+                }
+            } else {
+                valueStr = String(data.value);
+            }
+        }
         
-        const animation: VariableCreateAnimation = {
-            type: 'variable_create',
-            target: this.id,
-            duration: 500, // ms
-            konvaObject: this.container,
-        };
-        return animation;
-    }
-
-    // Returns an animation description for updating the variable
-    getUpdateAnimation(payload: any): Animation {
-        const oldValue = this.textNode.text();
-        this.update(payload); // Apply final state for text
-        const newValue = this.textNode.text();
-
-        const animation: VariableUpdateAnimation = {
-            type: 'variable_update',
-            target: this.id,
-            duration: 600, // ms
-            from: oldValue,
-            to: newValue,
-            konvaContainer: this.container,
-            valueTextNode: this.textNode,
-            backgroundRect: this.backgroundRect,
-        };
-        return animation;
+        this.textNode.text(`${type} ${name} = ${valueStr};`);
     }
 }

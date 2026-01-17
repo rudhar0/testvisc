@@ -1,20 +1,32 @@
-# Base image
-FROM node:18-alpine
+FROM ubuntu:22.04
 
-# Set up the application directory
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Node.js, Clang, LLDB, and Python
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    clang \
+    lldb \
+    python3 \
+    python3-lldb \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Verify installations
+RUN clang --version && lldb --version && python3 --version
+
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install
 
-# Copy the rest of the application code
 COPY . .
 
-# Expose the application port
-EXPOSE 3000
+RUN chmod +x src/python/lldb-tracer.py
+RUN mkdir -p temp
 
-# Start the application
+EXPOSE 5000
+
 CMD ["node", "src/server.js"]

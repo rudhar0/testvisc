@@ -1,65 +1,80 @@
 import { v4 as uuidv4 } from 'uuid';
-import { createRedis } from '../config/redis.config.js';
 import securityConfig from '../config/security.config.js';
 import logger from '../utils/logger.js';
 
 class SessionManager {
   constructor() {
-    this.redis = createRedis();
+    this.redis = null;
+    this.inMemoryStore = new Map(); // Fallback for development
     this.prefix = 'session:';
     this.workerSessionIndex = 'worker-session-index:';
+    this.useRedis = false;
+
+    // Try to initialize Redis, fall back to in-memory if it fails
+    this.initializeRedis();
 
     // Periodically run cleanup
     setInterval(this.cleanupExpiredSessions.bind(this), securityConfig.session.ttl * 1000);
     logger.info('SessionManager initialized and cleanup job scheduled.');
   }
 
-  /**
-   * Creates a new session.
-   * @param {string} userId - The ID of the user.
-   * @param {string} codeHash - A hash of the user's code.
-   * @param {string} language - The programming language.
-   * @returns {object} The created session object.
-   */
+  async initializeRedis() {
+    try {
+      const { createRedis } = await import('../config/redis.config.js');
+      this.redis = createRedis();
+      
+      // Test connection
+      await this.redis.ping();
+      this.useRedis = true;
+      logger.info('✅ Redis connected - using Redis for session storage');
+    } catch (error) {
+      logger.warn('⚠️  Redis not available - using in-memory session storage (development mode)');
+      this.useRedis = false;
+    }
+  }
+
   async createSession(userId, codeHash, language) {
     const sessionId = uuidv4();
     const session = {
       sessionId,
       userId,
       workerId: null,
-      status: 'pending', // Status can be: pending, active, recovery, failed
+      status: 'pending',
       createdAt: Date.now(),
       lastActivity: Date.now(),
       codeHash,
       language,
     };
 
-    const sessionKey = `${this.prefix}${sessionId}`;
-    await this.redis.set(sessionKey, JSON.stringify(session), 'EX', securityConfig.session.ttl);
+    if (this.useRedis) {
+      const sessionKey = `${this.prefix}${sessionId}`;
+      await this.redis.set(sessionKey, JSON.stringify(session), 'EX', securityConfig.session.ttl);
+    } else {
+      this.inMemoryStore.set(sessionId, session);
+    }
+    
     logger.info({ sessionId, userId }, 'Session created.');
     return session;
   }
 
-  /**
-   * Retrieves a session by its ID.
-   * @param {string} sessionId - The ID of the session.
-   * @returns {object|null} The session object or null if not found.
-   */
   async getSession(sessionId) {
-    const sessionData = await this.redis.get(`${this.prefix}${sessionId}`);
-    if (!sessionData) {
-      logger.warn({ sessionId }, 'Session not found.');
-      return null;
+    if (this.useRedis) {
+      const sessionData = await this.redis.get(`${this.prefix}${sessionId}`);
+      if (!sessionData) {
+        logger.warn({ sessionId }, 'Session not found.');
+        return null;
+      }
+      return JSON.parse(sessionData);
+    } else {
+      const session = this.inMemoryStore.get(sessionId);
+      if (!session) {
+        logger.warn({ sessionId }, 'Session not found.');
+        return null;
+      }
+      return session;
     }
-    return JSON.parse(sessionData);
   }
 
-  /**
-   * Updates a session.
-   * @param {string} sessionId - The ID of the session.
-   * @param {object} updates - The fields to update.
-   * @returns {object|null} The updated session object.
-   */
   async updateSession(sessionId, updates) {
     const session = await this.getSession(sessionId);
     if (!session) {
@@ -69,76 +84,85 @@ class SessionManager {
     const previousWorkerId = session.workerId;
     const updatedSession = { ...session, ...updates, lastActivity: Date.now() };
 
-    await this.redis.set(`${this.prefix}${sessionId}`, JSON.stringify(updatedSession), 'EX', securityConfig.session.ttl);
-    logger.info({ sessionId, updates }, 'Session updated.');
-
-    // Update worker-session index if workerId changes
-    if (updates.workerId && updates.workerId !== previousWorkerId) {
-      if (previousWorkerId) {
-        await this.redis.del(`${this.workerSessionIndex}${previousWorkerId}`);
+    if (this.useRedis) {
+      await this.redis.set(`${this.prefix}${sessionId}`, JSON.stringify(updatedSession), 'EX', securityConfig.session.ttl);
+      
+      // Update worker-session index if workerId changes
+      if (updates.workerId && updates.workerId !== previousWorkerId) {
+        if (previousWorkerId) {
+          await this.redis.del(`${this.workerSessionIndex}${previousWorkerId}`);
+        }
+        await this.redis.set(`${this.workerSessionIndex}${updates.workerId}`, sessionId);
       }
-      await this.redis.set(`${this.workerSessionIndex}${updates.workerId}`, sessionId);
+    } else {
+      this.inMemoryStore.set(sessionId, updatedSession);
     }
 
+    logger.info({ sessionId, updates }, 'Session updated.');
     return updatedSession;
   }
 
-  /**
-   * Deletes a session.
-   * @param {string} sessionId - The ID of the session.
-   */
   async deleteSession(sessionId) {
-    const session = await this.getSession(sessionId);
-    if (session && session.workerId) {
-      await this.redis.del(`${this.workerSessionIndex}${session.workerId}`);
+    if (this.useRedis) {
+      const session = await this.getSession(sessionId);
+      if (session && session.workerId) {
+        await this.redis.del(`${this.workerSessionIndex}${session.workerId}`);
+      }
+      await this.redis.del(`${this.prefix}${sessionId}`);
+    } else {
+      this.inMemoryStore.delete(sessionId);
     }
-    await this.redis.del(`${this.prefix}${sessionId}`);
+    
     logger.info({ sessionId }, 'Session deleted.');
   }
 
-  /**
-   * Finds a session associated with a worker.
-   * @param {string} workerId - The ID of the worker.
-   * @returns {object|null} The session object or null if not found.
-   */
   async findSessionByWorkerId(workerId) {
-    const sessionId = await this.redis.get(`${this.workerSessionIndex}${workerId}`);
-    if (!sessionId) {
-      logger.warn({ workerId }, 'No session found for this worker.');
+    if (this.useRedis) {
+      const sessionId = await this.redis.get(`${this.workerSessionIndex}${workerId}`);
+      if (!sessionId) {
+        logger.warn({ workerId }, 'No session found for this worker.');
+        return null;
+      }
+      return this.getSession(sessionId);
+    } else {
+      // In-memory: iterate to find
+      for (const [sessionId, session] of this.inMemoryStore.entries()) {
+        if (session.workerId === workerId) {
+          return session;
+        }
+      }
       return null;
     }
-    return this.getSession(sessionId);
   }
 
-  /**
-   * Handles the failure of a worker.
-   * @param {string} workerId - The ID of the failed worker.
-   */
   async handleWorkerFailure(workerId) {
     logger.warn({ workerId }, 'Handling worker failure.');
     const session = await this.findSessionByWorkerId(workerId);
     if (session) {
       logger.info({ sessionId: session.sessionId, workerId }, 'Found session associated with failed worker. Marking for recovery.');
       await this.updateSession(session.sessionId, { workerId: null, status: 'recovery' });
-      // Here you might emit an event to a recovery service or notify the user
     } else {
       logger.warn({ workerId }, 'No active session found for the failed worker.');
     }
-     await this.redis.del(`${this.workerSessionIndex}${workerId}`);
+    
+    if (this.useRedis) {
+      await this.redis.del(`${this.workerSessionIndex}${workerId}`);
+    }
   }
 
-
-  /**
-   * Cleans up expired sessions and related resources.
-   * Redis handles the TTL of the session key automatically.
-   * This method is for cleaning up any other resources associated with sessions.
-   */
   async cleanupExpiredSessions() {
-    logger.info('Running periodic session cleanup...');
-    // In a real implementation, you might scan for sessions that are about to expire
-    // and clean up related resources that are not automatically handled by Redis TTL.
-    // For example, if there were files stored on disk for a session.
-    // For now, we will just log that the job is running.
+    if (!this.useRedis) {
+      // In-memory cleanup
+      const now = Date.now();
+      for (const [sessionId, session] of this.inMemoryStore.entries()) {
+        const age = now - session.lastActivity;
+        if (age > securityConfig.session.ttl * 1000) {
+          this.inMemoryStore.delete(sessionId);
+          logger.info({ sessionId }, 'Cleaned up expired session (in-memory)');
+        }
+      }
+    }
+    // Redis handles TTL automatically
   }
 }
 

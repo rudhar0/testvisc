@@ -27,6 +27,7 @@ export const COLORS = {
       DEFAULT: '#3B82F6',    // Blue - Stack
       light: '#60A5FA',
       dark: '#2563EB',
+      MEMBER: '#60A5FA',     // Lighter blue for members
       rgb: '59, 130, 246'
     },
     heap: {
@@ -40,7 +41,13 @@ export const COLORS = {
       light: '#FBBF24',
       dark: '#D97706',
       rgb: '245, 158, 11'
-    }
+    },
+    class: {
+      DEFAULT: '#8B5CF6',    // Purple
+      light: '#A78BFA',
+      dark: '#7C3AED',
+      rgb: '139, 92, 246'
+    },
   },
 
   // Flow & Control Colors

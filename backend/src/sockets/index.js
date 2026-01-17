@@ -1,27 +1,20 @@
-import GdbDebugger from '../services/gdb-debugger.service.js';
-import DapDebugger from '../services/dap-debugger.service.js';
-import compileService from '../services/compiler.service.js';
-import { chunkService } from '../services/chunk.service.js';
+import hybridDebugger from '../services/hybrid-debugger.service.js';
 import { SOCKET_EVENTS } from '../constants/events.js';
 import inputManagerService from '../services/input-manager.service.js';
 
-console.log('✅ GdbDebugger imported:', typeof GdbDebugger);
-
 /**
- * Setup Socket.io event handlers with GDB Integration
+ * Setup Socket.io event handlers with Hybrid Clang+LLDB Debugger
  */
 export function setupSocketHandlers(io) {
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
 
     // Send initial status
-    const adapterAvailable = !!process.env.DAP_ADAPTER_PATH;
-    const compilerName = adapterAvailable ? 'dap' : 'gdb';
     socket.emit(SOCKET_EVENTS.COMPILER_STATUS, {
-      compiler: compilerName,
+      compiler: 'hybrid-clang-lldb',
       available: true,
       ready: true,
-      message: adapterAvailable ? 'DAP adapter ready' : 'GDB debugger ready'
+      message: 'Hybrid Clang+LLDB debugger ready'
     });
 
     /**
@@ -29,21 +22,19 @@ export function setupSocketHandlers(io) {
      */
     socket.on(SOCKET_EVENTS.COMPILER_STATUS_REQUEST, () => {
       socket.emit(SOCKET_EVENTS.COMPILER_STATUS, {
-        compiler: compilerName,
+        compiler: 'hybrid-clang-lldb',
         available: true,
         ready: true,
-        message: adapterAvailable ? 'DAP adapter ready' : 'GDB debugger ready'
+        message: 'Hybrid Clang+LLDB debugger ready'
       });
     });
 
     /**
-     * Generate execution trace using GDB
+     * Generate execution trace using Hybrid Debugger
      */
     socket.on(SOCKET_EVENTS.CODE_TRACE_GENERATE, async (data) => {
-      let debuggerInstance = null;
-      
       try {
-        const { code, language = 'c', inputs = [] } = data;
+        const { code, language = 'cpp', inputs = [] } = data;
 
         if (!code || !code.trim()) {
           socket.emit(SOCKET_EVENTS.CODE_TRACE_ERROR, {
@@ -54,91 +45,58 @@ export function setupSocketHandlers(io) {
 
         console.log(`📝 Generating trace for ${language.toUpperCase()} code (${code.length} bytes)`);
 
-        // Progress: Starting
+        // Progress: Analyzing
         socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
-          stage: 'initializing',
-          progress: 5
+          stage: 'analyzing',
+          progress: 10,
+          message: 'Analyzing code structure with Clang...'
         });
 
         // Progress: Compiling
         socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
           stage: 'compiling',
-          progress: 15
+          progress: 30,
+          message: 'Compiling code...'
         });
 
-        // Compile code once using shared compiler service
-        const { sourceFile, executable } = await compileService.compile(code, language);
+        // Progress: Debugging
+        socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
+          stage: 'debugging',
+          progress: 50,
+          message: 'Generating execution trace with LLDB...'
+        });
 
-        // Prefer DAP adapter if configured, otherwise fallback to GDB service
-        const dapAdapter = process.env.DAP_ADAPTER_PATH;
-        let trace;
-        if (dapAdapter) {
-          console.log('Using DAP adapter:', dapAdapter);
-          socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, { stage: 'starting_debugger', progress: 30 });
-          const dap = new DapDebugger(dapAdapter);
-          trace = await dap.generateTrace(executable, 500);
-          // ensure adapter cleaned up
-          try { await dap.disconnect(); } catch (e) {}
-        } else {
-          // Fallback to existing GDB debugger instance (uses socket for input)
-          debuggerInstance = new GdbDebugger(socket);
-          // Inject compiled artifacts so GdbDebugger doesn't recompile
-          debuggerInstance.sourceFile = sourceFile;
-          debuggerInstance.executable = executable;
-          debuggerInstance.sourceCode = code;
-          // Let input manager scan code
-          try { debuggerInstance.inputManager.scanCode(code); } catch (e) {}
+        // Generate trace
+        const traceResult = await hybridDebugger.generateTrace(code, language);
 
-          socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, { stage: 'starting_debugger', progress: 30 });
-          await debuggerInstance.start();
-          socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, { stage: 'executing', progress: 50 });
-          trace = await debuggerInstance.generateTrace(inputs);
-        }
-
-        if (!trace || trace.length === 0) {
+        if (!traceResult || !traceResult.steps || traceResult.steps.length === 0) {
           throw new Error('No trace generated - execution may have failed');
         }
 
-        console.log(`✅ Generated ${trace.length} execution steps`);
+        console.log(`✅ Generated ${traceResult.totalSteps} execution steps`);
 
         // Progress: Formatting
         socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
           stage: 'formatting',
-          progress: 80
+          progress: 90,
+          message: 'Formatting trace data...'
         });
 
-        // Format trace for frontend (match expected format)
-        const formattedTrace = {
-          steps: trace,
-          totalSteps: trace.length,
-          globals: extractGlobals(trace),
-          functions: extractFunctions(trace)
-        };
-
-        // Progress: Sending
-        socket.emit(SOCKET_EVENTS.CODE_TRACE_PROGRESS, {
-          stage: 'sending',
-          progress: 90
-        });
-
-        // Send in single chunk (no compression for now)
+        // Send in single chunk
         socket.emit(SOCKET_EVENTS.CODE_TRACE_CHUNK, {
           chunkId: 0,
           totalChunks: 1,
-          steps: formattedTrace.steps,
-          totalSteps: formattedTrace.totalSteps,
-          globals: formattedTrace.globals,
-          functions: formattedTrace.functions,
-          metadata: {
-            compressed: false,
-            debugger: 'gdb'
-          }
+          steps: traceResult.steps,
+          totalSteps: traceResult.totalSteps,
+          globals: traceResult.globals,
+          functions: traceResult.functions,
+          metadata: traceResult.metadata
         });
 
         // Send completion
         socket.emit(SOCKET_EVENTS.CODE_TRACE_COMPLETE, {
           totalChunks: 1,
-          totalSteps: formattedTrace.totalSteps
+          totalSteps: traceResult.totalSteps
         });
 
         console.log(`✅ Trace sent successfully`);
@@ -150,15 +108,6 @@ export function setupSocketHandlers(io) {
           message: error.message || 'Failed to generate trace',
           details: error.stack
         });
-      } finally {
-        // Cleanup
-        if (debuggerInstance) {
-          try {
-            await debuggerInstance.stop();
-          } catch (e) {
-            console.error('Cleanup error:', e);
-          }
-        }
       }
     });
 
@@ -168,8 +117,6 @@ export function setupSocketHandlers(io) {
     socket.on(SOCKET_EVENTS.EXECUTION_INPUT_PROVIDE, (data) => {
       const { values } = data;
       console.log(`📥 Received input:`, values);
-      
-      // Pass the received input to the manager to resolve the pending promise
       inputManagerService.provideInput(values);
     });
 
@@ -178,55 +125,8 @@ export function setupSocketHandlers(io) {
      */
     socket.on('disconnect', () => {
       console.log(`🔌 Client disconnected: ${socket.id}`);
-      chunkService.handleDisconnect(socket.id);
     });
   });
-}
-
-/**
- * Extract global variables from trace
- */
-function extractGlobals(trace) {
-  const globals = [];
-  const seen = new Set();
-
-  for (const step of trace) {
-    if (step.type === 'global_declaration' && step.variable) {
-      if (!seen.has(step.variable)) {
-        globals.push({
-          name: step.variable,
-          type: step.dataType || 'int',
-          value: step.value
-        });
-        seen.add(step.variable);
-      }
-    }
-  }
-
-  return globals;
-}
-
-/**
- * Extract function information from trace
- */
-function extractFunctions(trace) {
-  const functions = [];
-  const seen = new Set();
-
-  for (const step of trace) {
-    if (step.type === 'function_call' && step.function) {
-      if (!seen.has(step.function)) {
-        functions.push({
-          name: step.function,
-          returnType: step.returnType || 'int',
-          line: step.line
-        });
-        seen.add(step.function);
-      }
-    }
-  }
-
-  return functions;
 }
 
 export default setupSocketHandlers;

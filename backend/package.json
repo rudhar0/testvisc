@@ -49,5 +49,10 @@
     "clang-format": "^1.8.0",
     "husky": "^9.1.7",
     "nodemon": "^3.1.0"
+  }, "systemRequirements": {
+    "note": "This application requires clang, lldb, and python3-lldb to be installed",
+    "ubuntu": "sudo apt-get install clang lldb python3 python3-lldb",
+    "macos": "brew install llvm",
+    "docker": "Use provided Dockerfiles which include all dependencies"
   }
 }

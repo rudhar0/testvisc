@@ -79,14 +79,13 @@ export default function VisualizationCanvas() {
 
   // Calculate full layout (all elements up to current step)
   const fullLayout = useMemo(() => {
-    if (!state || executionTrace.length === 0) return null;
+    if (!state || !executionTrace || executionTrace.steps.length === 0) return null;
     
     const layout = LayoutEngine.calculateLayout(
       executionTrace,
       currentStep,
       dimensions.width,
-      dimensions.height,
-      null
+      dimensions.height
     );
     
     return layout;
@@ -633,6 +632,7 @@ export default function VisualizationCanvas() {
             key={id}
             id={id}
             typeName={data?.type || 'class'}
+            objectName={data?.name || ''}
             x={0}
             y={0}
             width={width}
@@ -844,7 +844,7 @@ export default function VisualizationCanvas() {
           fontSize: '14px',
           fontWeight: 600
         }}>
-          Step {currentStep + 1} / {executionTrace.length}
+          Step {currentStep + 1} / {executionTrace.totalSteps}
         </div>
 
         {/* Canvas */}
