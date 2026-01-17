@@ -1,6 +1,7 @@
 /**
- * useSocket Hook - FIXED for GDB backend
- * No decompression needed - GDB sends direct format
+ * useSocket Hook - Refactored for Immutability and Backend Agnosticism
+ * This version ensures safe handling of potentially read-only trace objects from the backend,
+ * normalizes step types and call stacks, and correctly processes variables' birth steps.
  */
 
 import { useEffect, useState, useCallback } from 'react';
@@ -8,29 +9,86 @@ import { socketService, type SocketEventCallback } from '@services/socket.servic
 import { useExecutionStore } from '@store/slices/executionSlice';
 import { useGCCStore } from '@store/slices/gccSlice';
 import toast from 'react-hot-toast';
-import { ExecutionTrace } from '@types/index';
+import { ExecutionTrace, ExecutionStep, Variable } from '@types/index';
+
+// --- HELPER FUNCTIONS ---
+
+/**
+ * Performs a deep clone of a step object to ensure immutability.
+ * WHY: Objects from the backend or state manager (like Zustand) can be frozen (read-only).
+ * Attempting to modify them directly causes runtime errors. Cloning creates a safe, mutable copy.
+ * JSON stringify/parse is a simple and effective method for deep-cloning plain data objects.
+ */
+const cloneStep = (step: ExecutionStep): ExecutionStep => {
+  if (!step) return {} as ExecutionStep;
+  try {
+    return JSON.parse(JSON.stringify(step));
+  } catch (error) {
+    console.error('Failed to clone step:', error, step);
+    return {} as ExecutionStep;
+  }
+};
+
+/**
+ * Normalizes backend step types to a consistent set of semantic types for the frontend.
+ * WHY: This decouples the frontend from specific backend/debugger implementations (LLDB, GDB, etc.),
+ * making the visualizer more robust and adaptable to future backend changes without requiring frontend code modifications.
+ */
+const normalizeStepType = (type: string): string => {
+  if (!type) return 'line_execution';
+  const lowerType = type.toLowerCase();
+
+  const typeMapping: Record<string, string> = {
+    'step_in': 'function_call',
+    'step_out': 'function_return',
+    'variable_declaration': 'variable_declaration',
+    'pointer_declaration': 'variable_declaration',
+    'array_declaration': 'variable_declaration',
+    'assignment': 'assignment',
+    'object_creation': 'object_creation',
+    'object_destruction': 'object_destruction',
+    'line_execution': 'line_execution',
+    'program_start': 'program_start',
+    'program_end': 'program_end',
+  };
+  
+  const normalized = typeMapping[lowerType];
+  if (normalized) {
+    return normalized;
+  }
+
+  console.warn(`Unknown step type: "${type}". Defaulting to "line_execution".`);
+  return 'line_execution';
+};
+
+/**
+ * Ensures a valid call stack exists, providing a default for global scope execution.
+ * WHY: The backend might not send a `callStack` for steps in the global scope (before main).
+ * This function prevents crashes and provides a clear representation for such cases.
+ */
+const normalizeCallStack = (callStack: ExecutionStep['state']['callStack']): NonNullable<ExecutionStep['state']['callStack']> => {
+  if (callStack && callStack.length > 0) {
+    return callStack;
+  }
+  // Provide a default frame to represent the global execution scope.
+  return [{ function: '(global scope)', file: 'unknown', line: 0, locals: {} }];
+};
+
 
 export function useSocket() {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
 
-  // Store actions
   const { setTrace, setAnalysisProgress, setAnalyzing } = useExecutionStore();
   const { setGCCStatus } = useGCCStore();
 
-  /**
-   * Connect to Socket.io server
-   */
   const connect = useCallback(async () => {
     if (isConnected || isConnecting) return;
-
     setIsConnecting(true);
-    
     try {
       await socketService.connect();
       setIsConnected(true);
       toast.success('Connected to server');
-      
       socketService.requestCompilerStatus();
     } catch (error) {
       console.error('Failed to connect:', error);
@@ -41,43 +99,28 @@ export function useSocket() {
     }
   }, [isConnected, isConnecting]);
 
-  /**
-   * Disconnect
-   */
   const disconnect = useCallback(() => {
     socketService.disconnect();
     setIsConnected(false);
     toast.success('Disconnected from server');
   }, []);
 
-  /**
-   * Setup event listeners
-   */
   useEffect(() => {
-    const handleConnectionState: SocketEventCallback = (data) => {
-      setIsConnected(data.connected);
-    };
-
-    const handleGCCStatus: SocketEventCallback = (data) => {
-      setGCCStatus(data);
-    };
-
+    const handleConnectionState: SocketEventCallback = (data) => setIsConnected(data.connected);
+    const handleGCCStatus: SocketEventCallback = (data) => setGCCStatus(data);
     const handleSyntaxError: SocketEventCallback = (data) => {
       const errorMessage = Array.isArray(data.errors)
         ? data.errors.map((e: any) => (typeof e === 'string' ? e : e.message)).join('; ')
         : data.message || 'Syntax error';
-      
       toast.error(`Error: ${errorMessage}`);
       setAnalyzing(false);
     };
-
     const handleTraceProgress: SocketEventCallback = (data) => {
       console.log(`📊 Progress: ${data.stage} - ${data.progress}%`);
       setAnalysisProgress(data.progress, data.stage);
     };
 
     let receivedChunks: any[] = [];
-    
     const handleTraceChunk: SocketEventCallback = (chunk) => {
       console.log(`📦 Chunk ${chunk.chunkId + 1}/${chunk.totalChunks}: ${chunk.steps?.length || 0} steps`);
       receivedChunks.push(chunk);
@@ -87,54 +130,98 @@ export function useSocket() {
       console.log(`✅ Trace complete: ${data.totalSteps} total steps`);
       
       try {
-        // With the new backend, the entire trace might come in a single chunk.
-        // Or it might be sent on the 'data' of the complete event.
-        // For now, we assume it's in chunks.
         if (receivedChunks.length === 0) {
-          // Fallback for if the trace is sent in the complete event data
-           if (data && data.steps) {
-             receivedChunks.push(data);
-           } else {
+          if (data && data.steps) {
+            receivedChunks.push(data);
+          } else {
             throw new Error('No trace data received');
-           }
+          }
         }
 
-        // The new backend sends a single trace object, so we get it from the first chunk.
-        const traceData: ExecutionTrace = receivedChunks[0];
+        const allSteps: ExecutionStep[] = receivedChunks.flatMap(chunk => chunk.steps || []);
+        if (allSteps.length === 0) {
+          throw new Error('No steps found in received trace data.');
+        }
 
-        const allSteps = traceData.steps || [];
-        const globals = traceData.globals || [];
-        const functions = traceData.functions || [];
-        const metadata = traceData.metadata;
+        // --- IMMUTABLE TRACE PROCESSING ---
 
-        // Validate steps - new backend has steps without state, so we relax the validation.
-        // A valid step must have an id and a type.
-        const validSteps = allSteps.filter(step => 
-          step && 
-          typeof step.id === 'number' && 
-          step.type
-        );
+        // Pass 1: Find the birth step for every unique variable name.
+        // This is done first to avoid stateful checks inside the main mapping function.
+        const variableBirthStepMap = new Map<string, number>();
+        allSteps.forEach((step, index) => {
+          const findBirths = (variables: Record<string, Variable> | Variable[] | undefined) => {
+            if (!variables) return;
+            const varList = Array.isArray(variables) ? variables : Object.values(variables);
+            for (const variable of varList) {
+              if (variable && variable.name && !variableBirthStepMap.has(variable.name)) {
+                variableBirthStepMap.set(variable.name, index);
+              }
+            }
+          };
+          step.state?.callStack?.forEach(frame => findBirths(frame.locals));
+          findBirths(step.state?.globals);
+        });
 
+        // Pass 2: Create the new, processed steps immutably.
+        const processedSteps = allSteps.map((originalStep: ExecutionStep) => {
+          // WHY: DEEP CLONE FIRST. The originalStep is potentially read-only.
+          // All modifications MUST be on a deep copy to prevent runtime errors.
+          const step = cloneStep(originalStep);
+
+          // Normalize the step type and call stack for frontend consistency.
+          step.type = normalizeStepType(step.type);
+          if (!step.state) step.state = { callStack: [], globals: {}, heap: {}, stack: [] };
+          step.state.callStack = normalizeCallStack(step.state.callStack);
+
+          // Safely assign birth steps using the pre-computed map.
+          const assignBirths = (variables: Record<string, Variable> | Variable[] | undefined) => {
+            if (!variables) return;
+            const varList = Array.isArray(variables) ? variables : Object.values(variables);
+            for (const variable of varList) {
+              if (variable && variable.name && variableBirthStepMap.has(variable.name)) {
+                // This mutation is SAFE because `step` is a deep clone.
+                variable.birthStep = variableBirthStepMap.get(variable.name);
+              }
+            }
+          };
+          
+          step.state.callStack.forEach(frame => {
+            // Handle legacy array-based locals format for backward compatibility.
+            if (Array.isArray(frame.locals)) {
+              const localsObj: Record<string, Variable> = {};
+              frame.locals.forEach((v: any) => { if(v.name) localsObj[v.name] = v; });
+              frame.locals = localsObj;
+            }
+            assignBirths(frame.locals);
+          });
+          assignBirths(step.state.globals);
+
+          return step;
+        });
+
+        const validSteps = processedSteps.filter(step => step && typeof step.id === 'number' && step.type);
         if (validSteps.length === 0) {
-          throw new Error('No valid steps in trace - execution may have failed or code is empty.');
+          throw new Error('No valid steps after processing - execution may have failed.');
         }
 
         console.log(`✅ Processed ${validSteps.length} valid steps`);
         console.log('📋 First step:', validSteps[0]);
-        console.log('📋 Last step:', validSteps[validSteps.length - 1]);
+        const stepTypes = validSteps.reduce((acc: Record<string, number>, step: ExecutionStep) => {
+          acc[step.type] = (acc[step.type] || 0) + 1;
+          return acc;
+        }, {});
+        console.log('📊 Step type distribution:', stepTypes);
 
-        // Set trace in the store
         setTrace({
           steps: validSteps,
           totalSteps: validSteps.length,
-          globals,
-          functions,
-          metadata
+          globals: receivedChunks[0]?.globals || [],
+          functions: receivedChunks[0]?.functions || [],
+          metadata: receivedChunks[0]?.metadata
         });
         
         setAnalyzing(false);
         toast.success(`✅ Generated ${validSteps.length} execution steps`);
-        
         receivedChunks = [];
       } catch (error: any) {
         console.error('❌ Failed to process trace:', error);
@@ -152,10 +239,8 @@ export function useSocket() {
 
     const handleInputRequired: SocketEventCallback = (data) => {
       console.log('📥 Input required:', data);
-      // Input will be handled by VisualizationCanvas component
     };
 
-    // Register listeners
     socketService.on('connection:state', handleConnectionState);
     socketService.on('compiler:status', handleGCCStatus);
     socketService.on('code:syntax:error', handleSyntaxError);
@@ -165,7 +250,6 @@ export function useSocket() {
     socketService.on('code:trace:error', handleTraceError);
     socketService.on('execution:input_required', handleInputRequired);
 
-    // Cleanup
     return () => {
       socketService.off('connection:state', handleConnectionState);
       socketService.off('compiler:status', handleGCCStatus);
@@ -178,15 +262,11 @@ export function useSocket() {
     };
   }, [setTrace, setAnalyzing, setAnalysisProgress, setGCCStatus]);
 
-  /**
-   * Generate execution trace
-   */
   const generateTrace = useCallback((code: string, language: string) => {
     if (!isConnected) {
       toast.error('Not connected to server');
       return;
     }
-
     console.log('🚀 Requesting trace generation...');
     setAnalyzing(true);
     socketService.generateTrace(code, language);
