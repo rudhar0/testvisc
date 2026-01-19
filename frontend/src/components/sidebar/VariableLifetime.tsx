@@ -24,14 +24,16 @@ export default function VariableLifetime() {
   let stackDepth = 0;
 
   executionTrace.forEach((step, index) => {
-    if (step.type === 'function_call') stackDepth++;
+    // Handle both legacy 'function_call' and new 'func_enter'
+    if (step.type === 'function_call' || step.type === 'func_enter') stackDepth++;
 
-    if (step.type === 'variable_declaration' || step.type === 'global_declaration') {
-      const varName = (step as any).variable;
-      const varType = (step as any).dataType;
+    // Handle variable creation from both old and new backends
+    if (step.type === 'variable_declaration' || step.type === 'global_declaration' || step.type === 'var') {
+      const varName = (step as any).variable || (step as any).name;
+      const varType = (step as any).dataType || (step as any).varType;
       const scope = step.type === 'global_declaration' ? 'global' : 'local';
       
-      if (!variables.has(varName)) {
+      if (varName && !variables.has(varName)) {
         variables.set(varName, {
           name: varName,
           type: varType,
@@ -44,8 +46,8 @@ export default function VariableLifetime() {
       }
     }
     
-    // Detect variable death (function return for locals)
-    if (step.type === 'function_return') {
+    // Detect variable death from both legacy 'function_return' and new 'func_exit'
+    if (step.type === 'function_return' || step.type === 'func_exit') {
       variables.forEach((v, name) => {
         // Only kill locals at the current stack depth
         if (v.scope === 'local' && v.deathStep === null && v.depth === stackDepth) {

@@ -1,18 +1,14 @@
-# Base image with Clang, LLDB, and Python
+# ✅ NEW - Updated Dockerfile without Python/LLDB
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install all required tools
+# Install only what we need: GCC, Node.js, binutils
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
     g++ \
-    clang \
-    lldb \
-    python3 \
-    python3-pip \
-    python3-lldb \
+    binutils \
     nodejs \
     npm \
     curl \
@@ -20,9 +16,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify installations
-RUN clang --version && \
-    lldb --version && \
-    python3 --version && \
+RUN gcc --version && \
+    g++ --version && \
+    addr2line --version && \
     node --version
 
 # Set up the application directory
@@ -37,11 +33,8 @@ RUN npm install
 # Copy the rest of the application
 COPY . .
 
-# Make Python script executable
-RUN chmod +x src/python/lldb-tracer.py
-
-# Create temp directory
-RUN mkdir -p temp
+# Create temp directory with proper permissions
+RUN mkdir -p temp && chmod 755 temp
 
 # Expose port
 EXPOSE 5000

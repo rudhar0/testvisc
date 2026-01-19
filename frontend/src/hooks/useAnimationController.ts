@@ -63,8 +63,161 @@ export const useAnimationController = (stage: Konva.Stage | null) => {
 
     console.log(`[AnimationController] Processing step ${currentStep}:`, currentExecutionStep.type);
 
-    // New logic: switch based on the step type
+    // =========================================================================
+    // BACKEND COMPATIBILITY LAYER (2026-01-18)
+    // Maps new instrumentation backend types to animation actions
+    // =========================================================================
+    // Backend type → Animation action mapping:
+    //   func_enter  → stack frame push (visual call stack)
+    //   func_exit   → stack frame pop
+    //   var         → variable highlight + value transition
+    //   heap_alloc  → heap memory grow
+    //   heap_free   → heap memory shrink
+    //   program_end → execution complete
+    // =========================================================================
+
     switch (currentExecutionStep.type) {
+      // =====================================================================
+      // NEW BACKEND TYPES (from instrumentation tracer)
+      // =====================================================================
+
+      // func_enter: Function entry (stack frame push animation)
+      case 'func_enter': {
+        const funcName = currentExecutionStep.function;
+        if (funcName) {
+          console.log(`[AnimationController] Stack PUSH: ${funcName}()`);
+          const frameId = `frame-${funcName}`;
+          animations.push({
+            type: 'function_call',
+            target: frameId,
+            duration: 600,
+          });
+        }
+        break;
+      }
+
+      // func_exit: Function exit (stack frame pop animation)
+      case 'func_exit': {
+        const funcName = currentExecutionStep.function;
+        if (funcName) {
+          console.log(`[AnimationController] Stack POP: ${funcName}()`);
+          const frameId = `frame-${funcName}`;
+          animations.push({
+            type: 'function_return',
+            target: frameId,
+            duration: 600,
+          });
+        }
+        break;
+      }
+
+      // var: Variable trace (assignment/update animation)
+      case 'var': {
+        const varName = currentExecutionStep.name;
+        if (varName && previousState && currentState) {
+          const updatedVar = findVarInState(currentState, varName);
+          const previousVar = findVarInState(previousState, varName);
+
+          if (updatedVar) {
+            // If this is first appearance, treat as creation
+            if (!previousVar) {
+              console.log(`[AnimationController] Variable created: ${varName} = ${updatedVar.value}`);
+              animations.push({
+                type: 'variable_create',
+                target: `var-${updatedVar.address}`,
+                duration: 500,
+              } as VariableCreateAnimation);
+            } 
+            // Otherwise, it's an update
+            else if (JSON.stringify(updatedVar.value) !== JSON.stringify(previousVar.value)) {
+              console.log(`[AnimationController] Variable updated: ${varName} → ${updatedVar.value}`);
+              const varBoxGroup = stage.findOne<Konva.Group>(`#var-${updatedVar.address}`);
+              if (varBoxGroup) {
+                const valueTextNode = varBoxGroup.findOne<Konva.Text>('.variable-value');
+                const backgroundRect = varBoxGroup.findOne<Konva.Rect>('.box-bg');
+                if (valueTextNode && backgroundRect) {
+                  animations.push({
+                    type: 'variable_update',
+                    target: `var-${updatedVar.address}`,
+                    duration: 1000,
+                    from: previousVar.value,
+                    to: updatedVar.value,
+                    konvaContainer: varBoxGroup,
+                    valueTextNode: valueTextNode,
+                    backgroundRect: backgroundRect,
+                  } as VariableUpdateAnimation);
+                }
+              }
+            } else {
+              // Value didn't change but variable was traced → highlight access
+              console.log(`[AnimationController] Variable accessed: ${varName}`);
+              animations.push({
+                type: 'variable_access',
+                target: `var-${updatedVar.address}`,
+                duration: 300,
+              });
+            }
+          }
+        }
+        break;
+      }
+
+      // heap_alloc: Heap allocation animation
+      case 'heap_alloc': {
+        const address = currentExecutionStep.addr;
+        if (address) {
+          console.log(`[AnimationController] Heap allocated at: ${address}`);
+          animations.push({
+            type: 'memory_allocation',
+            target: `heap-${address}`,
+            duration: 500,
+          });
+        }
+        break;
+      }
+
+      // heap_free: Heap deallocation (memory shrink)
+      case 'heap_free': {
+        const address = currentExecutionStep.addr;
+        if (address) {
+          console.log(`[AnimationController] Heap freed at: ${address}`);
+          animations.push({
+            type: 'element_destroy',
+            target: `heap-${address}`,
+            duration: 500,
+          } as ElementDestroyAnimation);
+        }
+        break;
+      }
+
+      // program_end: Execution complete (no animation needed, just log)
+      case 'program_end': {
+        console.log(`[AnimationController] Program execution completed`);
+        break;
+      }
+
+      // =====================================================================
+      // OUTPUT / STDOUT EVENTS (print, cout, puts, printf, fprintf, etc.)
+      // =====================================================================
+      case 'output': {
+        const outputText = currentExecutionStep.value || (currentExecutionStep as any).stdout;
+        if (outputText) {
+          console.log(`[Program Output] ${outputText}`);
+          animations.push({
+            type: 'output_display',
+            target: 'output-console',
+            duration: 1500, // Visible for 1.5 seconds
+            text: String(outputText),
+            id: `output-${currentStep}`,
+          });
+        }
+        break;
+      }
+
+      // =====================================================================
+      // LEGACY FRONTEND TYPES (for backward compatibility)
+      // =====================================================================
+
       case 'variable_declaration':
       case 'object_creation':
       case 'pointer_declaration':
@@ -73,7 +226,7 @@ export const useAnimationController = (stage: Konva.Stage | null) => {
         if (varName) {
           const newVar = findVarInState(currentState, varName);
           if (newVar) {
-            console.log(`[AnimationController] Detected creation: ${varName}`);
+            console.log(`[AnimationController] Variable declared: ${varName}`);
             animations.push({
               type: 'variable_create',
               target: `var-${newVar.address}`,
@@ -91,7 +244,7 @@ export const useAnimationController = (stage: Konva.Stage | null) => {
           const previousVar = findVarInState(previousState, varName);
 
           if (updatedVar && previousVar && JSON.stringify(updatedVar.value) !== JSON.stringify(previousVar.value)) {
-            console.log(`[AnimationController] Detected update: ${varName}`);
+            console.log(`[AnimationController] Variable assigned: ${varName}`);
             const varBoxGroup = stage.findOne<Konva.Group>(`#var-${updatedVar.address}`);
             if (varBoxGroup) {
               const valueTextNode = varBoxGroup.findOne<Konva.Text>('.variable-value');
@@ -114,15 +267,13 @@ export const useAnimationController = (stage: Konva.Stage | null) => {
         break;
       }
       
-      case 'object_destruction':
-      case 'heap_free': {
+      case 'object_destruction': {
         const address = currentExecutionStep.address;
         if (address) {
-          const id = currentExecutionStep.type === 'heap_free' ? `heap-${address}`: `var-${address}`;
-          console.log(`[AnimationController] Detected destruction for ${id}`);
+          console.log(`[AnimationController] Object destructed at: ${address}`);
           animations.push({
             type: 'element_destroy',
-            target: id,
+            target: `var-${address}`,
             duration: 500,
           } as ElementDestroyAnimation);
         }
@@ -134,7 +285,7 @@ export const useAnimationController = (stage: Konva.Stage | null) => {
         if (varName) {
             const ptrVar = findVarInState(currentState, varName);
             if(ptrVar) {
-                console.log(`[AnimationController] Detected pointer dereference: ${varName}`);
+                console.log(`[AnimationController] Pointer dereferenced: ${varName}`);
                 animations.push({
                     type: 'variable_access',
                     target: `var-${ptrVar.address}`,
@@ -148,9 +299,7 @@ export const useAnimationController = (stage: Konva.Stage | null) => {
       case 'function_call': {
         const funcName = currentExecutionStep.function;
         if (funcName) {
-            console.log(`[AnimationController] Detected function call: ${funcName}`);
-            // Assuming the new stack frame has an ID related to the function name.
-            // This might need adjustment based on the rendering logic.
+            console.log(`[AnimationController] Function call: ${funcName}`);
             const frameId = `frame-${funcName}`;
             animations.push({
                 type: 'function_call',
@@ -164,7 +313,7 @@ export const useAnimationController = (stage: Konva.Stage | null) => {
       case 'function_return': {
         const funcName = currentExecutionStep.function;
         if (funcName) {
-            console.log(`[AnimationController] Detected function return: ${funcName}`);
+            console.log(`[AnimationController] Function return: ${funcName}`);
             const frameId = `frame-${funcName}`;
             animations.push({
                 type: 'function_return',
@@ -178,7 +327,7 @@ export const useAnimationController = (stage: Konva.Stage | null) => {
       case 'heap_allocation': {
         const address = currentExecutionStep.address;
         if (address) {
-            console.log(`[AnimationController] Detected heap allocation at: ${address}`);
+            console.log(`[AnimationController] Heap allocated: ${address}`);
             animations.push({
                 type: 'memory_allocation',
                 target: `heap-${address}`,
@@ -193,28 +342,30 @@ export const useAnimationController = (stage: Konva.Stage | null) => {
       case 'loop_end':
       case 'conditional_start':
       case 'conditional_branch':
-        // For line-based events, we can trigger a line execution animation.
-        // The target would be the ID of the line in the code editor component.
-        // This requires coordination with the editor component, which is outside of the canvas.
-        // For now, we just log it.
-        console.log(`[AnimationController] Line execution event: ${currentExecutionStep.type} at line ${currentExecutionStep.line}`);
+        console.log(`[AnimationController] Line event: ${currentExecutionStep.type} @ L${currentExecutionStep.line}`);
         break;
 
-      case 'output':
-        console.log(`[Program Output] ${currentExecutionStep.value}`);
+      case 'output': {
+        const outputText = currentExecutionStep.value;
+        if (typeof outputText === 'string') {
+          console.log(`[Program Output] ${outputText}`);
+          animations.push({
+            type: 'output_display',
+            target: 'overlay',
+            duration: 1500, // Make it visible for a bit
+            text: outputText,
+            id: `output-${currentStep}`, // Unique ID for the animation element
+          });
+        }
         break;
+      }
 
       case 'input_request':
-      case 'program_end':
-        // These events do not have visual animations on the canvas.
-        console.log(`[AnimationController] Non-visual event: ${currentExecutionStep.type}`);
+        console.log(`[Input Request]`, currentExecutionStep);
         break;
 
       default:
-        // This is a safety net for any unhandled step types.
-        // The `currentExecutionStep.type` should be narrowed by the switch, but TS might complain.
-        const unhandled: never = currentExecutionStep.type;
-        console.warn(`[AnimationController] Unknown or unhandled step type: ${unhandled}`);
+        console.warn(`[AnimationController] Unknown step type: "${currentExecutionStep.type}". Skipping animation.`);
     }
 
     if (animations.length > 0) {

@@ -5,6 +5,10 @@
 export type StepType =
   | 'program_start'
   | 'global_declaration'
+  | 'func_enter' // New
+  | 'func_exit' // New
+  | 'var' // New
+  | 'heap_alloc' // New
   | 'function_call'
   | 'function_return'
   | 'variable_declaration'
@@ -180,6 +184,7 @@ export type AnimationType =
   | 'loop_indicator'
   | 'loop_cycle'
   | 'input_dialog'
+  | 'output_display' // New
   | 'program_complete';
 
 export interface AnimationConfig {
