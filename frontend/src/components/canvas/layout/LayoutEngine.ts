@@ -3,6 +3,7 @@
  * 
  * Processes execution steps to generate a visual layout for rendering.
  * Supports C++ features like classes, objects, and pointers.
+ * ✅ UPDATED: Supports beginner-mode declare/assign events
  */
 
 import { 
@@ -25,7 +26,7 @@ export interface LayoutElement {
   parentId?: string;
   children?: LayoutElement[];
   data?: any;
-  stepId?: number; // The step when this element was FIRST CREATED
+  stepId?: number;
   metadata?: {
     isMultiple?: boolean;
     relatedElements?: string[];
@@ -79,19 +80,152 @@ export class LayoutEngine {
       this.processStep(step, layout, i);
     }
     
-    // Final pass to update data for all visible elements at the current step
     this.updateAllElementsToCurrentState(executionTrace.steps[currentStepIndex], layout);
-
     this.updateContainerHeights(layout);
 
     return layout;
   }
 
   private static processStep(step: ExecutionStep, layout: Layout, stepIndex: number): void {
-    const { type, state, id } = step;
+    // The backend may send the step type under the legacy `type` field or the newer
+    // `eventType` field (used for beginner‑mode declare/assign events). We fall
+    // back to `type` when `eventType` is undefined to maintain compatibility with
+    // existing traces.
+    const stepType: string = (step as any).eventType || (step as any).type;
+    const { state, id } = step;
     const currentParent = this.parentStack[this.parentStack.length - 1];
 
-    switch (type) {
+    switch (stepType) {
+      // ✅ NEW: Handle beginner-mode DECLARE events
+      case 'declare': {
+        if (!step.name) break;
+
+        const varId = `var-${currentParent.id}-${step.name}`;
+        
+        // Don't create duplicate
+        if (this.elementHistory.has(varId)) break;
+
+        console.log(`[LayoutEngine] Step ${stepIndex}: Declaring variable '${step.name}' (${step.varType})`);
+
+        const variable: any = {
+          name: step.name,
+          value: null, // Not initialized yet
+          type: step.varType || 'int',
+          primitive: step.varType || 'int',
+          address: step.addr || '0x0',
+          scope: 'local',
+          isInitialized: false,
+          isAlive: true,
+          birthStep: stepIndex,
+        };
+
+        const varElement: LayoutElement = {
+          id: varId,
+          type: 'variable',
+          subtype: 'variable_declaration',
+          x: currentParent.x + INDENT_SIZE,
+          y: this.getNextCursorY(currentParent),
+          width: currentParent.width - (INDENT_SIZE * 2),
+          height: 70,
+          parentId: currentParent.id,
+          stepId: stepIndex,
+          data: variable,
+        };
+
+        currentParent.children!.push(varElement);
+        layout.elements.push(varElement);
+        this.elementHistory.set(varId, varElement);
+        this.createdInStep.set(varId, stepIndex);
+        break;
+      }
+
+      // ✅ NEW: Handle beginner-mode ASSIGN events
+      case 'assign': {
+        if (!step.name) break;
+
+        const varId = `var-${currentParent.id}-${step.name}`;
+        
+        if (this.elementHistory.has(varId)) {
+          // UPDATE existing variable
+          const existingElement = this.elementHistory.get(varId)!;
+          existingElement.data = {
+            ...existingElement.data,
+            value: step.value,
+            isInitialized: true,
+          };
+          existingElement.metadata = {
+            ...(existingElement.metadata || {}),
+            updatedStep: stepIndex,
+          };
+          console.log(`[LayoutEngine] Step ${stepIndex}: Assigned ${step.name} = ${step.value}`);
+        } else {
+          // CREATE variable if it doesn't exist (declaration was missed)
+          console.log(`[LayoutEngine] Step ${stepIndex}: Creating variable '${step.name}' during assignment`);
+          
+          const variable: any = {
+            name: step.name,
+            value: step.value,
+            type: 'int',
+            primitive: 'int',
+            address: step.addr || '0x0',
+            scope: 'local',
+            isInitialized: true,
+            isAlive: true,
+            birthStep: stepIndex,
+          };
+
+          const varElement: LayoutElement = {
+            id: varId,
+            type: 'variable',
+            subtype: 'variable_initialization',
+            x: currentParent.x + INDENT_SIZE,
+            y: this.getNextCursorY(currentParent),
+            width: currentParent.width - (INDENT_SIZE * 2),
+            height: 70,
+            parentId: currentParent.id,
+            stepId: stepIndex,
+            data: variable,
+          };
+
+          currentParent.children!.push(varElement);
+          layout.elements.push(varElement);
+          this.elementHistory.set(varId, varElement);
+          this.createdInStep.set(varId, stepIndex);
+        }
+        break;
+      }
+
+      // ✅ NEW: Handle OUTPUT events
+      case 'output': {
+        const outputId = `output-${stepIndex}`;
+        
+        if (this.elementHistory.has(outputId)) break;
+
+        console.log(`[LayoutEngine] Step ${stepIndex}: Output event - ${step.text || step.rawText}`);
+
+        const outputElement: LayoutElement = {
+          id: outputId,
+          type: 'output',
+          x: currentParent.x + INDENT_SIZE,
+          y: this.getNextCursorY(currentParent),
+          width: currentParent.width - (INDENT_SIZE * 2),
+          height: 60,
+          parentId: currentParent.id,
+          stepId: stepIndex,
+          data: {
+            text: step.text || step.rawText,
+            rawText: step.rawText,
+            escapeInfo: step.escapeInfo || [],
+          },
+        };
+
+        currentParent.children!.push(outputElement);
+        layout.elements.push(outputElement);
+        this.elementHistory.set(outputId, outputElement);
+        this.createdInStep.set(outputId, stepIndex);
+        break;
+      }
+
       case 'object_creation': {
         if (step.birthStep && step.birthStep > stepIndex) return;
 
@@ -105,7 +239,7 @@ export class LayoutEngine {
           x: currentParent.x + INDENT_SIZE,
           y: this.getNextCursorY(currentParent),
           width: currentParent.width - (INDENT_SIZE * 2),
-          height: 80, // initial height
+          height: 80,
           parentId: currentParent.id,
           stepId: stepIndex,
           data: {
@@ -156,12 +290,11 @@ export class LayoutEngine {
 
         Object.values(frame.locals).forEach((variable: Variable) => {
           if (variable.birthStep !== undefined && variable.birthStep > stepIndex) return;
-          if (variable.birthStep !== stepIndex) return; // Process declaration only at birth step
+          if (variable.birthStep !== stepIndex) return;
 
           const varId = `var-${variable.address}`;
           if (this.elementHistory.has(varId)) return;
           
-          // Defer class creation to object_creation step
           if (variable.primitive === 'class' || variable.primitive === 'struct') return;
 
           const varElement: LayoutElement = {
@@ -185,38 +318,30 @@ export class LayoutEngine {
         break;
       }
 
-      // NEW: Handle primitive variable events emitted as type 'var' or direct primitive types (int, double, etc.)
-      // These steps contain name, value, addr and originalEventType (primitive type)
       case 'var':
       case 'int':
       case 'double':
       case 'float':
       case 'char':
       case 'bool': {
-        // Ensure we have a name to display
         if (!step.name) break;
 
-        // For direct primitive types, set originalEventType so later logic knows the type
         if (step.type && step.type !== 'var') {
           (step as any).originalEventType = step.type;
         }
 
         const primitiveType = (step as any).originalEventType || 'int';
         const parentId = currentParent.id;
-        const varId = `var-${parentId}-${step.name}`; // ID based on parent and name
+        const varId = `var-${parentId}-${step.name}`;
 
         if (this.elementHistory.has(varId)) {
-          // UPDATE: Variable already exists – update its data in place.
           const existingElement = this.elementHistory.get(varId)!;
-          // Update the stored value and optionally mark as updated for rendering.
           existingElement.data = { ...existingElement.data, value: step.value };
-          // Store metadata indicating an update occurred at this step.
           existingElement.metadata = {
             ...(existingElement.metadata || {}),
             updatedStep: stepIndex,
           };
         } else {
-          // CREATE: The variable does not exist yet.
           const variable: any = {
             name: step.name,
             value: step.value,
@@ -254,7 +379,6 @@ export class LayoutEngine {
         if (!state?.callStack || state.callStack.length === 0) break;
         const frame = state.callStack[0];
         
-        // Check if we are entering a new function
         const parentFrame = this.parentStack[this.parentStack.length - 1];
         if (parentFrame.data?.function === frame.function) break;
         
@@ -283,26 +407,30 @@ export class LayoutEngine {
       }
       
       case 'function_return': {
-        // Pop if not in main
         if (this.parentStack.length > 1) {
           this.parentStack.pop();
         }
         break;
       }
 
-      // --- Add other new cases here ---
+      case 'program_start':
+        console.log(`[LayoutEngine] Step ${stepIndex}: Program started`);
+        break;
+
+      case 'program_end':
+        console.log(`[LayoutEngine] Step ${stepIndex}: Program ended`);
+        break;
+
       case 'object_destruction':
         console.log(`[LayoutEngine] Step ${stepIndex}: object_destruction not yet implemented visually.`);
         break;
+        
       case 'line_execution':
-        // This usually doesn't create a new element, just highlights a line of code.
         break;
+        
       case 'pointer_deref':
         console.log(`[LayoutEngine] Step ${stepIndex}: pointer_deref needs visual representation.`);
         break;
-
-      // NOTE: Other cases from the old implementation can be brought here and adapted as needed.
-      // For now, focusing on the core new requirements.
     }
 
     if (state?.globals) {
@@ -316,7 +444,6 @@ export class LayoutEngine {
       const { callStack, globals } = currentStep.state;
       const allLocals: Record<string, Variable> = {};
       
-      // Flatten all locals from the call stack for easy lookup
       callStack.forEach(frame => {
           Object.assign(allLocals, frame.locals);
       });

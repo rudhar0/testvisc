@@ -1,5 +1,5 @@
 // src/services/instrumentation-tracer.service.js
-// ENHANCED VERSION with step filtering and output tracking
+// ENHANCED VERSION with beginner mode + output step tracking
 import { spawn } from 'child_process';
 import { writeFile, readFile, unlink, mkdir, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 
 class InstrumentationTracer {
     constructor() {
-        this.tempDir    = path.join(process.cwd(), 'temp');
+        this.tempDir = path.join(process.cwd(), 'temp');
         this.tracerCpp = path.join(process.cwd(), 'src', 'cpp', 'tracer.cpp');
         this.traceHeader = path.join(process.cwd(), 'src', 'cpp', 'trace.h');
         this.ensureTempDir();
@@ -25,16 +25,13 @@ class InstrumentationTracer {
         }
     }
 
-    /* --------------------------------------------------------------
-       Resolve an address to file/line using addr2line (POSIX only)
-       -------------------------------------------------------------- */
     async getLineInfo(executable, address) {
         return new Promise((resolve) => {
             const proc = spawn('addr2line', [
                 '-e', executable,
-                '-f',          // function name
-                '-C',          // demangle C++
-                '-i',          // inline frames
+                '-f',
+                '-C',
+                '-i',
                 address
             ]);
 
@@ -62,21 +59,13 @@ class InstrumentationTracer {
         });
     }
 
-    /* --------------------------------------------------------------
-       ✅ IMPROVED: Smart filtering based on source file origin
-       
-       STRATEGY: Only show events from USER source files, filter everything else
-       This is more reliable than function name matching
-       -------------------------------------------------------------- */
     shouldFilterEvent(info, event, userSourceFile) {
         const { file, function: fn, line } = info;
         
-        // ❌ Filter: No valid source location
         if (!file || line === 0 || file === 'unknown' || file === '??') {
             return true;
         }
         
-        // ❌ Filter: System paths (absolute paths outside project)
         if (process.platform !== 'win32') {
             if (file.startsWith('/usr/') || 
                 file.startsWith('/lib/') ||
@@ -85,7 +74,6 @@ class InstrumentationTracer {
                 return true;
             }
         } else {
-            // Windows: Filter MinGW system includes
             if (file.includes('mingw') || 
                 file.includes('include\\c++') ||
                 file.includes('lib\\gcc')) {
@@ -93,14 +81,12 @@ class InstrumentationTracer {
             }
         }
         
-        // ✅ BEST PRACTICE: Keep if it's from user's source file
         const userBasename = path.basename(userSourceFile);
         const eventBasename = path.basename(file);
         if (eventBasename === userBasename) {
-            return false; // KEEP user code
+            return false;
         }
         
-        // ❌ Filter: Compiler-generated or STL code
         if (file.includes('stl_') || 
             file.includes('bits/') ||
             file.includes('iostream') ||
@@ -109,7 +95,6 @@ class InstrumentationTracer {
             return true;
         }
         
-        // ❌ Filter: Known internal functions (last resort)
         const internalPrefixes = [
             '__', '_IO_', '_M_', 'std::__', 
             'std::basic_', 'std::char_traits',
@@ -120,212 +105,115 @@ class InstrumentationTracer {
             return true;
         }
         
-        // ✅ KEEP: Everything else (user code, user headers, etc.)
         return false;
     }
 
-    /* \u2705 NEW: Helper to group consecutive events at same source location
-       
-       Returns events grouped by (file:line) so we can show ONE step per line
-       and collapse internal STL/IO operations into internalEvents.
-       -------------------------------------------------------------- */
-    groupEventsByLocation(events, executable, userSourceFile) {
-        const groups = [];
-        let currentGroup = null;
-        let currentLocation = null;
+    /**
+     * ✅ NEW: Parse escape sequences in output text
+     */
+    parseEscapeSequences(text) {
+        const escapes = [];
+        const escapeMap = {
+            '\\n': { char: '\\n', meaning: 'New line', rendered: '\n' },
+            '\\t': { char: '\\t', meaning: 'Horizontal tab', rendered: '\t' },
+            '\\r': { char: '\\r', meaning: 'Carriage return', rendered: '\r' },
+            '\\f': { char: '\\f', meaning: 'Form feed', rendered: '\f' },
+            '\\b': { char: '\\b', meaning: 'Backspace', rendered: '\b' },
+            '\\\\': { char: '\\\\', meaning: 'Backslash', rendered: '\\' }
+        };
 
-        for (const event of events) {
-            const info = event.resolvedInfo; // Pre-resolved in convertToSteps
-            const locationKey = `${info.file}:${info.line}`;
-
-            if (locationKey !== currentLocation) {
-                // New location → create new group
-                if (currentGroup) {
-                    groups.push(currentGroup);
-                }
-                currentGroup = {
-                    location: locationKey,
-                    info,
-                    events: [event]
-                };
-                currentLocation = locationKey;
-            } else {
-                // Same location → merge into group
-                currentGroup.events.push(event);
+        let rendered = text;
+        for (const [seq, info] of Object.entries(escapeMap)) {
+            if (text.includes(seq)) {
+                escapes.push({ char: info.char, meaning: info.meaning });
+                rendered = rendered.replace(new RegExp(seq.replace(/\\/g, '\\\\'), 'g'), info.rendered);
             }
         }
 
-        if (currentGroup) {
-            groups.push(currentGroup);
-        }
-
-        return groups;
+        return { rendered, escapes };
     }
 
-    /* \u2705 NEW: Filter extra steps - keep only user code + important internal events
-       
-       Rules:
-       - KEEP all user source file events
-       - KEEP all memory/heap operations (important for visualization)
-       - KEEP all variable changes (important for state tracking)
-       - FILTER all STL/iostream internals
-       - FILTER all compiler-generated functions
-       - FILTER all __internal functions
-       -------------------------------------------------------------- */
-    filterExtraSteps(rawSteps) {
-        return rawSteps.filter(step => {
-            // \u2705 Always keep program markers
-            if (step.eventType === 'program_start' || step.eventType === 'program_end') {
-                return true;
-            }
-
-            // \u2705 Always keep memory operations
-            if (step.eventType === 'heap_alloc' || step.eventType === 'heap_free') {
-                return true;
-            }
-
-            // \u2705 Always keep variable changes
-            if (step.eventType === 'var') {
-                return true;
-            }
-
-            // \u2705 Always keep output operations (printf, cout)
-            if (step.eventType === 'output') {
-                return true;
-            }
-
-            // \u274c Filter: Internal function signatures
-            const internalPrefixes = ['__', '_M_', 'std::', '__gnu', '__cxxabi'];
-            if (internalPrefixes.some(prefix => step.function.startsWith(prefix))) {
-                return false;
-            }
-
-            // \u274c Filter: No source line (unknown location)
-            if (step.line === 0 || step.file === 'unknown') {
-                return false;
-            }
-
-            // \u2705 Keep everything else (user code)
-            return true;
-        });
-    }
-
-    /* --------------------------------------------------------------
-       ✅ NEW: Determine if event represents output operation
-       
-       IMPORTANT: These functions directly affect user-visible output,
-       so we need to track when they're called and capture their output.
-       
-       Detects: printf, cout, puts, fprintf, etc.
-       Also detects STL stream operators that are instrumented
-       -------------------------------------------------------------- */
-    isOutputEvent(event, info) {
-        const { function: fn } = info;
-        
-        // Direct C function calls
-        const cFunctions = ['printf', 'puts', 'putchar', 'fprintf', 'sprintf', 'fwrite', 'fputs', 'write'];
-        if (cFunctions.some(f => fn.includes(f))) {
-            return true;
-        }
-        
-        // C++ stream functions and operators
-        const cppFunctions = [
-            'operator<<',      // std::cout << x
-            'operator>>',      // std::cin >> x
-            'std::cout',
-            'std::cerr',
-            'std::clog',
-            'std::basic_ostream',
-            '__ostream_insert'
-        ];
-        if (cppFunctions.some(f => fn.includes(f))) {
-            return true;
-        }
-        
-        // Check if function name contains stream-related patterns
-        if (fn.includes('stream') || fn.includes('ostream') || fn.includes('output')) {
-            return true;
-        }
-        
-        return false;
-    }
-
-    /* \u2705 NEW: Track output events and extract relevant text
-       
-       Maps output operations to the actual text produced,
-       so frontend can show \"cout << x;\" with result \"5\\n\"
-       -------------------------------------------------------------- */
-    trackOutputEvent(event, info, outputBuffer, outputIndex) {
-        if (!this.isOutputEvent(event, info)) {
-            return { output: null, newIndex: outputIndex };
+    /**
+     * ✅ NEW: Split output into individual line steps
+     */
+    createOutputSteps(stdout, baseStepIndex) {
+        if (!stdout || stdout.trim().length === 0) {
+            return [];
         }
 
-        // Try to extract next chunk of output
-        if (outputBuffer && outputBuffer.length > outputIndex) {
-            const remaining = outputBuffer.substring(outputIndex);
+        const lines = stdout.split('\n');
+        const steps = [];
+        let stepIndex = baseStepIndex;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
             
-            // For printf/cout, try to get next line
-            const nextNewline = remaining.indexOf('\n');
-            if (nextNewline !== -1) {
-                const extracted = remaining.substring(0, nextNewline + 1);
-                return {
-                    output: extracted,
-                    newIndex: outputIndex + nextNewline + 1
-                };
-            } else if (remaining.length > 0) {
-                // No newline but output remains
-                return {
-                    output: remaining,
-                    newIndex: outputBuffer.length
-                };
+            // Skip empty lines unless they're meaningful (between content)
+            if (line.trim().length === 0 && i === lines.length - 1) {
+                continue;
             }
+
+            const { rendered, escapes } = this.parseEscapeSequences(line);
+
+            steps.push({
+                stepIndex: stepIndex++,
+                eventType: 'output',
+                line: 0,
+                function: 'output',
+                file: 'stdout',
+                timestamp: Date.now() + i,
+                text: rendered,
+                rawText: line,
+                escapeInfo: escapes,
+                explanation: escapes.length > 0 
+                    ? `📤 Output: "${rendered}" (with ${escapes.map(e => e.char).join(', ')})`
+                    : `📤 Output: "${rendered}"`,
+                internalEvents: []
+            });
         }
 
-        return { output: null, newIndex: outputIndex };
+        return steps;
     }
 
-    /* --------------------------------------------------------------
-       Compile user source (instrumented) + tracer (plain)
-       -------------------------------------------------------------- */
     async compile(code, language = 'cpp') {
         const sessionId = uuid();
 
-        const ext      = language === 'c' ? 'c' : 'cpp';
+        const ext = language === 'c' ? 'c' : 'cpp';
         const compiler = 'g++';
-        const stdFlag  = language === 'c' ? '-std=c11' : '-std=c++17';
+        const stdFlag = language === 'c' ? '-std=c11' : '-std=c++17';
 
-        // ---------- 1️⃣ Instrument the source ---------------------------------
         const instrumented = await codeInstrumenter.instrumentCode(code, language);
-        const sourceFile   = path.join(this.tempDir, `src_${sessionId}.${ext}`);
-        const userObj      = path.join(this.tempDir, `src_${sessionId}.o`);
-        const tracerObj    = path.join(this.tempDir, `tracer_${sessionId}.o`);
-        const executable   = path.join(this.tempDir,
+        const sourceFile = path.join(this.tempDir, `src_${sessionId}.${ext}`);
+        const userObj = path.join(this.tempDir, `src_${sessionId}.o`);
+        const tracerObj = path.join(this.tempDir, `tracer_${sessionId}.o`);
+        const executable = path.join(this.tempDir,
             `exec_${sessionId}${process.platform === 'win32' ? '.exe' : ''}`);
-        const traceOutput  = path.join(this.tempDir, `trace_${sessionId}.json`);
-        const headerCopy   = path.join(this.tempDir, 'trace.h');
+        const traceOutput = path.join(this.tempDir, `trace_${sessionId}.json`);
+        const headerCopy = path.join(this.tempDir, 'trace.h');
 
         await writeFile(sourceFile, instrumented, 'utf-8');
         await copyFile(this.traceHeader, headerCopy);
 
-        // ---------- 2️⃣ Compile user source (with instrumentation) -------------
         const compileUser = new Promise((resolve, reject) => {
-            const args = [
-                '-c', '-g', '-O0',
-                stdFlag,
-                '-fno-omit-frame-pointer',
-                '-finstrument-functions',
-                sourceFile,
-                '-o', userObj
-            ];
-            const p = spawn(compiler, args);
-            let err = '';
-            p.stderr.on('data', d => err += d.toString());
-            p.on('close', code => code === 0 ? resolve()
-                : reject(new Error(`User compile failed:\n${err}`)));
-            p.on('error', e => reject(e));
-        });
-
-        // ---------- 3️⃣ Compile tracer (no instrumentation) --------------------
+            const step = {
+                stepIndex: stepIndex++,
+                // Preserve original event type for internal use
+                eventType: isOutputOp ? 'output' : ev.type,
+                // NEW: Explicit step type for beginner mode (declare/assign/output)
+                stepType: ev.type === 'var' ? (ev.varType || null) : (isOutputOp ? 'output' : null),
+                line: info.line,
+                function: info.function,
+                file: path.basename(info.file),
+                timestamp: ev.ts || null,
+                name: ev.name || null,
+                value: ev.value ?? null,
+                varType: ev.type === 'var' ? (ev.varType || 'unknown') : null,
+                size: ev.size ?? null,
+                addr: ev.addr ?? null,
+                stdout: capturedOutput,
+                explanation: this.getEventExplanation(ev, info, capturedOutput, isOutputOp),
+                internalEvents: []
+            };
         const compileTracer = new Promise((resolve, reject) => {
             const args = [
                 '-c', '-g', '-O0',
@@ -344,7 +232,6 @@ class InstrumentationTracer {
 
         await Promise.all([compileUser, compileTracer]);
 
-        // ---------- 4️⃣ Link -------------------------------------------------
         const linkArgs = [
             userObj,
             tracerObj,
@@ -377,22 +264,14 @@ class InstrumentationTracer {
         });
     }
 
-    /* --------------------------------------------------------------
-       ✅ MODIFIED: Run the instrumented binary and capture STDOUT/STDERR
-       Now returns both output and execution status
-       -------------------------------------------------------------- */
     async executeInstrumented(executable, traceOutput) {
         return new Promise((resolve, reject) => {
-            console.log('▶️  Executing instrumented binary...');
-            console.log(`🔍 Output file: ${traceOutput}`);
+            console.log('▶️ Executing instrumented binary...');
 
             const cmd = process.platform === 'win32' ? executable
                 : `./${path.basename(executable)}`;
             const cwd = process.platform === 'win32'
                 ? path.dirname(executable) : process.cwd();
-
-            console.log(`📂 Working directory: ${cwd}`);
-            console.log(`🎯 Command: ${cmd}`);
 
             const proc = spawn(cmd, [], {
                 cwd,
@@ -405,12 +284,10 @@ class InstrumentationTracer {
             proc.stdout.on('data', d => {
                 const chunk = d.toString();
                 stdout += chunk;
-                console.log(`📤 stdout: ${chunk}`);
             });
             proc.stderr.on('data', d => {
                 const chunk = d.toString();
                 stderr += chunk;
-                console.log(`⚠️  stderr: ${chunk}`);
             });
 
             const timeout = setTimeout(() => {
@@ -420,17 +297,10 @@ class InstrumentationTracer {
 
             proc.on('close', code => {
                 clearTimeout(timeout);
-                console.log(`🛑 Exit code: ${code}`);
-                console.log(`📊 stdout: ${stdout.length} bytes`);
-                console.log(`📊 stderr: ${stderr.length} bytes`);
-                
                 if (code === 0 || code === null) {
-                    console.log('✅ Execution completed');
-                    // ✅ NEW: Return captured output
                     resolve({ stdout, stderr });
                 } else {
                     const msg = `Execution failed (code ${code}):\nSTDOUT: ${stdout || '(empty)'}\nSTDERR: ${stderr || '(empty)'}`;
-                    console.error(msg);
                     reject(new Error(msg));
                 }
             });
@@ -441,9 +311,6 @@ class InstrumentationTracer {
         });
     }
 
-    /* --------------------------------------------------------------
-       Read the JSON trace file generated by tracer.cpp
-       -------------------------------------------------------------- */
     async parseTraceFile(tracePath) {
         try {
             const txt = await readFile(tracePath, 'utf-8');
@@ -455,45 +322,22 @@ class InstrumentationTracer {
         }
     }
 
-    /* ✅ COMPLETELY REWRITTEN: Turn raw events → clean user-facing steps
-       
-       CHANGES:
-       1. Groups events by source location (file:line)
-       2. Only creates NEW step when source line changes
-       3. Merges internal events into internalEvents array
-       4. Tracks program output and attaches to relevant steps
-       5. Filters out system/STL internals
-       6. Creates explicit "main started" and "program end" steps
-       7. Assigns any captured output to visible steps
-       
-       IMPORTANT: Even if function names aren't resolved (func:"unknown"),
-       we still need to show output that was captured!
-       -------------------------------------------------------------- */
+    /**
+     * ✅ MODIFIED: Convert events to steps with output tracking
+     */
     async convertToSteps(events, executable, sourceFile, programOutput) {
         console.log(`📊 Converting ${events.length} events to steps...`);
 
-        const steps = [];
+        const codeSteps = [];
         let stepIndex = 0;
         
-        // ✅ NEW: Track last user-visible source location
         let lastUserLocation = null;
         let lastStep = null;
-        
-        // ✅ NEW: Track accumulated output
-        let outputBuffer = programOutput.stdout || '';
-        let outputIndex = 0;
-        
-        // ✅ NEW: Track if we have uncaptured output
-        let hasUncapturedOutput = outputBuffer.length > 0;
-        
-        // ✅ NEW: Detect main function entry for explicit step
         let mainStarted = false;
 
         for (let i = 0; i < events.length; i++) {
             const ev = events[i];
-            console.log('🔎 raw event:', JSON.stringify(ev));
             
-            // --- Resolve event location ---
             let info;
             if (ev.file && ev.line) {
                 info = {
@@ -505,9 +349,9 @@ class InstrumentationTracer {
                 info = await this.getLineInfo(executable, ev.addr);
             }
 
-            // ✅ NEW: Create explicit "main started" step
+            // Create explicit "main started" step
             if (!mainStarted && info.function === 'main' && ev.type === 'func_enter') {
-                steps.push({
+                codeSteps.push({
                     stepIndex: stepIndex++,
                     eventType: 'program_start',
                     line: info.line,
@@ -515,43 +359,16 @@ class InstrumentationTracer {
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     explanation: '🚀 Program execution started in main()',
-                    stdout: null,
                     internalEvents: []
                 });
                 mainStarted = true;
                 lastUserLocation = `${info.file}:${info.line}`;
-                lastStep = steps[steps.length - 1];
-                console.log(`📍 Step ${stepIndex - 1}: [program_start] 🚀 main() started`);
+                lastStep = codeSteps[codeSteps.length - 1];
                 continue;
             }
 
-            // ✅ IMPROVED: On main exit, check if we have output to capture
-            if (mainStarted && info.function === 'main' && ev.type === 'func_exit' && hasUncapturedOutput) {
-                // Create an output step for main's output
-                if (outputIndex < outputBuffer.length) {
-                    const step = {
-                        stepIndex: stepIndex++,
-                        eventType: 'output',
-                        line: info.line,
-                        function: 'main',
-                        file: path.basename(info.file),
-                        timestamp: ev.ts || null,
-                        stdout: outputBuffer.substring(outputIndex),
-                        explanation: `📤 Output: ${outputBuffer.substring(outputIndex).trim()}`,
-                        internalEvents: []
-                    };
-                    steps.push(step);
-                    lastStep = step;
-                    outputIndex = outputBuffer.length;
-                    hasUncapturedOutput = false;
-                    console.log(`📤 Output step created with: ${outputBuffer.substring(outputIndex - (outputBuffer.length - outputIndex)).trim()}`);
-                    continue;
-                }
-            }
-
-            // ✅ IMPROVED: Filter using source file comparison
+            // Filter system/library events
             if (this.shouldFilterEvent(info, ev, sourceFile)) {
-                // Keep track internally but don't create visible steps
                 if (lastStep) {
                     if (!lastStep.internalEvents) {
                         lastStep.internalEvents = [];
@@ -563,30 +380,23 @@ class InstrumentationTracer {
                         timestamp: ev.ts
                     });
                 }
-                console.log(`🔇 Filtered: ${info.function} from ${path.basename(info.file)} (not user code)`);
                 continue;
             }
 
-            // Skip events with no useful source location
             if (!info.file || info.line === 0) {
-                console.log(`⚠️  Skipped: no source location`);
                 continue;
             }
 
-            // ✅ NEW: Create location key for grouping
             const locationKey = `${info.file}:${info.line}`;
-            
-            // ✅ NEW: Check if same source line (group events)
             const isSameLocation = locationKey === lastUserLocation;
             
-            // ✅ NEW: Variable events ALWAYS create their own step (important for animation)
-            const isVariableEvent = ev.type === 'var';
-            
-            // ✅ NEW: Heap events should create visible steps
+            // ✅ NEW: Always create steps for declare/assign events
+            const isDeclareEvent = ev.type === 'declare';
+            const isAssignEvent = ev.type === 'assign';
+            const isVariableEvent = ev.type === 'var' || isDeclareEvent || isAssignEvent;
             const isHeapEvent = ev.type === 'heap_alloc' || ev.type === 'heap_free';
             
             if (isSameLocation && !isVariableEvent && !isHeapEvent && lastStep) {
-                // ----- MERGE into existing step -----
                 if (!lastStep.internalEvents) {
                     lastStep.internalEvents = [];
                 }
@@ -598,110 +408,69 @@ class InstrumentationTracer {
                     name: ev.name,
                     value: ev.value
                 });
-                console.log(`🔀 Merged into step ${lastStep.stepIndex}: ${ev.type}`);
                 continue;
             }
 
-            // ----- CREATE NEW STEP -----
-            
-            // ✅ NEW: Check if this is an output operation and extract the output
-            let capturedOutput = null;
-            let isOutputOp = false;
-            
-            if (this.isOutputEvent(ev, info)) {
-                isOutputOp = true;
-                const result = this.trackOutputEvent(ev, info, outputBuffer, outputIndex);
-                capturedOutput = result.output;
-                outputIndex = result.newIndex;
-                
-                if (capturedOutput) {
-                    console.log(`📤 Captured output: ${JSON.stringify(capturedOutput)}`);
-                }
-            }
-
+            // Create new step
             const step = {
                 stepIndex: stepIndex++,
-                eventType: isOutputOp ? 'output' : ev.type, // ✅ CHANGED: Mark as 'output' if detected
+                eventType: ev.type,
                 line: info.line,
                 function: info.function,
                 file: path.basename(info.file),
                 timestamp: ev.ts || null,
                 name: ev.name || null,
                 value: ev.value ?? null,
-                varType: ev.type === 'var' ? (ev.varType || 'unknown') : null,
+                varType: ev.type === 'var' || isDeclareEvent || isAssignEvent ? (ev.type || 'unknown') : null,
                 size: ev.size ?? null,
                 addr: ev.addr ?? null,
-                stdout: capturedOutput, // ✅ NEW: Attach captured output
-                explanation: this.getEventExplanation(ev, info, capturedOutput, isOutputOp),
-                internalEvents: [] // ✅ NEW: Container for merged events
+                explanation: this.getEventExplanation(ev, info),
+                internalEvents: []
             };
             
-            steps.push(step);
+            codeSteps.push(step);
             lastStep = step;
             lastUserLocation = locationKey;
-            
-            console.log(`📍 Step ${step.stepIndex}: [${step.eventType}] ${step.function}:${step.line} ${step.explanation}`);
         }
 
-        // ✅ NEW: Check if there's unassigned output and attach to appropriate steps
-        if (outputIndex < outputBuffer.length) {
-            const remainingOutput = outputBuffer.substring(outputIndex);
-            
-            // Find the last main() execution step to attach output
-            for (let i = steps.length - 1; i >= 0; i--) {
-                const step = steps[i];
-                if ((step.function === 'main' || step.eventType === 'func_enter') && step.eventType !== 'program_start' && step.eventType !== 'program_end') {
-                    if (!step.stdout) {
-                        step.stdout = remainingOutput;
-                        step.eventType = 'output';
-                        step.explanation = `📤 Output: ${remainingOutput.trim()}`;
-                        console.log(`📤 Attached remaining output to step ${step.stepIndex}: ${remainingOutput.trim()}`);
-                        outputIndex = outputBuffer.length;
-                    }
-                    break;
-                }
-            }
+        // ✅ NEW: Interleave output steps with code steps
+        const outputSteps = this.createOutputSteps(programOutput.stdout, stepIndex);
+        
+        // Insert output steps at the end (before program_end)
+        const allSteps = [...codeSteps];
+        
+        // Add output steps
+        for (const outStep of outputSteps) {
+            allSteps.push(outStep);
         }
 
-        // ✅ NEW: Add explicit "program end" step
-        steps.push({
-            stepIndex: stepIndex++,
+        // Add program end
+        allSteps.push({
+            stepIndex: allSteps.length,
             eventType: 'program_end',
             line: 0,
             function: 'main',
             file: path.basename(sourceFile),
             timestamp: Date.now(),
             explanation: '✅ Program execution completed',
-            stdout: outputIndex < outputBuffer.length ? outputBuffer.substring(outputIndex) : null,
             internalEvents: []
         });
 
-        // ✅ NEW: Apply extra step filtering to remove unnecessary internal steps
-        const filteredSteps = this.filterExtraSteps(steps);
-
-        console.log(`✅ Generated ${filteredSteps.length} clean execution steps (from ${steps.length})`);
-        console.log(`🔍 Filtered out ${steps.length - filteredSteps.length} extra internal steps`);
-        console.log(`📊 Event analysis: ${events.length} raw events → ${filteredSteps.length} visible steps`);
+        console.log(`✅ Generated ${allSteps.length} steps (${codeSteps.length} code + ${outputSteps.length} output)`);
         
-        return filteredSteps;
+        return allSteps;
     }
 
-    /* ✅ MODIFIED: Enhanced explanation with output info and proper output handling */
-    getEventExplanation(ev, info, output, isOutputOp) {
-        // ✅ NEW: Handle output operations with actual captured output
-        if (isOutputOp && output) {
-            return `📤 Output: ${output.trim()}`;
-        }
-        
-        if (isOutputOp) {
-            return `📤 ${info.function}() called`;
-        }
-        
+    getEventExplanation(ev, info) {
         switch (ev.type) {
             case 'func_enter': 
                 return `Entering ${info.function}()`;
             case 'func_exit':  
                 return `Exiting ${info.function}()`;
+            case 'declare':
+                return `📝 Declared ${ev.name} (${ev.type || 'variable'})`;
+            case 'assign':
+                return `📝 ${ev.name} = ${ev.value}`;
             case 'var':        
                 return `${ev.name} = ${ev.value}`;
             case 'heap_alloc': 
@@ -709,9 +478,6 @@ class InstrumentationTracer {
             case 'heap_free':  
                 return `Freed memory at ${ev.addr}`;
             default:           
-                if (output) {
-                    return `Output: ${output.trim()}`;
-                }
                 return `${ev.type} event`;
         }
     }
@@ -723,9 +489,6 @@ class InstrumentationTracer {
         } catch { return []; }
     }
 
-    /* --------------------------------------------------------------
-       Helpers for UI – global variables / functions extraction
-       -------------------------------------------------------------- */
     extractGlobals(steps) {
         const globals = new Map();
         for (const step of steps) {
@@ -749,24 +512,18 @@ class InstrumentationTracer {
         return Array.from(map.values());
     }
 
-    /* --------------------------------------------------------------
-       ✅ MODIFIED: Public entry point with output tracking
-       -------------------------------------------------------------- */
     async generateTrace(code, language = 'cpp') {
-        console.log('🚀 Starting Instrumentation‑Based Execution Tracing...');
-        console.log(`📝 Code size: ${code.length} bytes`);
+        console.log('🚀 Starting Instrumentation-Based Execution Tracing...');
 
         let exe, src, traceOut, hdr;
         try {
             ({ executable: exe, sourceFile: src, traceOutput: traceOut, headerCopy: hdr } = await this.compile(code, language));
 
-            // ✅ MODIFIED: Capture program output
             const { stdout, stderr } = await this.executeInstrumented(exe, traceOut);
 
             const rawEvents = await this.parseTraceFile(traceOut);
             console.log(`📋 Captured ${rawEvents.length} raw events`);
 
-            // ✅ MODIFIED: Pass output to step converter
             const steps = await this.convertToSteps(rawEvents, exe, src, { stdout, stderr });
 
             const result = {
@@ -775,23 +532,24 @@ class InstrumentationTracer {
                 globals: this.extractGlobals(steps),
                 functions: this.extractFunctions(steps),
                 metadata: {
-                    debugger: process.platform === 'win32' ? 'mingw‑instrumentation' : 'gcc‑instrumentation',
-                    version: '1.1', // ✅ NEW: Version bump
+                    debugger: process.platform === 'win32' ? 'mingw-instrumentation' : 'gcc-instrumentation',
+                    version: '2.0',
                     hasRealMemory: true,
                     hasHeapTracking: true,
-                    hasOutputTracking: true, // ✅ NEW: Feature flag
+                    hasOutputTracking: true,
+                    hasBeginnerMode: true,
                     capturedEvents: rawEvents.length,
-                    filteredEvents: rawEvents.length - steps.length, // ✅ NEW: Show filtering stats
-                    programOutput: stdout, // ✅ NEW: Full output available
+                    programOutput: stdout,
                     timestamp: Date.now()
                 }
             };
+            
             console.log('✅ Trace generation complete', {
                 steps: result.totalSteps,
                 functions: result.functions.length,
-                globals: result.globals.length,
-                outputLines: stdout.split('\n').length
+                globals: result.globals.length
             });
+            
             return result;
         } catch (e) {
             console.error('❌ Trace generation failed:', e.message);
@@ -801,9 +559,6 @@ class InstrumentationTracer {
         }
     }
 
-    /* --------------------------------------------------------------
-       Delete temporary files (ignore errors)
-       -------------------------------------------------------------- */
     async cleanup(files) {
         for (const f of files) {
             if (f && existsSync(f)) {

@@ -29,12 +29,6 @@ void trace_var_double(const char* name, double value);
 void trace_var_ptr(const char* name, void* value);
 void trace_var_str(const char* name, const char* value);
 
-/* ✅ NEW: Beginner-mode helpers for explicit declaration/assignment steps */
-void __trace_declare_loc(const char* name, const char* type,
-                         const char* file, int line);
-void __trace_assign_loc(const char* name, long long value,
-                        const char* file, int line);
-
 #ifdef __cplusplus
 }
 #endif
@@ -47,7 +41,24 @@ void __trace_assign_loc(const char* name, long long value,
 #define TRACE_STR(var)    trace_var_str_loc(#var,   (const char*)(var), __FILE__, __LINE__)
 #define TRACE_VAR(var)    TRACE_INT(var)
 
-/* ✅ NEW: Beginner-mode macros that capture __FILE__ automatically */
+/* --------------------------------------------------------------------
+   BEGINNER-MODE HELPERS – global C functions for explicit variable steps
+   -------------------------------------------------------------------- */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void __trace_declare_loc(const char* name, const char* type,
+                         const char* file, int line);
+void __trace_assign_loc(const char* name, long long value,
+                        const char* file, int line);
+
+#ifdef __cplusplus
+}
+#endif
+
+/* Macros that capture __FILE__ automatically. The caller supplies the line */
+/* number (the instrumenter passes the source line). */
 #define __trace_declare(name, type, line) \
     __trace_declare_loc(#name, #type, __FILE__, line)
 #define __trace_assign(name, value, line) \
@@ -77,7 +88,7 @@ void trace_var_double(const char* name, double value);
 void trace_var_ptr(const char* name, void* value);
 void trace_var_str(const char* name, const char* value);
 
-/* ✅ NEW: Beginner-mode helpers for explicit declaration/assignment steps */
+/* BEGINNER-MODE HELPERS */
 void __trace_declare_loc(const char* name, const char* type,
                          const char* file, int line);
 void __trace_assign_loc(const char* name, long long value,
@@ -94,7 +105,7 @@ void __trace_assign_loc(const char* name, long long value,
 #define TRACE_STR(var)    trace_var_str_loc(#var,   (const char*)(var), __FILE__, __LINE__)
 #define TRACE_VAR(var)    TRACE_INT(var)
 
-/* ✅ NEW: Beginner-mode macros that capture __FILE__ automatically */
+/* Macros that capture __FILE__ automatically */
 #define __trace_declare(name, type, line) \
     __trace_declare_loc(#name, #type, __FILE__, line)
 #define __trace_assign(name, value, line) \

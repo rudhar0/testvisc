@@ -1,11 +1,12 @@
 // src/cpp/tracer.cpp
 // ------------------------------------------------------------
-// Cross‑platform instrumentation tracer (C & C++)
+// Cross-platform instrumentation tracer (C & C++)
 // ------------------------------------------------------------
 //  • Captures function entry / exit
 //  • Captures variable assignments (via TRACE_* macros)
 //  • Tracks heap allocations (new / delete / malloc / free)
-//  • Works on Linux/macOS *and* Windows (MinGW‑w64)
+//  • ✅ NEW: Beginner-mode declaration/assignment tracking
+//  • Works on Linux/macOS *and* Windows (MinGW-w64)
 // ------------------------------------------------------------
 
 #include <cstdio>
@@ -32,15 +33,15 @@
 // Global state
 // --------------------------------------------------------------------
 static FILE*   g_trace_file    = nullptr;        // JSON trace file
-static int     g_depth         = 0;            // current call‑stack depth
+static int     g_depth         = 0;            // current call-stack depth
 static unsigned long g_event_counter = 0;         // monotonically increasing id
 
 #ifndef _WIN32
-static std::mutex g_trace_mutex;                 // POSIX‑only mutex
+static std::mutex g_trace_mutex;                 // POSIX-only mutex
 #endif
 
 // --------------------------------------------------------------------
-// High‑resolution timestamp (microseconds)
+// High-resolution timestamp (microseconds)
 // --------------------------------------------------------------------
 static inline unsigned long get_timestamp_us() {
 #ifdef _WIN32
@@ -96,7 +97,7 @@ static const char* demangle(const char* name) {
 }
 
 // --------------------------------------------------------------------
-// Write a JSON event (thread‑safe)
+// Write a JSON event (thread-safe)
 // --------------------------------------------------------------------
 static void write_json_event(const char* type, void* addr,
                              const char* func_name, int depth,
@@ -121,7 +122,7 @@ static void write_json_event(const char* type, void* addr,
 }
 
 /* --------------------------------------------------------------------
-   Convert a Windows path like "C:\a\b\c.cpp" to a JSON‑safe forward‑slash
+   Convert a Windows path like "C:\a\b\c.cpp" to a JSON-safe forward-slash
    version "C:/a/b/c.cpp".  This is needed because backslashes would
    otherwise terminate the JSON string.
    -------------------------------------------------------------------- */
@@ -133,7 +134,37 @@ static std::string json_safe_path(const char* raw) {
 }
 
 /* --------------------------------------------------------------------
-   VARIABLE‑TRACING HELPERS (exposed via trace.h)
+   ✅ NEW: BEGINNER-MODE VARIABLE DECLARATION HELPER
+   Creates explicit "declare" event when a variable is declared
+   -------------------------------------------------------------------- */
+extern "C" void __trace_declare_loc(const char* name, const char* type,
+                                    const char* file, int line) {
+    if (!g_trace_file) return;
+    const std::string f = json_safe_path(file);
+    char extra[256];
+    snprintf(extra, sizeof(extra),
+             "\"name\":\"%s\",\"varType\":\"%s\",\"value\":null,\"file\":\"%s\",\"line\":%d",
+             name, type, f.c_str(), line);
+    write_json_event("declare", nullptr, name, g_depth, extra);
+}
+
+/* --------------------------------------------------------------------
+   ✅ NEW: BEGINNER-MODE VARIABLE ASSIGNMENT HELPER
+   Creates explicit "assign" event when a variable is assigned
+   -------------------------------------------------------------------- */
+extern "C" void __trace_assign_loc(const char* name, long long value,
+                                    const char* file, int line) {
+    if (!g_trace_file) return;
+    const std::string f = json_safe_path(file);
+    char extra[256];
+    snprintf(extra, sizeof(extra),
+             "\"name\":\"%s\",\"value\":%lld,\"file\":\"%s\",\"line\":%d",
+             name, value, f.c_str(), line);
+    write_json_event("assign", nullptr, name, g_depth, extra);
+}
+
+/* --------------------------------------------------------------------
+   VARIABLE-TRACING HELPERS (exposed via trace.h)
    Each function receives the source file and line number so the backend
    can create a step without address resolution.
    -------------------------------------------------------------------- */
@@ -197,8 +228,8 @@ extern "C" void trace_var_str_loc(const char* name, const char* value,
 }
 
 /* --------------------------------------------------------------------
-   Backward‑compatible wrappers (no source location) – kept so
-   hand‑written code that still calls the old API does not break.
+   Backward-compatible wrappers (no source location) – kept so
+   hand-written code that still calls the old API does not break.
    -------------------------------------------------------------------- */
 extern "C" void trace_var_int(const char* name, int value) {
     trace_var_int_loc(name, value, "unknown", 0);
