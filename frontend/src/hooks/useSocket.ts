@@ -42,10 +42,14 @@ const cloneStep = (step: ExecutionStep): ExecutionStep => {
     // BACKEND → FRONTEND PROPERTY MAPPING
     // ===================================================================
     
-    // Map backend eventType → frontend type (instrumentation tracer uses eventType)
-    if ((cloned as any).eventType && !cloned.type) {
-      cloned.type = (cloned as any).eventType;
-    }
+      // Map backend eventType → frontend type (instrumentation tracer uses eventType)
+      if ((cloned as any).eventType && !cloned.type) {
+        cloned.type = (cloned as any).eventType;
+      }
+      // Preserve original event type for downstream components (e.g., VariableLifetime) to infer primitive types
+      if ((cloned as any).eventType) {
+        (cloned as any).originalEventType = (cloned as any).eventType;
+      }
     
     // Map backend stdout → frontend value for output events
     if ((cloned as any).stdout && cloned.type === 'output') {
@@ -95,16 +99,16 @@ const normalizeStepType = (type: string): string => {
   const typeMapping: Record<string, string> = {
     // ===================================================================
     // NEW INSTRUMENTATION BACKEND TYPES (2026-01-18)
-    // Direct pass-through (already semantic)
+    // Map to semantic frontend StepTypes
     // ===================================================================
     'func_enter': 'func_enter',
     'func_exit': 'func_exit',
     'var': 'var',
-    'heap_alloc': 'heap_alloc',
+    'heap_alloc': 'heap_allocation',
     'heap_free': 'heap_free',
     'program_end': 'program_end',
-    'stdout': 'output',           // Alternative name for output (printf, cout, puts, etc.)
-    'print': 'output',            // Direct print calls
+    'stdout': 'output',
+    'print': 'output',
     
     // LLDB types
     'step_in': 'function_call',
@@ -132,6 +136,18 @@ const normalizeStepType = (type: string): string => {
     'heap_allocation': 'heap_allocation',
     'output': 'output',
     'input_request': 'input_request',
+    // Backend emitted primitive/type names (map them to variable events)
+    'int': 'var',
+    'double': 'var',
+    'float': 'var',
+    'char': 'var',
+    'bool': 'var',
+    'long': 'var',
+    'short': 'var',
+    'string': 'var',
+    'variable': 'var',
+    'variable_assignment': 'assignment',
+    'variable_change': 'assignment',
     
     // GDB types (future-proofing)
     'next': 'line_execution',
@@ -271,7 +287,7 @@ export function useSocket() {
       
       try {
         // ===================================================================
-        // STEP 1: Collect all raw steps from chunks
+        // STEP 1: Collect and expand all raw steps from chunks
         // ===================================================================
         if (receivedChunks.length === 0) {
           if (data && data.steps) {
@@ -281,162 +297,154 @@ export function useSocket() {
           }
         }
 
-        const allSteps: ExecutionStep[] = receivedChunks.flatMap(chunk => chunk.steps || []);
-        
-        if (allSteps.length === 0) {
+        const allRawSteps: any[] = receivedChunks.flatMap(chunk => chunk.steps || []);
+
+        const expandedSteps: any[] = [];
+        allRawSteps.forEach(step => {
+            const { internalEvents, ...mainStep } = step;
+            expandedSteps.push(mainStep);
+            if (internalEvents) {
+                internalEvents.forEach((internal: any) => {
+                    const expandedStep = { ...mainStep, ...internal };
+                    if (expandedStep.type && !expandedStep.eventType) {
+                        expandedStep.eventType = expandedStep.type;
+                    }
+                    expandedSteps.push(expandedStep);
+                });
+            }
+        });
+
+        if (expandedSteps.length === 0) {
           throw new Error('No steps found in received trace data.');
         }
 
-        console.log(`📋 Processing ${allSteps.length} raw steps from backend`);
+        console.log(`📋 Processing ${expandedSteps.length} raw steps from backend`, expandedSteps);
 
         // ===================================================================
-        // STEP 2: Build birthStep map (FIRST PASS - read-only)
+        // STEP 2: Process steps and build state immutably
         // ===================================================================
+        let currentMemoryState: MemoryState = {
+            globals: {},
+            stack: [],
+            heap: {},
+            callStack: [],
+            stdout: ""
+        };
         const variableBirthStepMap = new Map<string, number>();
-        
-        allSteps.forEach((step, index) => {
-          const findBirths = (variables: Record<string, Variable> | Variable[] | undefined) => {
-            if (!variables) return;
-            
-            const varList = Array.isArray(variables) 
-              ? variables 
-              : Object.values(variables);
-            
-            for (const variable of varList) {
-              if (variable && variable.name && !variableBirthStepMap.has(variable.name)) {
-                // Mark this step as birth step for this variable
-                variableBirthStepMap.set(variable.name, index);
-              }
-            }
-          };
+        const processedSteps: ExecutionStep[] = [];
 
-          // Scan all scopes for variables
-          step.state?.callStack?.forEach(frame => findBirths(frame.locals));
-          findBirths(step.state?.globals);
-        });
-
-        console.log(`📊 Found ${variableBirthStepMap.size} unique variables with birth steps`);
-
-        // ===================================================================
-        // STEP 3: Process steps IMMUTABLY (SECOND PASS - clone & normalize)
-        // ===================================================================
-        const processedSteps = allSteps.map((originalStep: ExecutionStep, index: number) => {
-          // 🔒 CRITICAL: Deep clone FIRST - originalStep is READ-ONLY
+        expandedSteps.forEach((originalStep: any, index: number) => {
           const step = cloneStep(originalStep);
+          const nextMemoryState: MemoryState = JSON.parse(JSON.stringify(currentMemoryState));
           
-          // Ensure step has basic structure
-          if (!step.state) {
-            step.state = {
-              callStack: [],
-              globals: {},
-              heap: {},
-              stack: [],
-            };
-          }
-
-          // Normalize step type (backend-agnostic)
+          const originalType = step.type;
           step.type = normalizeStepType(step.type);
 
-          // Normalize call stack (handle global scope)
-          step.state.callStack = normalizeCallStack(step.state.callStack);
-
-          // Normalize locals in each frame
-          step.state.callStack = step.state.callStack.map(frame => ({
-            ...frame,
-            locals: normalizeLocals(frame.locals),
-          }));
-
-          // ===============================================================
-          // STEP 4: Assign birth steps to variables
-          // ===============================================================
-          const assignBirthSteps = (variables: Record<string, Variable> | undefined) => {
-            if (!variables) return;
-            
-            Object.values(variables).forEach((variable: Variable) => {
-              if (variable && variable.name && variableBirthStepMap.has(variable.name)) {
-                // Safe mutation - we're working on a clone
-                variable.birthStep = variableBirthStepMap.get(variable.name);
-              }
-            });
-          };
-
-          // Assign birth steps to locals
-          step.state.callStack.forEach(frame => {
-            assignBirthSteps(frame.locals);
-          });
-
-          // Assign birth steps to globals
-          assignBirthSteps(step.state.globals);
-
-          // ===============================================================
-          // STEP 5: Add semantic metadata
-          // ===============================================================
+          const functionName = (step.function || "").trim().replace(/\r/g, '');
           
-          // Ensure step has required fields
-          if (step.id === undefined) {
-            step.id = index;
+          switch (step.type) {
+            case 'func_enter':
+              nextMemoryState.callStack.push({
+                function: functionName,
+                line: step.line,
+                locals: {},
+              });
+              break;
+            case 'func_exit':
+              if (nextMemoryState.callStack.length > 0) {
+                nextMemoryState.callStack.pop();
+              }
+              break;
+                  case 'var': {
+                    const currentFrame = nextMemoryState.callStack[nextMemoryState.callStack.length - 1];
+                    // Determine the variable's declared type: backend may provide varType or we can fallback to the original event type (e.g., "int", "double")
+                    const declaredType = (step as any).varType || (step as any).eventType || originalType;
+                    if (currentFrame) {
+                      const varName = step.name;
+                      if (varName) {
+                        const existingVar = currentFrame.locals[varName];
+                        if (!existingVar) {
+                          const newVar: Variable = {
+                            name: varName,
+                            value: step.value,
+                            type: declaredType,
+                            primitive: declaredType,
+                            address: step.addr,
+                            scope: 'local',
+                            isInitialized: true,
+                            isAlive: true,
+                            birthStep: index,
+                          };
+                          currentFrame.locals[varName] = newVar;
+                          variableBirthStepMap.set(varName, index);
+                        } else {
+                          existingVar.value = step.value;
+                        }
+                      }
+                    } else {
+                      // No active function call, assume global scope
+                      const varName = step.name;
+                      if (varName) {
+                        const existingVar = nextMemoryState.globals[varName];
+                        if (!existingVar) {
+                          const newVar: Variable = {
+                            name: varName,
+                            value: step.value,
+                            type: declaredType,
+                            primitive: declaredType,
+                            address: step.addr,
+                            scope: 'global',
+                            isInitialized: true,
+                            isAlive: true,
+                            birthStep: index,
+                          };
+                          nextMemoryState.globals[varName] = newVar;
+                          variableBirthStepMap.set(varName, index);
+                        } else {
+                          existingVar.value = step.value;
+                        }
+                      }
+                    }
+                    break;
+                  }
+            case 'output':
+              nextMemoryState.stdout = (nextMemoryState.stdout || "") + step.value;
+              break;
           }
           
+          step.state = nextMemoryState;
+          step.id = index;
           if (!step.explanation) {
             step.explanation = `Executing ${step.type} at line ${step.line}`;
           }
 
-          return step;
+          processedSteps.push(step as ExecutionStep);
+          currentMemoryState = nextMemoryState;
         });
 
         // ===================================================================
-        // STEP 6: Filter and validate processed steps
+        // STEP 3: Final processing and store update
         // ===================================================================
-        const validSteps = processedSteps.filter(step => {
-          // Must have numeric ID
-          if (typeof step.id !== 'number') return false;
-          
-          // Must have valid type
-          if (!step.type) return false;
-          
-          // Must have state
-          if (!step.state) return false;
-          
-          return true;
-        });
+        const validSteps = processedSteps.filter(step => step.id !== undefined);
 
         if (validSteps.length === 0) {
-          throw new Error('No valid steps after processing - execution may have failed.');
+          throw new Error('No valid steps after processing.');
         }
 
-        // ===================================================================
-        // STEP 7: Log processing results
-        // ===================================================================
         console.log(`✅ Processed ${validSteps.length} valid steps`);
-        console.log('📋 First step:', validSteps[0]);
-        console.log('📋 Last step:', validSteps[validSteps.length - 1]);
         
-        // Log step type distribution
-        const stepTypes = validSteps.reduce((acc: Record<string, number>, step: ExecutionStep) => {
-          acc[step.type] = (acc[step.type] || 0) + 1;
-          return acc;
-        }, {});
-        console.log('📊 Step type distribution:', stepTypes);
-
-        // ===================================================================
-        // STEP 8: Create trace object and update store
-        // ===================================================================
         const trace: ExecutionTrace = {
           steps: validSteps,
           totalSteps: validSteps.length,
           globals: receivedChunks[0]?.globals || [],
           functions: receivedChunks[0]?.functions || [],
-          metadata: receivedChunks[0]?.metadata || {
-            debugger: 'unknown',
-            timestamp: Date.now(),
-          },
+          metadata: receivedChunks[0]?.metadata || { debugger: 'unknown', hasSemanticInfo: true },
         };
 
         setTrace(trace);
         setAnalyzing(false);
         toast.success(`✅ Generated ${validSteps.length} execution steps`);
         
-        // Clear chunks for next run
         receivedChunks = [];
 
       } catch (error: any) {

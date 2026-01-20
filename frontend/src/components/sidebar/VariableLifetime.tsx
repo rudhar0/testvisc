@@ -28,11 +28,24 @@ export default function VariableLifetime() {
     if (step.type === 'function_call' || step.type === 'func_enter') stackDepth++;
 
     // Handle variable creation from both old and new backends
-    if (step.type === 'variable_declaration' || step.type === 'global_declaration' || step.type === 'var') {
+    // Legacy backend emitted explicit 'variable_declaration' / 'global_declaration' / 'var' types.
+    // New backend emits primitive type events (e.g., 'int', 'double', 'char', etc.) with a 'name' field.
+    const primitiveVarTypes = ['int', 'float', 'double', 'char', 'bool', 'long', 'short'];
+    // Detect variable creation from legacy declarations or new primitive events.
+    // For new backend events, the original primitive type is stored in step.originalEventType.
+    const isPrimitiveEvent = primitiveVarTypes.includes((step as any).originalEventType as string);
+    if (
+      step.type === 'variable_declaration' ||
+      step.type === 'global_declaration' ||
+      step.type === 'var' ||
+      isPrimitiveEvent
+    ) {
+      // Prefer explicit variable name fields; fallback to generic name.
       const varName = (step as any).variable || (step as any).name;
-      const varType = (step as any).dataType || (step as any).varType;
+      // Determine variable type: for primitive events use the original event type.
+      const varType = (step as any).dataType || (step as any).varType || (isPrimitiveEvent ? (step as any).originalEventType : undefined);
       const scope = step.type === 'global_declaration' ? 'global' : 'local';
-      
+
       if (varName && !variables.has(varName)) {
         variables.set(varName, {
           name: varName,

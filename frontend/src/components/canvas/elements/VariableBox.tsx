@@ -156,6 +156,22 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   stepNumber
   , enterDelay = 0
 }) => {
+  // Debug logging: track when VariableBox is instantiated and its key properties
+  console.log('[VariableBox] Render', {
+    id,
+    name,
+    type,
+    value,
+    address,
+    x,
+    y,
+    section,
+    isNew,
+    isUpdated,
+    state,
+    stepNumber,
+    enterDelay,
+  });
   const groupRef = useRef<Konva.Group>(null);
   const bgRef = useRef<Konva.Rect>(null);
   const glowRef = useRef<Konva.Rect>(null);

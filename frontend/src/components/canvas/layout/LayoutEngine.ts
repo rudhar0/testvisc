@@ -185,6 +185,71 @@ export class LayoutEngine {
         break;
       }
 
+      // NEW: Handle primitive variable events emitted as type 'var' or direct primitive types (int, double, etc.)
+      // These steps contain name, value, addr and originalEventType (primitive type)
+      case 'var':
+      case 'int':
+      case 'double':
+      case 'float':
+      case 'char':
+      case 'bool': {
+        // Ensure we have a name to display
+        if (!step.name) break;
+
+        // For direct primitive types, set originalEventType so later logic knows the type
+        if (step.type && step.type !== 'var') {
+          (step as any).originalEventType = step.type;
+        }
+
+        const primitiveType = (step as any).originalEventType || 'int';
+        const parentId = currentParent.id;
+        const varId = `var-${parentId}-${step.name}`; // ID based on parent and name
+
+        if (this.elementHistory.has(varId)) {
+          // UPDATE: Variable already exists – update its data in place.
+          const existingElement = this.elementHistory.get(varId)!;
+          // Update the stored value and optionally mark as updated for rendering.
+          existingElement.data = { ...existingElement.data, value: step.value };
+          // Store metadata indicating an update occurred at this step.
+          existingElement.metadata = {
+            ...(existingElement.metadata || {}),
+            updatedStep: stepIndex,
+          };
+        } else {
+          // CREATE: The variable does not exist yet.
+          const variable: any = {
+            name: step.name,
+            value: step.value,
+            type: primitiveType,
+            primitive: primitiveType,
+            address: step.addr,
+            scope: 'local',
+            isInitialized: true,
+            isAlive: true,
+            birthStep: stepIndex,
+          };
+
+          const varElement: LayoutElement = {
+            id: varId,
+            type: 'variable',
+            subtype: 'variable_initialization',
+            x: currentParent.x + INDENT_SIZE,
+            y: this.getNextCursorY(currentParent),
+            width: currentParent.width - (INDENT_SIZE * 2),
+            height: 70,
+            parentId: currentParent.id,
+            stepId: stepIndex,
+            data: variable,
+          };
+
+          currentParent.children!.push(varElement);
+          layout.elements.push(varElement);
+          this.elementHistory.set(varId, varElement);
+          this.createdInStep.set(varId, stepIndex);
+        }
+        break;
+      }
+
       case 'function_call': {
         if (!state?.callStack || state.callStack.length === 0) break;
         const frame = state.callStack[0];

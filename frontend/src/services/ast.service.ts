@@ -3,7 +3,7 @@ import * as Parser from 'web-tree-sitter';
 import { Language } from '../types';
 
 class AstService {
-  private parser: Parser | null = null;
+  private parser: Parser.Parser | null = null;
 
   async initialize(language: Language) {
     try {
@@ -11,7 +11,7 @@ class AstService {
       if (typeof Parser.init === 'function') {
         await Parser.init();
       }
-      const parser = new Parser();
+      const parser = new Parser.Parser();
       const langUrl = `/${language === 'c' ? 'tree-sitter-c.wasm' : 'tree-sitter-cpp.wasm'}`;
       const lang = await Parser.Language.load(langUrl);
       parser.setLanguage(lang);

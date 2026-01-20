@@ -90,6 +90,7 @@ export function setupSocketHandlers(io) {
         });
 
         // Send trace in single chunk (can be split if needed)
+        console.log('Backend traceResult:', JSON.stringify(traceResult, null, 2));
         socket.emit(SOCKET_EVENTS.CODE_TRACE_CHUNK, {
           chunkId: 0,
           totalChunks: 1,

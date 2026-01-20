@@ -162,7 +162,15 @@ export default function VisualizationCanvas() {
 
       states.set(element.id, { isNew, isUpdated });
 
-      // ...existing code...
+      // Debug logging for each element's animation state
+      console.log('[VisualizationCanvas] Element animation state', {
+        id: element.id,
+        stepId: element.stepId,
+        isNew,
+        isUpdated,
+        type: element.type,
+        name: element.data?.name,
+      });
     });
 
     return states;
@@ -237,42 +245,45 @@ export default function VisualizationCanvas() {
     };
   }, [setCanvasSize]);
 
-  // Smoothly auto-focus the camera on the most recent element
+  // Smoothly auto‑focus the camera on the most recent element (new **or** updated)
   useEffect(() => {
-    if (!visibleLayout || !stageRef.current || prevStepRef.current >= currentStep) return;
+    if (!visibleLayout || !stageRef.current) return;
 
-    // Find all elements that are new in this step
-    const newElements = visibleLayout.elements.filter(el => {
+    // Determine whether we are moving forward in the trace; if we are stepping backward we keep the current view.
+    const movingForward = prevStepRef.current < currentStep;
+
+    // Gather elements that are either newly created this step or have been updated.
+    const focusCandidates = visibleLayout.elements.filter(el => {
       const animState = elementAnimationStates.get(el.id);
-      return animState?.isNew;
+      return (animState?.isNew && movingForward) || animState?.isUpdated;
     });
 
-    if (newElements.length === 0) return;
+    if (focusCandidates.length === 0) return;
 
-    // Find the element with the largest `y` value (lowest on screen) among the new ones
-    const focusTarget = newElements.reduce((prev, curr) => {
-      return (prev && prev.y > curr.y) ? prev : curr;
-    });
-    
-    if (focusTarget) {
-      const targetPos = getFocusPosition(focusTarget, dimensions, zoom);
-      const stage = stageRef.current;
+    // Choose the element that appears lowest on the canvas (largest y) – this mimics the natural flow.
+    const focusTarget = focusCandidates.reduce((prev, curr) => {
+      if (!prev) return curr;
+      return (prev.y ?? 0) > (curr.y ?? 0) ? prev : curr;
+    }, undefined as LayoutElement | undefined);
 
-      // Animate the stage to the new position
-      new Konva.Tween({
-        node: stage,
-        x: targetPos.x,
-        y: targetPos.y,
-        duration: 0.4,
-        easing: Konva.Easings.EaseInOut,
-        onFinish: () => {
-          // Only update the store when the animation is complete
-          if (stage) {
-            setPosition({ x: stage.x(), y: stage.y() });
-          }
-        },
-      }).play();
-    }
+    if (!focusTarget) return;
+
+    const targetPos = getFocusPosition(focusTarget, dimensions, zoom);
+    const stage = stageRef.current;
+
+    // Animate the stage to the new position. This runs even if the user has manually panned/zoomed – the effect
+    // respects the current zoom level and will smoothly recenter on the target element.
+    new Konva.Tween({
+      node: stage,
+      x: targetPos.x,
+      y: targetPos.y,
+      duration: 0.4,
+      easing: Konva.Easings.EaseInOut,
+      onFinish: () => {
+        // Persist the new camera position in the store after the animation completes.
+        setPosition({ x: stage.x(), y: stage.y() });
+      },
+    }).play();
   }, [currentStep, elementAnimationStates, dimensions, zoom, setPosition]);
 
   // Zoom & Pan controls
