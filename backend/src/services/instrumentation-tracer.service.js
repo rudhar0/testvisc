@@ -195,25 +195,22 @@ class InstrumentationTracer {
         await copyFile(this.traceHeader, headerCopy);
 
         const compileUser = new Promise((resolve, reject) => {
-            const step = {
-                stepIndex: stepIndex++,
-                // Preserve original event type for internal use
-                eventType: isOutputOp ? 'output' : ev.type,
-                // NEW: Explicit step type for beginner mode (declare/assign/output)
-                stepType: ev.type === 'var' ? (ev.varType || null) : (isOutputOp ? 'output' : null),
-                line: info.line,
-                function: info.function,
-                file: path.basename(info.file),
-                timestamp: ev.ts || null,
-                name: ev.name || null,
-                value: ev.value ?? null,
-                varType: ev.type === 'var' ? (ev.varType || 'unknown') : null,
-                size: ev.size ?? null,
-                addr: ev.addr ?? null,
-                stdout: capturedOutput,
-                explanation: this.getEventExplanation(ev, info, capturedOutput, isOutputOp),
-                internalEvents: []
-            };
+            const args = [
+                '-c', '-g', '-O0',
+                stdFlag,
+                '-fno-omit-frame-pointer',
+                '-finstrument-functions',
+                sourceFile,
+                '-o', userObj
+            ];
+            const p = spawn(compiler, args);
+            let err = '';
+            p.stderr.on('data', d => err += d.toString());
+            p.on('close', code => code === 0 ? resolve()
+                : reject(new Error(`User compile failed:\n${err}`)));
+            p.on('error', e => reject(e));
+        });
+
         const compileTracer = new Promise((resolve, reject) => {
             const args = [
                 '-c', '-g', '-O0',
