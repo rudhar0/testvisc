@@ -8,7 +8,10 @@ import { useCanvasStore } from '@store/slices/canvasSlice';
 
 // Import element components
 import { VariableBox } from './elements/VariableBox';
-import { ArrayView } from './elements/ArrayView';
+
+import { ArrayPanel } from './elements/ArrayPanel';
+import { ArrayReference } from './elements/ArrayReference';
+import arrayUtils from '../../utils/arrayUtils';
 import { StackFrame } from './elements/StackFrame';
 import { StructView } from './elements/StructView';
 import { ClassView } from './elements/ClassView';
@@ -115,10 +118,13 @@ export default function VisualizationCanvas() {
     const filteredMainChildren = filterChildren(fullLayout.mainFunction.children);
     // Filter global panel children
     const filteredGlobalChildren = filterChildren(fullLayout.globalPanel.children);
-    // Filter all elements
+    // Filter all elements (exclude array entries — arrays are rendered via arrayPanel)
     const filteredElements = fullLayout.elements.filter(el => {
       const stepId = el.data?.birthStep ?? el.stepId;
-      return stepId !== undefined && stepId <= currentStep;
+      if (stepId === undefined || stepId > currentStep) return false;
+      // Exclude element entries that represent arrays; the layout provides an `arrayPanel` for them
+      if (el.type === 'array' || el.type === 'array_panel') return false;
+      return true;
     });
 
     const filtered = {
@@ -258,6 +264,27 @@ export default function VisualizationCanvas() {
       return (animState?.isNew && movingForward) || animState?.isUpdated;
     });
 
+    // ALSO check if array panel is new (focus it when it first appears)
+    if (visibleLayout.arrayPanel && movingForward) {
+      const arrayPanelStepId = visibleLayout.arrayPanel.stepId || visibleLayout.arrayPanel.data?.stepId || 0;
+      if (arrayPanelStepId === currentStep) {
+        const targetPos = getFocusPosition(visibleLayout.arrayPanel, dimensions, zoom);
+        const stage = stageRef.current;
+
+        new Konva.Tween({
+          node: stage,
+          x: targetPos.x,
+          y: targetPos.y,
+          duration: 0.4,
+          easing: Konva.Easings.EaseInOut,
+          onFinish: () => {
+            setPosition({ x: stage.x(), y: stage.y() });
+          },
+        }).play();
+        return;
+      }
+    }
+
     if (focusCandidates.length === 0) return;
 
     // Choose the element that appears lowest on the canvas (largest y) – this mimics the natural flow.
@@ -271,8 +298,7 @@ export default function VisualizationCanvas() {
     const targetPos = getFocusPosition(focusTarget, dimensions, zoom);
     const stage = stageRef.current;
 
-    // Animate the stage to the new position. This runs even if the user has manually panned/zoomed – the effect
-    // respects the current zoom level and will smoothly recenter on the target element.
+    // Animate the stage to the new position.
     new Konva.Tween({
       node: stage,
       x: targetPos.x,
@@ -280,11 +306,10 @@ export default function VisualizationCanvas() {
       duration: 0.4,
       easing: Konva.Easings.EaseInOut,
       onFinish: () => {
-        // Persist the new camera position in the store after the animation completes.
         setPosition({ x: stage.x(), y: stage.y() });
       },
     }).play();
-  }, [currentStep, elementAnimationStates, dimensions, zoom, setPosition]);
+  }, [currentStep, elementAnimationStates, dimensions, zoom, setPosition, visibleLayout]);
 
   // Zoom & Pan controls
   const handleZoomIn = useCallback(() => {
@@ -466,7 +491,7 @@ export default function VisualizationCanvas() {
           </StackFrame>
         );
 
-      case 'variable':
+      case 'variable': {
         // Determine variable state: prefer explicit data.state, fall back to subtype/isUpdated
         let varState: 'declared' | 'initialized' | 'multiple-init' | 'updated' = 'initialized';
         if (data?.state === 'declared') {
@@ -486,6 +511,12 @@ export default function VisualizationCanvas() {
         // For flow view: treat updates as "new" to trigger appearance animation
         const effectiveIsNew = isNew || isUpdated;
 
+        // If this variable represents an array (type includes []), skip rendering here – it will be shown in the ArrayPanel.
+        const normalizedType = (data?.type || data?.primitive || '').toString().toLowerCase();
+        if (normalizedType.includes('[]') || normalizedType.includes('array')) {
+          return null;
+        }
+
         return (
           <VariableBox
             key={`${id}-${stepId}`} // Force new box on update/step change
@@ -494,8 +525,8 @@ export default function VisualizationCanvas() {
             type={data?.type || data?.primitive || 'int'}
             value={data?.value}
             address={data?.address || ''}
-            x={0}
-            y={0}
+            x={x}
+            y={y}
             width={width}
             height={height}
             section="stack"
@@ -507,24 +538,12 @@ export default function VisualizationCanvas() {
             color={getVarColor(data?.type || data?.primitive)}
           />
         );
+      }
 
-      case 'array':
-        return (
-          <ArrayView
-            key={id}
-            id={id}
-            name={data?.name || ''}
-            type={data?.type || 'int'}
-            values={data?.values || []}
-            address={data?.address || ''}
-            x={0}
-            y={0}
-            width={width}
-            height={height}
-            isNew={isNew}
-            isUpdated={isUpdated}
-          />
-        );
+      case 'array_panel': {
+        // Array panel is rendered separately in the Layer, not via renderElement
+        return null;
+      }
 
       case 'output':
         return (
@@ -532,8 +551,8 @@ export default function VisualizationCanvas() {
             key={id}
             id={id}
             value={data?.value || ''}
-            x={0}
-            y={0}
+            x={x}
+            y={y}
             width={width}
             height={height}
             isNew={isNew}
@@ -550,8 +569,8 @@ export default function VisualizationCanvas() {
             prompt={data?.prompt}
             format={data?.format}
             varName={data?.varName || data?.variables?.[0]}
-            x={0}
-            y={0}
+            x={x}
+            y={y}
             width={width}
             height={height}
             isNew={isNew}
@@ -576,8 +595,8 @@ export default function VisualizationCanvas() {
             type={data?.type || data?.primitive || 'int'}
             value={data?.value}
             address={data?.address || ''}
-            x={0}
-            y={0}
+            x={x}
+            y={y}
             width={width}
             height={height}
             section="global"
@@ -595,8 +614,8 @@ export default function VisualizationCanvas() {
             key={id}
             id={id}
             functionName={data?.function || 'function()'}
-            x={0}
-            y={0}
+            x={x}
+            y={y}
             width={width}
             height={height}
             isNew={isNew}
@@ -619,8 +638,8 @@ export default function VisualizationCanvas() {
             key={id}
             id={id}
             typeName={data?.type || 'struct'}
-            x={0}
-            y={0}
+            x={x}
+            y={y}
             width={width}
             height={height}
             isNew={isNew}
@@ -644,8 +663,8 @@ export default function VisualizationCanvas() {
             id={id}
             typeName={data?.type || 'class'}
             objectName={data?.name || ''}
-            x={0}
-            y={0}
+            x={x}
+            y={y}
             width={width}
             height={height}
             isNew={isNew}
@@ -664,7 +683,7 @@ export default function VisualizationCanvas() {
 
       case 'loop':
         return (
-          <Group key={id} x={0} y={0}>
+          <Group key={id} x={x} y={y}>
             <Rect
               width={width}
               height={height}
@@ -695,7 +714,7 @@ export default function VisualizationCanvas() {
 
       case 'condition':
         return (
-          <Group key={id} x={0} y={0}>
+          <Group key={id} x={x} y={y}>
             <Rect
               width={width}
               height={height}
@@ -706,8 +725,8 @@ export default function VisualizationCanvas() {
             />
             <Text
               text={`Condition: ${data?.explanation || 'if/else'}`}
-              x={12}
-              y={20}
+              x={x}
+              y={y}
               fontSize={14}
               fill="#F1F5F9"
               fontFamily="monospace"
@@ -911,6 +930,19 @@ export default function VisualizationCanvas() {
                 </Group>
               )}
 
+              {/* Array Panel */}
+              {visibleLayout.arrayPanel && visibleLayout.arrayPanel.data?.arrays && visibleLayout.arrayPanel.data.arrays.length > 0 && (
+                <Group x={0} y={0}>
+                  <ArrayPanel
+                    id={visibleLayout.arrayPanel.id}
+                    x={visibleLayout.arrayPanel.x}
+                    y={visibleLayout.arrayPanel.y}
+                    arrays={visibleLayout.arrayPanel.data.arrays}
+                    isNew={false}
+                  />
+                </Group>
+              )}
+
               {/* Global Panel with Arrow */}
               {visibleLayout.globalPanel && visibleLayout.globalPanel.children && visibleLayout.globalPanel.children.length > 0 && (
                 <Group x={0} y={0}>
@@ -956,6 +988,39 @@ export default function VisualizationCanvas() {
                       <Group key={child.id} x={child.x} y={child.y}>
                         {renderElement(child)}
                       </Group>
+                    );
+                  })}
+                </Group>
+              )}
+
+              {/* Array References (Arrows) - NEW */}
+              {visibleLayout.arrayReferences && visibleLayout.arrayReferences.length > 0 && (
+                <Group>
+                  {visibleLayout.arrayReferences.map(ref => {
+                    const fromElement = visibleLayout.elements.find(el => el.id === ref.data.fromElement);
+                    const toArray = visibleLayout.arrayPanel?.data?.arrays?.find(
+                      (arr: any) => arr.id === ref.data.toArray
+                    );
+                    
+                    if (!fromElement || !toArray || !visibleLayout.arrayPanel) return null;
+                    
+                    const fromX = fromElement.x + fromElement.width;
+                    const fromY = fromElement.y + fromElement.height / 2;
+                    const toX = visibleLayout.arrayPanel.x;
+                    const toY = visibleLayout.arrayPanel.y + 100;
+                    
+                    return (
+                      <ArrayReference
+                        key={ref.id}
+                        id={ref.id}
+                        fromX={fromX}
+                        fromY={fromY}
+                        toX={toX}
+                        toY={toY}
+                        variableName={ref.data.variableName}
+                        arrayName={ref.data.arrayName}
+                        isNew={ref.stepId === currentStep}
+                      />
                     );
                   })}
                 </Group>

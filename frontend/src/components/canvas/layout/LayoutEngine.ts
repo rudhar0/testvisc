@@ -1,24 +1,27 @@
 /**
- * LayoutEngine - Calculates positions for all elements in the canvas
+ * LayoutEngine - ENHANCED WITH ARRAY SUPPORT
  * 
- * Processes execution steps to generate a visual layout for rendering.
- * Supports C++ features like classes, objects, and pointers.
- * ✅ UPDATED: Supports beginner-mode declare/assign events
+ * Calculates positions for all elements including arrays in separate panel
+ * Arrays are NEVER rendered inside stack frames - they get their own panel
  */
 
 import { 
   MemoryState, 
   ExecutionStep, 
   Variable, 
-  ClassMember,
-  CallFrame,
   ExecutionTrace,
 } from '@types/index';
+import { 
+  isArray, 
+  createArrayInfo, 
+  detectUpdatedIndices,
+  ArrayInfo 
+} from '../../../utils/arrayUtils';
 
 export interface LayoutElement {
   id: string;
-  type: 'main' | 'variable' | 'array' | 'pointer' | 'loop' | 'condition' | 'output' | 'input' | 'global' | 'function' | 'struct' | 'class';
-  subtype?: ElementSubtype;
+  type: 'main' | 'variable' | 'array' | 'pointer' | 'loop' | 'condition' | 'output' | 'input' | 'global' | 'function' | 'struct' | 'class' | 'array_panel' | 'array_reference';
+  subtype?: string;
   x: number;
   y: number;
   width: number;
@@ -30,6 +33,7 @@ export interface LayoutElement {
   metadata?: {
     isMultiple?: boolean;
     relatedElements?: string[];
+    referencesArray?: string; // For pointer -> array connections
     [key: string]: any;
   };
 }
@@ -37,7 +41,9 @@ export interface LayoutElement {
 export interface Layout {
   mainFunction: LayoutElement;
   globalPanel: LayoutElement;
+  arrayPanel: LayoutElement | null; // NEW: Array container
   elements: LayoutElement[];
+  arrayReferences: LayoutElement[]; // NEW: Arrows from vars to arrays
   width: number;
   height: number;
 }
@@ -48,12 +54,12 @@ const HEADER_HEIGHT = 40;
 const MAIN_FUNCTION_X = 40;
 const MAIN_FUNCTION_Y = 40;
 const MAIN_FUNCTION_WIDTH = 600;
-const GLOBAL_PANEL_X = 720;
-const GLOBAL_PANEL_Y = 40;
 const GLOBAL_PANEL_WIDTH = 300;
+const PANEL_GAP = 40; // Space between panels
 
 export class LayoutEngine {
   private static elementHistory: Map<string, LayoutElement> = new Map();
+  private static arrayHistory: Map<string, ArrayInfo> = new Map();
   private static parentStack: LayoutElement[] = [];
   private static createdInStep: Map<string, number> = new Map();
 
@@ -64,52 +70,74 @@ export class LayoutEngine {
     canvasHeight: number
   ): Layout {
     const layout: Layout = {
-      mainFunction: { id: 'main-function', type: 'main', x: MAIN_FUNCTION_X, y: MAIN_FUNCTION_Y, width: MAIN_FUNCTION_WIDTH, height: 80, children: [], stepId: 0 },
-      globalPanel: { id: 'global-panel', type: 'global', x: GLOBAL_PANEL_X, y: GLOBAL_PANEL_Y, width: GLOBAL_PANEL_WIDTH, height: 60, children: [], stepId: 0 },
+      mainFunction: { 
+        id: 'main-function', 
+        type: 'main', 
+        x: MAIN_FUNCTION_X, 
+        y: MAIN_FUNCTION_Y, 
+        width: MAIN_FUNCTION_WIDTH, 
+        height: 80, 
+        children: [], 
+        stepId: 0 
+      },
+      globalPanel: { 
+        id: 'global-panel', 
+        type: 'global', 
+        x: 0, // Will be calculated
+        y: 0, // Will be calculated
+        width: GLOBAL_PANEL_WIDTH, 
+        height: 60, 
+        children: [], 
+        stepId: 0 
+      },
+      arrayPanel: null, // Will be created if arrays exist
       elements: [],
+      arrayReferences: [],
       width: canvasWidth,
       height: canvasHeight,
     };
 
     this.elementHistory.clear();
+    this.arrayHistory.clear();
     this.createdInStep.clear();
     this.parentStack = [layout.mainFunction];
 
+    // Process all steps up to current
     for (let i = 0; i <= currentStepIndex && i < executionTrace.steps.length; i++) {
       const step = executionTrace.steps[i];
       this.processStep(step, layout, i);
     }
     
     this.updateAllElementsToCurrentState(executionTrace.steps[currentStepIndex], layout);
+    
+    // Create array panel if arrays exist
+    this.createArrayPanel(layout);
+    
+    // Position global panel (after array panel if it exists)
+    this.positionGlobalPanel(layout);
+    
+    // Create array references (arrows from pointers to arrays)
+    this.createArrayReferences(layout);
+    
     this.updateContainerHeights(layout);
 
     return layout;
   }
 
   private static processStep(step: ExecutionStep, layout: Layout, stepIndex: number): void {
-    // The backend may send the step type under the legacy `type` field or the newer
-    // `eventType` field (used for beginner‑mode declare/assign events). We fall
-    // back to `type` when `eventType` is undefined to maintain compatibility with
-    // existing traces.
     const stepType: string = (step as any).eventType || (step as any).type;
     const { state, id } = step;
     const currentParent = this.parentStack[this.parentStack.length - 1];
 
     switch (stepType) {
-      // ✅ NEW: Handle beginner-mode DECLARE events
       case 'declare': {
         if (!step.name) break;
-
         const varId = `var-${currentParent.id}-${step.name}`;
-        
-        // Don't create duplicate
         if (this.elementHistory.has(varId)) break;
-
-        console.log(`[LayoutEngine] Step ${stepIndex}: Declaring variable '${step.name}' (${step.varType})`);
 
         const variable: any = {
           name: step.name,
-          value: null, // Not initialized yet
+          value: null,
           type: step.varType || 'int',
           primitive: step.varType || 'int',
           address: step.addr || '0x0',
@@ -119,65 +147,14 @@ export class LayoutEngine {
           birthStep: stepIndex,
         };
 
-        const varElement: LayoutElement = {
-          id: varId,
-          type: 'variable',
-          subtype: 'variable_declaration',
-          x: currentParent.x + INDENT_SIZE,
-          y: this.getNextCursorY(currentParent),
-          width: currentParent.width - (INDENT_SIZE * 2),
-          height: 70,
-          parentId: currentParent.id,
-          stepId: stepIndex,
-          data: variable,
-        };
-
-        currentParent.children!.push(varElement);
-        layout.elements.push(varElement);
-        this.elementHistory.set(varId, varElement);
-        this.createdInStep.set(varId, stepIndex);
-        break;
-      }
-
-      // ✅ NEW: Handle beginner-mode ASSIGN events
-      case 'assign': {
-        if (!step.name) break;
-
-        const varId = `var-${currentParent.id}-${step.name}`;
-        
-        if (this.elementHistory.has(varId)) {
-          // UPDATE existing variable
-          const existingElement = this.elementHistory.get(varId)!;
-          existingElement.data = {
-            ...existingElement.data,
-            value: step.value,
-            isInitialized: true,
-          };
-          existingElement.metadata = {
-            ...(existingElement.metadata || {}),
-            updatedStep: stepIndex,
-          };
-          console.log(`[LayoutEngine] Step ${stepIndex}: Assigned ${step.name} = ${step.value}`);
+        // Check if this is an array
+        if (isArray(variable)) {
+          this.handleArrayDeclaration(variable, 'main', stepIndex, layout);
         } else {
-          // CREATE variable if it doesn't exist (declaration was missed)
-          console.log(`[LayoutEngine] Step ${stepIndex}: Creating variable '${step.name}' during assignment`);
-          
-          const variable: any = {
-            name: step.name,
-            value: step.value,
-            type: 'int',
-            primitive: 'int',
-            address: step.addr || '0x0',
-            scope: 'local',
-            isInitialized: true,
-            isAlive: true,
-            birthStep: stepIndex,
-          };
-
           const varElement: LayoutElement = {
             id: varId,
             type: 'variable',
-            subtype: 'variable_initialization',
+            subtype: 'variable_declaration',
             x: currentParent.x + INDENT_SIZE,
             y: this.getNextCursorY(currentParent),
             width: currentParent.width - (INDENT_SIZE * 2),
@@ -195,13 +172,70 @@ export class LayoutEngine {
         break;
       }
 
-      // ✅ NEW: Handle OUTPUT events
+      case 'assign': {
+        if (!step.name) break;
+        const varId = `var-${currentParent.id}-${step.name}`;
+        
+        // Check if this is an array element assignment
+        const arrayMatch = step.name.match(/^(\w+)\[/);
+        if (arrayMatch) {
+          this.handleArrayElementUpdate(step, stepIndex, layout);
+          break;
+        }
+        
+        if (this.elementHistory.has(varId)) {
+          const existingElement = this.elementHistory.get(varId)!;
+          existingElement.data = {
+            ...existingElement.data,
+            value: step.value,
+            isInitialized: true,
+          };
+          existingElement.metadata = {
+            ...(existingElement.metadata || {}),
+            updatedStep: stepIndex,
+          };
+        } else {
+          // Create variable
+          const variable: any = {
+            name: step.name,
+            value: step.value,
+            type: 'int',
+            primitive: 'int',
+            address: step.addr || '0x0',
+            scope: 'local',
+            isInitialized: true,
+            isAlive: true,
+            birthStep: stepIndex,
+          };
+
+          if (isArray(variable)) {
+            this.handleArrayDeclaration(variable, 'main', stepIndex, layout);
+          } else {
+            const varElement: LayoutElement = {
+              id: varId,
+              type: 'variable',
+              subtype: 'variable_initialization',
+              x: currentParent.x + INDENT_SIZE,
+              y: this.getNextCursorY(currentParent),
+              width: currentParent.width - (INDENT_SIZE * 2),
+              height: 70,
+              parentId: currentParent.id,
+              stepId: stepIndex,
+              data: variable,
+            };
+
+            currentParent.children!.push(varElement);
+            layout.elements.push(varElement);
+            this.elementHistory.set(varId, varElement);
+            this.createdInStep.set(varId, stepIndex);
+          }
+        }
+        break;
+      }
+
       case 'output': {
         const outputId = `output-${stepIndex}`;
-        
         if (this.elementHistory.has(outputId)) break;
-
-        console.log(`[LayoutEngine] Step ${stepIndex}: Output event - ${step.text || step.rawText}`);
 
         const outputElement: LayoutElement = {
           id: outputId,
@@ -226,74 +260,22 @@ export class LayoutEngine {
         break;
       }
 
-      case 'object_creation': {
-        if (step.birthStep && step.birthStep > stepIndex) return;
-
-        const classId = `class-${step.address}`;
-        if (this.elementHistory.has(classId)) return;
-
-        console.log(`[LayoutEngine] Creating new class: ${step.objectName}`);
-        const classElement: LayoutElement = {
-          id: classId,
-          type: 'class',
-          x: currentParent.x + INDENT_SIZE,
-          y: this.getNextCursorY(currentParent),
-          width: currentParent.width - (INDENT_SIZE * 2),
-          height: 80,
-          parentId: currentParent.id,
-          stepId: stepIndex,
-          data: {
-            name: step.objectName,
-            type: step.className,
-            ...step,
-          },
-          children: [],
-        };
-
-        currentParent.children!.push(classElement);
-        layout.elements.push(classElement);
-        this.elementHistory.set(classId, classElement);
-        this.createdInStep.set(classId, stepIndex);
-
-        this.parentStack.push(classElement);
-
-        if (Array.isArray(step.value)) {
-          step.value.forEach((member: ClassMember) => {
-            const memberId = `var-${member.address}`;
-            if (!this.elementHistory.has(memberId)) {
-              const memberElement: LayoutElement = {
-                id: memberId,
-                type: 'variable',
-                x: classElement.x + INDENT_SIZE,
-                y: this.getNextCursorY(classElement),
-                width: classElement.width - (INDENT_SIZE * 2),
-                height: 70,
-                parentId: classId,
-                stepId: stepIndex,
-                data: member,
-              };
-              classElement.children!.push(memberElement);
-              layout.elements.push(memberElement);
-              this.elementHistory.set(memberId, memberElement);
-              this.createdInStep.set(memberId, stepIndex);
-            }
-          });
-        }
-        this.parentStack.pop();
-        break;
-      }
-      
       case 'variable_declaration': {
         if (!state?.callStack || state.callStack.length === 0) break;
         const frame = state.callStack[0];
         if (!frame.locals) break;
 
         Object.values(frame.locals).forEach((variable: Variable) => {
-          if (variable.birthStep !== undefined && variable.birthStep > stepIndex) return;
-          if (variable.birthStep !== stepIndex) return;
+          if (variable.birthStep !== undefined && variable.birthStep !== stepIndex) return;
 
           const varId = `var-${variable.address}`;
           if (this.elementHistory.has(varId)) return;
+
+          // Check if array
+          if (isArray(variable)) {
+            this.handleArrayDeclaration(variable, 'main', stepIndex, layout);
+            return;
+          }
           
           if (variable.primitive === 'class' || variable.primitive === 'struct') return;
 
@@ -315,63 +297,6 @@ export class LayoutEngine {
           this.elementHistory.set(varId, varElement);
           this.createdInStep.set(varId, stepIndex);
         });
-        break;
-      }
-
-      case 'var':
-      case 'int':
-      case 'double':
-      case 'float':
-      case 'char':
-      case 'bool': {
-        if (!step.name) break;
-
-        if (step.type && step.type !== 'var') {
-          (step as any).originalEventType = step.type;
-        }
-
-        const primitiveType = (step as any).originalEventType || 'int';
-        const parentId = currentParent.id;
-        const varId = `var-${parentId}-${step.name}`;
-
-        if (this.elementHistory.has(varId)) {
-          const existingElement = this.elementHistory.get(varId)!;
-          existingElement.data = { ...existingElement.data, value: step.value };
-          existingElement.metadata = {
-            ...(existingElement.metadata || {}),
-            updatedStep: stepIndex,
-          };
-        } else {
-          const variable: any = {
-            name: step.name,
-            value: step.value,
-            type: primitiveType,
-            primitive: primitiveType,
-            address: step.addr,
-            scope: 'local',
-            isInitialized: true,
-            isAlive: true,
-            birthStep: stepIndex,
-          };
-
-          const varElement: LayoutElement = {
-            id: varId,
-            type: 'variable',
-            subtype: 'variable_initialization',
-            x: currentParent.x + INDENT_SIZE,
-            y: this.getNextCursorY(currentParent),
-            width: currentParent.width - (INDENT_SIZE * 2),
-            height: 70,
-            parentId: currentParent.id,
-            stepId: stepIndex,
-            data: variable,
-          };
-
-          currentParent.children!.push(varElement);
-          layout.elements.push(varElement);
-          this.elementHistory.set(varId, varElement);
-          this.createdInStep.set(varId, stepIndex);
-        }
         break;
       }
 
@@ -414,22 +339,12 @@ export class LayoutEngine {
       }
 
       case 'program_start':
-        console.log(`[LayoutEngine] Step ${stepIndex}: Program started`);
         break;
 
       case 'program_end':
-        console.log(`[LayoutEngine] Step ${stepIndex}: Program ended`);
-        break;
-
-      case 'object_destruction':
-        console.log(`[LayoutEngine] Step ${stepIndex}: object_destruction not yet implemented visually.`);
         break;
         
       case 'line_execution':
-        break;
-        
-      case 'pointer_deref':
-        console.log(`[LayoutEngine] Step ${stepIndex}: pointer_deref needs visual representation.`);
         break;
     }
 
@@ -438,29 +353,173 @@ export class LayoutEngine {
     }
   }
 
+  // ============================================
+  // ARRAY HANDLING
+  // ============================================
+
+  private static handleArrayDeclaration(
+    variable: Variable,
+    owner: string,
+    stepIndex: number,
+    layout: Layout
+  ): void {
+    const arrayInfo = createArrayInfo(variable, owner, stepIndex);
+    if (!arrayInfo) return;
+
+    // Store in array history
+    this.arrayHistory.set(arrayInfo.id, arrayInfo);
+    this.createdInStep.set(arrayInfo.id, stepIndex);
+
+    console.log(`[LayoutEngine] Array declared: ${arrayInfo.name}`, arrayInfo);
+  }
+
+  private static handleArrayElementUpdate(
+    step: ExecutionStep,
+    stepIndex: number,
+    layout: Layout
+  ): void {
+    // Parse array name and index from step.name (e.g., "arr[0]", "mat[1][2]")
+    const match = step.name?.match(/^(\w+)\[(.+)\]$/);
+    if (!match) return;
+
+    const arrayName = match[1];
+    const indexStr = match[2];
+    const indices = indexStr.split('][').map(i => parseInt(i.trim(), 10));
+
+    // Find the array in history
+    const arrayId = `array-${arrayName}`;
+    let arrayInfo = this.arrayHistory.get(arrayId);
+    
+    if (arrayInfo) {
+      // Update the array's values
+      const flatIndex = this.multiIndexToFlat(indices, arrayInfo.dimensions);
+      if (flatIndex >= 0 && flatIndex < arrayInfo.values.length) {
+        const oldValues = [...arrayInfo.values];
+        arrayInfo.values[flatIndex] = step.value;
+        arrayInfo.updatedIndices = [[...indices]];
+        
+        console.log(`[LayoutEngine] Array updated: ${arrayName}[${indices.join('][')}] = ${step.value}`);
+      }
+    }
+  }
+
+  private static createArrayPanel(layout: Layout): void {
+    const arrays = Array.from(this.arrayHistory.values());
+    
+    if (arrays.length === 0) {
+      layout.arrayPanel = null;
+      return;
+    }
+
+    // Position: right of main function
+    const arrayPanelX = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP;
+    const arrayPanelY = MAIN_FUNCTION_Y;
+
+    layout.arrayPanel = {
+      id: 'array-panel',
+      type: 'array_panel',
+      x: arrayPanelX,
+      y: arrayPanelY,
+      width: 400, // Will be calculated dynamically
+      height: 200, // Will be calculated dynamically
+      children: [],
+      data: { arrays },
+      stepId: 0
+    };
+  }
+
+  private static positionGlobalPanel(layout: Layout): void {
+    if (layout.arrayPanel) {
+      // Position below array panel
+      layout.globalPanel.x = layout.arrayPanel.x;
+      layout.globalPanel.y = layout.arrayPanel.y + layout.arrayPanel.height + PANEL_GAP;
+    } else {
+      // Position right of main
+      layout.globalPanel.x = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP;
+      layout.globalPanel.y = MAIN_FUNCTION_Y;
+    }
+  }
+
+  private static createArrayReferences(layout: Layout): void {
+    // Find all pointer variables that reference arrays
+    layout.elements.forEach(el => {
+      if (el.type === 'variable' && el.data) {
+        const isPointer = el.data.type?.includes('*') || el.data.primitive?.includes('*');
+        if (isPointer) {
+          // Check if it points to an array
+          const referencedArray = this.findReferencedArray(el.data.value);
+          if (referencedArray) {
+            const refElement: LayoutElement = {
+              id: `ref-${el.id}-${referencedArray.id}`,
+              type: 'array_reference',
+              x: el.x + el.width,
+              y: el.y + el.height / 2,
+              width: 0,
+              height: 0,
+              data: {
+                fromElement: el.id,
+                toArray: referencedArray.id,
+                variableName: el.data.name,
+                arrayName: referencedArray.name
+              },
+              stepId: el.stepId
+            };
+            layout.arrayReferences.push(refElement);
+          }
+        }
+      }
+    });
+  }
+
+  private static findReferencedArray(address: any): ArrayInfo | null {
+    for (const [_, arrayInfo] of this.arrayHistory) {
+      if (arrayInfo.address === address) {
+        return arrayInfo;
+      }
+    }
+    return null;
+  }
+
+  // ============================================
+  // HELPER METHODS
+  // ============================================
+
+  private static multiIndexToFlat(indices: number[], dimensions: number[]): number {
+    if (indices.length === 1) {
+      return indices[0];
+    }
+    if (indices.length === 2) {
+      const [i, j] = indices;
+      return i * dimensions[1] + j;
+    }
+    if (indices.length === 3) {
+      const [i, j, k] = indices;
+      return i * dimensions[1] * dimensions[2] + j * dimensions[2] + k;
+    }
+    return indices[0];
+  }
+
   private static updateAllElementsToCurrentState(currentStep: ExecutionStep, layout: Layout): void {
-      if (!currentStep || !currentStep.state) return;
-  
-      const { callStack, globals } = currentStep.state;
-      const allLocals: Record<string, Variable> = {};
-      
-      callStack.forEach(frame => {
-          Object.assign(allLocals, frame.locals);
-      });
-  
-      layout.elements.forEach(el => {
-          let updatedVar: Variable | undefined;
-  
-          if (el.type === 'variable' || el.type === 'pointer' || el.type === 'array') {
-              updatedVar = allLocals[el.data.name] || globals[el.data.name];
-          } else if (el.type === 'class' || el.type === 'struct') {
-              updatedVar = allLocals[el.data.name] || globals[el.data.name];
-          }
-  
-          if (updatedVar) {
-              el.data = { ...el.data, ...updatedVar };
-          }
-      });
+    if (!currentStep || !currentStep.state) return;
+
+    const { callStack, globals } = currentStep.state;
+    const allLocals: Record<string, Variable> = {};
+    
+    callStack.forEach(frame => {
+        Object.assign(allLocals, frame.locals);
+    });
+
+    layout.elements.forEach(el => {
+        let updatedVar: Variable | undefined;
+
+        if (el.type === 'variable' || el.type === 'pointer') {
+            updatedVar = allLocals[el.data.name] || globals[el.data.name];
+        }
+
+        if (updatedVar) {
+            el.data = { ...el.data, ...updatedVar };
+        }
+    });
   }
 
   private static updateGlobals(globals: Record<string, Variable>, layout: Layout, stepIndex: number): void {
@@ -469,12 +528,18 @@ export class LayoutEngine {
       const globalId = `global-${variable.address}`;
       
       if (!this.elementHistory.has(globalId)) {
+        // Check if array
+        if (isArray(variable)) {
+          this.handleArrayDeclaration(variable, 'global', stepIndex, layout);
+          return;
+        }
+
         const isInitialized = variable.value !== undefined;
         const globalElement: LayoutElement = {
           id: globalId,
           type: 'global',
-          x: GLOBAL_PANEL_X + 10,
-          y: GLOBAL_PANEL_Y + HEADER_HEIGHT + (layout.globalPanel.children!.length * (70 + ELEMENT_SPACING)),
+          x: layout.globalPanel.x + 10,
+          y: layout.globalPanel.y + HEADER_HEIGHT + (layout.globalPanel.children!.length * (70 + ELEMENT_SPACING)),
           width: GLOBAL_PANEL_WIDTH - 20,
           height: 70,
           parentId: 'global-panel',
@@ -512,5 +577,8 @@ export class LayoutEngine {
     };
     updateHeight(layout.mainFunction);
     updateHeight(layout.globalPanel);
+    if (layout.arrayPanel) {
+      updateHeight(layout.arrayPanel);
+    }
   }
 }

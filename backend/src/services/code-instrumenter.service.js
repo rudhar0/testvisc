@@ -50,6 +50,77 @@ class CodeInstrumenter {
   }
 
   /**
+   * ✅ NEW: Smart parser for multi-declarations that respects braces and parentheses
+   * Correctly handles: int x=1, y=2, z; and int arr[3]={1,2,3}, b;
+   */
+  parseMultiDeclaration(rest) {
+    const vars = [];
+    let current = '';
+    let parenDepth = 0;
+    let braceDepth = 0;
+    let bracketDepth = 0;
+    
+    for (let c of rest) {
+      if (c === '(') parenDepth++;
+      else if (c === ')') parenDepth--;
+      else if (c === '{') braceDepth++;
+      else if (c === '}') braceDepth--;
+      else if (c === '[') bracketDepth++;
+      else if (c === ']') bracketDepth--;
+      
+      // Only split on comma if we're at top level (no nested structures)
+      if (c === ',' && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
+        const trimmed = current.trim();
+        if (trimmed) vars.push(trimmed);
+        current = '';
+      } else {
+        current += c;
+      }
+    }
+    
+    // Add the last variable
+    const trimmed = current.trim();
+    if (trimmed) vars.push(trimmed);
+    
+    return vars;
+  }
+
+  /**
+   * ✅ NEW: Extract variable name from declaration string
+   * Handles: x, x=5, arr[3], arr[3]={1,2,3}, *p, *p=&x
+   */
+  extractVariableName(varDecl) {
+    // Remove array initializers first: arr[3]={1,2,3} -> arr[3]
+    let cleaned = varDecl.replace(/\s*=\s*\{[^}]*\}/g, '');
+    
+    // Remove simple assignments: x=5 -> x
+    cleaned = cleaned.replace(/\s*=.*$/, '');
+    
+    // Handle pointers: *p -> p
+    cleaned = cleaned.replace(/^\s*\*+\s*/, '');
+    
+    // Extract just the identifier (handles arr[3] -> arr)
+    const match = cleaned.match(/^(\w+)/);
+    return match ? match[1] : null;
+  }
+
+  /**
+   * ✅ NEW: Check if a variable declaration has an initializer
+   */
+  hasInitializer(varDecl) {
+    return varDecl.includes('=');
+  }
+
+  /**
+   * ✅ NEW: Extract initializer value from declaration
+   * Handles: x=5, arr[3]={1,2,3}, *p=&x
+   */
+  extractInitializer(varDecl) {
+    const match = varDecl.match(/=\s*(.+)$/);
+    return match ? match[1].trim() : null;
+  }
+
+  /**
    * ✅ COMPLETE: Beginner-mode instrumentation
    * Creates EXPLICIT steps for ALL declarations and assignments
    */
@@ -103,7 +174,60 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 1: Declaration without initializer (int a;)
+      // ✅ PATTERN 1: Multi-declaration detection (int x=1, y=2, z; or int arr[3]={1,2,3}, b;)
+      const multiDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(.+);$/);
+      if (multiDecl && multiDecl[2].includes(',')) {
+        const [, type, rest] = multiDecl;
+        
+        console.log(`[Instrumenter] Line ${i + 1}: Multi-declaration detected`);
+        console.log(`[Instrumenter] Type: "${type}", Rest: "${rest}"`);
+        
+        // Use smart parser that respects braces
+        const vars = this.parseMultiDeclaration(rest);
+        
+        console.log(`[Instrumenter] Found ${vars.length} variables:`, JSON.stringify(vars));
+        
+        for (let idx = 0; idx < vars.length; idx++) {
+          const varDecl = vars[idx];
+          const varName = this.extractVariableName(varDecl);
+          
+          if (!varName || !/^\w+$/.test(varName)) {
+            console.warn(`  [${idx}] SKIPPED invalid variable name in: "${varDecl}"`);
+            continue;
+          }
+          
+          const hasInit = this.hasInitializer(varDecl);
+          
+          if (hasInit) {
+            const initValue = this.extractInitializer(varDecl);
+            console.log(`  [${idx}] "${varName}" = ${initValue} (initialized)`);
+            
+            // For arrays with initializers, keep original syntax
+            if (varDecl.includes('[') && varDecl.includes('{')) {
+              out.push(`${indent}${type} ${varDecl};`);
+              out.push(`${indent}__trace_declare(${varName}, ${type}[], ${i + 1});`);
+            } else {
+              // Regular variable with initializer
+              out.push(`${indent}${type} ${varName};`);
+              out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
+              out.push(`${indent}${varName} = ${initValue};`);
+              out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
+            }
+          } else {
+            console.log(`  [${idx}] "${varName}" (uninitialized)`);
+            // Declaration only
+            out.push(`${indent}${type} ${varDecl};`);
+            
+            // Determine if it's an array
+            const isArray = varDecl.includes('[');
+            const typeStr = isArray ? `${type}[]` : type;
+            out.push(`${indent}__trace_declare(${varName}, ${typeStr}, ${i + 1});`);
+          }
+        }
+        continue;
+      }
+
+      // ✅ PATTERN 2: Single declaration without initializer (int a;)
       const declOnly = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*;/);
       if (declOnly) {
         const [, type, varName] = declOnly;
@@ -112,7 +236,7 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 2: Declaration with initializer (int a = 5;)
+      // ✅ PATTERN 3: Declaration with initializer (int a = 5;)
       const declInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*=\s*([^;]+);/);
       if (declInit) {
         const [, type, varName, value] = declInit;
@@ -122,71 +246,13 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 3: Const declaration (const int c = 7;)
+      // ✅ PATTERN 4: Const declaration (const int c = 7;)
       const constDecl = trimmed.match(/^\s*const\s+(int|long|float|double|char|bool)\s+(\w+)\s*=\s*([^;]+);/);
       if (constDecl) {
         const [, type, varName, value] = constDecl;
         out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
         out.push(line);
         out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
-        continue;
-      }
-
-      // ✅ PATTERN 4: Multi-declaration (int x=1, y=2, z;)
-      const multiDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(.+);$/);
-      if (multiDecl && multiDecl[2].includes(',')) {
-        const [, type, rest] = multiDecl;
-        
-        console.log(`[Instrumenter] Line ${i + 1}: Multi-declaration detected`);
-        console.log(`[Instrumenter] Type: "${type}", Rest: "${rest}"`);
-        
-        // Split by comma, but be careful with nested expressions
-        const vars = [];
-        let current = '';
-        let parenDepth = 0;
-        
-        for (let c of rest) {
-          if (c === '(') parenDepth++;
-          else if (c === ')') parenDepth--;
-          
-          if (c === ',' && parenDepth === 0) {
-            vars.push(current.trim());
-            current = '';
-          } else {
-            current += c;
-          }
-        }
-        if (current.trim()) {
-          vars.push(current.trim());
-        }
-        
-        console.log(`[Instrumenter] Found ${vars.length} variables:`, JSON.stringify(vars));
-        
-        for (let idx = 0; idx < vars.length; idx++) {
-          const v = vars[idx];
-          const withInit = v.match(/^(\w+)\s*=\s*(.+)$/);
-          
-          if (withInit) {
-            const [, varName, value] = withInit;
-            console.log(`  [${idx}] "${varName}" = "${value}" (initialized)`);
-            // Declare
-            out.push(`${indent}${type} ${varName};`);
-            out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-            // Initialize
-            out.push(`${indent}${varName} = ${value};`);
-            out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
-          } else {
-            const varName = v.trim();
-            if (varName && /^\w+$/.test(varName)) {
-              console.log(`  [${idx}] "${varName}" (uninitialized)`);
-              // Declare only (no init)
-              out.push(`${indent}${type} ${varName};`);
-              out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-            } else {
-              console.warn(`  [${idx}] SKIPPED invalid variable name: "${varName}"`);
-            }
-          }
-        }
         continue;
       }
 
@@ -209,7 +275,16 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 7: Array element assignment (arr[0] = 10;)
+      // ✅ PATTERN 7: Array with initializer (int arr[3] = {1,2,3};)
+      const arrDeclInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\]\s*=\s*\{[^}]*\}\s*;/);
+      if (arrDeclInit) {
+        const [, type, varName, size] = arrDeclInit;
+        out.push(line);
+        out.push(`${indent}__trace_declare(${varName}, ${type}[${size}], ${i + 1});`);
+        continue;
+      }
+
+      // ✅ PATTERN 8: Array element assignment (arr[0] = 10;)
       const arrAssign = trimmed.match(/^\s*(\w+)\s*\[\s*(\d+)\s*\]\s*=\s*([^;]+);/);
       if (arrAssign) {
         const [, varName, index, value] = arrAssign;
@@ -218,7 +293,7 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 8: Pointer dereference (*p = 15;)
+      // ✅ PATTERN 9: Pointer dereference (*p = 15;)
       const ptrDeref = trimmed.match(/^\s*\*\s*(\w+)\s*=\s*([^;]+);/);
       if (ptrDeref) {
         const [, varName, value] = ptrDeref;
@@ -227,7 +302,7 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 9: Struct member assignment (pt.x = 3;)
+      // ✅ PATTERN 10: Struct member assignment (pt.x = 3;)
       const memberAssign = trimmed.match(/^\s*(\w+)\.(\w+)\s*=\s*([^;]+);/);
       if (memberAssign) {
         const [, structName, memberName, value] = memberAssign;
@@ -236,7 +311,16 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 10: Simple assignment (a = 5;)
+      // ✅ PATTERN 11: 2D array element assignment (mat[0][1] = 20;)
+      const arr2DAssign = trimmed.match(/^\s*(\w+)\s*\[\s*(\d+)\s*\]\s*\[\s*(\d+)\s*\]\s*=\s*([^;]+);/);
+      if (arr2DAssign) {
+        const [, varName, idx1, idx2, value] = arr2DAssign;
+        out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
+        out.push(line);
+        continue;
+      }
+
+      // ✅ PATTERN 12: Simple assignment (a = 5;)
       const assign = trimmed.match(/^\s*(\w+)\s*=\s*([^;]+);/);
       if (assign && !trimmed.includes('(') && !trimmed.includes('[') && !trimmed.includes('.')) {
         const [, varName, value] = assign;
@@ -245,20 +329,16 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 11: Compound assignment (b = b + 2; or b += 2;)
-      const compound = trimmed.match(/^\s*(\w+)\s*([+\-*/%]|<<|>>)?=\s*([^;]+);/);
+      // ✅ PATTERN 13: Compound assignment (b += 2;)
+      const compound = trimmed.match(/^\s*(\w+)\s*([+\-*/%]|<<|>>)=\s*([^;]+);/);
       if (compound) {
         const [, varName, op, value] = compound;
-        if (op) {
-          out.push(`${indent}__trace_assign(${varName}, ${varName} ${op} ${value}, ${i + 1});`);
-        } else {
-          out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
-        }
+        out.push(`${indent}__trace_assign(${varName}, ${varName} ${op} ${value}, ${i + 1});`);
         out.push(line);
         continue;
       }
 
-      // ✅ PATTERN 12: Increment/decrement (i++, ++i, i--, --i)
+      // ✅ PATTERN 14: Increment/decrement (i++, ++i, i--, --i)
       const inc = trimmed.match(/^\s*(\+\+|--)?(\w+)(\+\+|--)?;/);
       if (inc) {
         const varName = inc[2];
@@ -275,7 +355,7 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 13: For-loop with initialization (for (int i = 0; ...))
+      // ✅ PATTERN 15: For-loop with initialization (for (int i = 0; ...))
       const forLoop = trimmed.match(/^\s*for\s*\(\s*(int|long)\s+(\w+)\s*=\s*([^;]+);/);
       if (forLoop) {
         const [, type, varName, initValue] = forLoop;

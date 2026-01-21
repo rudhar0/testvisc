@@ -1,17 +1,14 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Group, Rect, Text, Circle } from 'react-konva';
+import { Group, Rect, Text, Circle, Line } from 'react-konva';
 import Konva from 'konva';
 
 // ============================================
 // TYPE DEFINITIONS
 // ============================================
 
-type VariableType = 'int' | 'float' | 'double' | 'char' | 'bool' | 'string';
-
 type VariableState = 
   | 'declared'           // int a;
   | 'initialized'        // int a = 10;
-  | 'multiple-init'      // int a = 10, b = 20;
   | 'updated';           // a = 30;
 
 interface VariableBoxProps {
@@ -30,14 +27,14 @@ interface VariableBoxProps {
   previousValue?: any;
   expression?: string;
   onClick?: () => void;
-  // New props for enhanced functionality
   state?: VariableState;
   stepNumber?: number;
-  enterDelay?: number; // milliseconds to delay entrance animation
+  enterDelay?: number;
+  color?: string;
 }
 
 // ============================================
-// COLOR SYSTEM - Type-based colors
+// HIGHLY DISTINCT COLOR SYSTEM
 // ============================================
 
 const TYPE_COLORS: Record<string, {
@@ -46,94 +43,115 @@ const TYPE_COLORS: Record<string, {
   dark: string;
   glow: string;
   bg: string;
+  accent: string;
 }> = {
   int: {
-    primary: '#3B82F6',
+    primary: '#2563EB',      // Deep Blue
     light: '#60A5FA',
-    dark: '#2563EB',
-    glow: 'rgba(59, 130, 246, 0.3)',
-    bg: 'rgba(59, 130, 246, 0.08)'
+    dark: '#1E40AF',
+    glow: 'rgba(37, 99, 235, 0.6)',
+    bg: 'rgba(37, 99, 235, 0.18)',
+    accent: '#3B82F6'
   },
   float: {
-    primary: '#10B981',
-    light: '#34D399',
-    dark: '#059669',
-    glow: 'rgba(16, 185, 129, 0.3)',
-    bg: 'rgba(16, 185, 129, 0.08)'
+    primary: '#0891B2',      // Cyan
+    light: '#22D3EE',
+    dark: '#0E7490',
+    glow: 'rgba(8, 145, 178, 0.6)',
+    bg: 'rgba(8, 145, 178, 0.18)',
+    accent: '#06B6D4'
   },
   double: {
-    primary: '#8B5CF6',
+    primary: '#7C3AED',      // Deep Violet
     light: '#A78BFA',
-    dark: '#7C3AED',
-    glow: 'rgba(139, 92, 246, 0.3)',
-    bg: 'rgba(139, 92, 246, 0.08)'
+    dark: '#6D28D9',
+    glow: 'rgba(124, 58, 237, 0.6)',
+    bg: 'rgba(124, 58, 237, 0.18)',
+    accent: '#8B5CF6'
   },
   char: {
-    primary: '#F59E0B',
-    light: '#FBBF24',
-    dark: '#D97706',
-    glow: 'rgba(245, 158, 11, 0.3)',
-    bg: 'rgba(245, 158, 11, 0.08)'
+    primary: '#EA580C',      // Deep Orange (NOT yellow/gray)
+    light: '#FB923C',
+    dark: '#C2410C',
+    glow: 'rgba(234, 88, 12, 0.6)',
+    bg: 'rgba(234, 88, 12, 0.18)',
+    accent: '#F97316'
   },
   bool: {
-    primary: '#EAB308',
-    light: '#FDE047',
-    dark: '#CA8A04',
-    glow: 'rgba(234, 179, 8, 0.3)',
-    bg: 'rgba(234, 179, 8, 0.08)'
+    primary: '#9333EA',      // Purple
+    light: '#C084FC',
+    dark: '#7E22CE',
+    glow: 'rgba(147, 51, 234, 0.6)',
+    bg: 'rgba(147, 51, 234, 0.18)',
+    accent: '#A855F7'
   },
   string: {
-    primary: '#EC4899',
+    primary: '#DB2777',      // Deep Pink
     light: '#F472B6',
-    dark: '#DB2777',
-    glow: 'rgba(236, 72, 153, 0.3)',
-    bg: 'rgba(236, 72, 153, 0.08)'
+    dark: '#BE185D',
+    glow: 'rgba(219, 39, 119, 0.6)',
+    bg: 'rgba(219, 39, 119, 0.18)',
+    accent: '#EC4899'
   },
-  // Fallback for unknown types - changed to pink for easy debugging
+  pointer: {
+    primary: '#DC2626',      // Red
+    light: '#F87171',
+    dark: '#B91C1C',
+    glow: 'rgba(220, 38, 38, 0.6)',
+    bg: 'rgba(220, 38, 38, 0.18)',
+    accent: '#EF4444'
+  },
+  array: {
+    primary: '#059669',      // Emerald Green
+    light: '#34D399',
+    dark: '#047857',
+    glow: 'rgba(5, 150, 105, 0.6)',
+    bg: 'rgba(5, 150, 105, 0.18)',
+    accent: '#10B981'
+  },
   default: {
-    primary: '#EC4899',
-    light: '#F472B6',
-    dark: '#DB2777',
-    glow: 'rgba(236, 72, 153, 0.3)',
-    bg: 'rgba(236, 72, 153, 0.08)'
+    primary: '#64748B',
+    light: '#94A3B8',
+    dark: '#475569',
+    glow: 'rgba(100, 116, 139, 0.6)',
+    bg: 'rgba(100, 116, 139, 0.18)',
+    accent: '#94A3B8'
   }
 };
 
-// State-based visual configuration
-const STATE_CONFIG: Record<VariableState, {
-  label: string;
-  opacity: number;
-  labelColor: string;
-  glowIntensity: number;
-}> = {
+// State visual configuration - ENHANCED VISUAL DIFFERENCES
+const STATE_CONFIG = {
   declared: {
-    label: 'DECLARED',
-    opacity: 0.6,
-    labelColor: '#94A3B8',
-    glowIntensity: 0.2
+    label: '📝 DECLARED',
+    dotColor: '#94A3B8',
+    labelBg: 'rgba(71, 85, 105, 0.4)',
+    labelStroke: '#64748B',
+    borderDash: [10, 5],
+    bgOpacity: 0.4,
+    glowEnabled: false
   },
   initialized: {
-    label: 'INITIALIZED',
-    opacity: 1,
-    labelColor: '#34D399',
-    glowIntensity: 0.4
-  },
-  'multiple-init': {
-    label: 'MULTI-INIT',
-    opacity: 1,
-    labelColor: '#A78BFA',
-    glowIntensity: 0.5
+    label: '✓ INITIALIZED',
+    dotColor: '#10B981',
+    labelBg: 'rgba(16, 185, 129, 0.25)',
+    labelStroke: '#10B981',
+    borderDash: undefined,
+    bgOpacity: 1,
+    glowEnabled: true
   },
   updated: {
-    label: 'UPDATED',
-    opacity: 1,
-    labelColor: '#FBBF24',
-    glowIntensity: 0.6
+    label: '⚡ UPDATED',
+    dotColor: '#F59E0B',
+    labelBg: 'rgba(245, 158, 11, 0.25)',
+    labelStroke: '#F59E0B',
+    borderDash: undefined,
+    bgOpacity: 1,
+    glowEnabled: true
   }
 };
 
 // ============================================
-// ENHANCED VARIABLE BOX COMPONENT
+// LARGER VARIABLE BOX - 180x140
 // ============================================
 
 export const VariableBox: React.FC<VariableBoxProps> = ({
@@ -142,348 +160,370 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   type,
   value,
   address,
-  x,
-  y,
-  width,
-  height,
+  x = 0,
+  y = 0,
   section,
   isNew = false,
-  isUpdated = false,
-  previousValue,
-  expression,
-  onClick,
   state,
-  stepNumber
-  , enterDelay = 0
+  stepNumber,
+  enterDelay = 0,
+  expression,
+  previousValue,
+  onClick
 }) => {
-  // Debug logging: track when VariableBox is instantiated and its key properties
-  console.log('[VariableBox] Render', {
-    id,
-    name,
-    type,
-    value,
-    address,
-    x,
-    y,
-    section,
-    isNew,
-    isUpdated,
-    state,
-    stepNumber,
-    enterDelay,
-  });
   const groupRef = useRef<Konva.Group>(null);
-  const bgRef = useRef<Konva.Rect>(null);
   const glowRef = useRef<Konva.Rect>(null);
-  const statusDotRef = useRef<Konva.Circle>(null);
-  
+  const dotRef = useRef<Konva.Circle>(null);
   const [isHovered, setIsHovered] = useState(false);
   const isInitialMount = useRef(true);
-  const prevValueRef = useRef(value);
 
-  // Use provided dimensions
-  const BOX_WIDTH = 160;
-  const BOX_HEIGHT = height;
+  // LARGER DIMENSIONS FOR MORE CONTENT
+  const BOX_WIDTH = 180;
+  const BOX_HEIGHT = 140;
+  const CORNER_RADIUS = 18;
+  const PADDING = 14;
+
+  // Determine state
+  const varState: VariableState = state || 
+    (value === undefined || value === null ? 'declared' : 'initialized');
   
-  // Determine variable state if not provided
-  const determinedState: VariableState = state || (() => {
-    if (value === undefined || value === null) return 'declared';
-    if (isUpdated) return 'updated';
-    return 'initialized';
-  })();
+  const stateConfig = STATE_CONFIG[varState];
 
-  // Get colors based on type - normalize type name
+  // Get type colors with better normalization
   const normalizeType = (t: string): keyof typeof TYPE_COLORS => {
-    const lowerT = t.toLowerCase().trim();
-    if (lowerT.includes('int')) return 'int';
-    if (lowerT.includes('char')) return 'char';
-    if (lowerT.includes('bool')) return 'bool';
-    if (lowerT.includes('float')) return 'float';
-    if (lowerT.includes('double')) return 'double';
-    if (lowerT.includes('string')) return 'string';
+    const lower = t.toLowerCase().trim();
+    if (lower.includes('int') && !lower.includes('point')) return 'int';
+    if (lower.includes('float')) return 'float';
+    if (lower.includes('double')) return 'double';
+    if (lower.includes('char')) return 'char';
+    if (lower.includes('bool')) return 'bool';
+    if (lower.includes('string')) return 'string';
+    if (lower.includes('*') || lower.includes('ptr') || lower.includes('point')) return 'pointer';
+    if (lower.includes('[]') || lower.includes('array')) return 'array';
     return 'default';
   };
-  const normalizedType = normalizeType(type);
-  const colors = TYPE_COLORS[normalizedType];
-  const stateConfig = STATE_CONFIG[determinedState];
 
-  // Make background color state-dependent for better visual feedback
-  const boxFill = determinedState === 'declared' ? 'rgba(100, 116, 139, 0.15)' : colors.bg;
-  const strokeColor = determinedState === 'declared' ? '#64748B' : colors.primary;
+  const typeKey = normalizeType(type);
+  const colors = TYPE_COLORS[typeKey];
 
-  // Format value for display
+  // Format value - MORE SPACE NOW
   const formatValue = (val: any): string => {
-    if (val === null || val === undefined) return 'â€”';
-    if (typeof val === 'string') return `"${val}"`;
+    if (val === null || val === undefined) return '—';
+    if (typeof val === 'string') {
+      if (val.length > 15) return `"${val.slice(0, 13)}..."`;
+      return `"${val}"`;
+    }
     if (typeof val === 'boolean') return val ? 'true' : 'false';
-    if (typeof val === 'number' && Number.isInteger(val)) return String(val);
-    if (typeof val === 'number') return val.toFixed(2);
-    if (Array.isArray(val)) return `[${val.length}]`;
-    return String(val);
+    if (typeof val === 'number') {
+      const str = String(val);
+      if (str.length > 15) return val.toExponential(2);
+      return str;
+    }
+    return String(val).slice(0, 15);
   };
 
-  const displayValue = expression || (determinedState === 'declared' ? 'â€”' : formatValue(value));
+  const displayValue = varState === 'declared' ? '—' : formatValue(value);
+
+  // Background colors - STATE-AWARE with strong visual distinction
+  const bgColor = varState === 'declared' 
+    ? 'rgba(51, 65, 85, 0.5)'  // Gray for declared
+    : `${colors.bg.slice(0, -2)}${stateConfig.bgOpacity})`;  // Type color for init/updated
   
-  // Dynamic font size based on content length
-  const valueFontSize = displayValue.length > 8 ? 14 : 18;
-  const nameFontSize = name.length > 10 ? 18 : 22;
+  const borderColor = varState === 'declared' 
+    ? '#64748B'  // Gray border for declared
+    : colors.primary;  // Type color border for init/updated
+  
+  const borderWidth = varState === 'declared' ? 2 : 3;
 
   // ============================================
-  // ANIMATION 1: ENTRANCE (Fade + Scale + Slide)
+  // ENTRANCE ANIMATION
   // ============================================
   useEffect(() => {
     const group = groupRef.current;
     const glow = glowRef.current;
+    const dot = dotRef.current;
     
-    if (!group || !glow) return;
+    if (!group) return;
 
     if (isNew && isInitialMount.current) {
-      console.log(`[VariableBox] Entrance animation for: ${name} at position (${x}, ${y}), delay=${enterDelay}ms`);
-
-      // Initial state - invisible, smaller, and slightly below
       group.opacity(0);
-      group.scaleX(0.7);
-      group.scaleY(0.7);
-      const currentY = group.y();
-      group.y(currentY + 20);
+      group.scaleX(0.75);
+      group.scaleY(0.75);
+      const origY = group.y();
+      group.y(origY + 25);
 
-      // Prepare entrance animation
-      const playEntrance = () => {
-        const entranceAnim = new Konva.Tween({
+      const playAnim = () => {
+        new Konva.Tween({
           node: group,
           opacity: 1,
           scaleX: 1,
           scaleY: 1,
-          y: currentY,
-          duration: 0.5,
+          y: origY,
+          duration: 0.6,
           easing: Konva.Easings.BackEaseOut,
           onFinish: () => {
-            // Subtle glow pulse after entrance
-            const glowAnim = new Konva.Tween({
-              node: glow,
-              opacity: stateConfig.glowIntensity,
-              duration: 0.3,
-              easing: Konva.Easings.EaseInOut
-            });
-            glowAnim.play();
+            if (glow && varState !== 'declared') {
+              glow.to({ opacity: 0.7, duration: 0.4 });
+            }
+            if (dot) {
+              new Konva.Tween({
+                node: dot,
+                scaleX: 1.6,
+                scaleY: 1.6,
+                duration: 0.25,
+                onFinish: () => dot.to({ scaleX: 1, scaleY: 1, duration: 0.25 })
+              }).play();
+            }
           }
-        });
-        entranceAnim.play();
+        }).play();
       };
 
-      let t: any = null;
-      if (enterDelay && enterDelay > 0) {
-        t = setTimeout(playEntrance, enterDelay);
+      if (enterDelay > 0) {
+        const t = setTimeout(playAnim, enterDelay);
+        return () => clearTimeout(t);
       } else {
-        playEntrance();
+        playAnim();
       }
-
-      return () => {
-        if (t) clearTimeout(t);
-      };
     } else if (isInitialMount.current) {
-      // Not new but first render - set to final state immediately
       group.opacity(1);
       group.scaleX(1);
       group.scaleY(1);
-      glow.opacity(stateConfig.glowIntensity);
+      if (glow && varState !== 'declared') glow.opacity(0.7);
       isInitialMount.current = false;
     }
-  }, [isNew, name, stateConfig.glowIntensity]);
+  }, [isNew, varState, enterDelay]);
 
   // ============================================
-  // ANIMATION 2: UPDATE (Flash + Pulse) - REMOVED
-  // This animation is no longer needed as updates are shown by creating new variable boxes
-  // in a top-to-bottom flow, as handled by the LayoutEngine.
-  // ============================================
-  useEffect(() => {
-    // Keep prevValueRef updated for other potential uses, but no animation.
-    prevValueRef.current = value;
-  }, [value]);
-
-  // ============================================
-  // ANIMATION 4: HOVER
+  // HOVER
   // ============================================
   const handleMouseEnter = () => {
     setIsHovered(true);
-    
-    const bg = bgRef.current;
-    const glow = glowRef.current;
-    
-    if (bg) {
-      bg.to({
-        strokeWidth: 3,
-        duration: 0.2
-      });
-    }
-    
-    if (glow) {
-      glow.to({
-        shadowBlur: 20,
-        opacity: 0.6,
-        duration: 0.2
-      });
-    }
+    glowRef.current?.to({ shadowBlur: 28, opacity: 0.9, duration: 0.2 });
   };
 
   const handleMouseLeave = () => {
     setIsHovered(false);
-    
-    const bg = bgRef.current;
-    const glow = glowRef.current;
-    
-    if (bg) {
-      bg.to({
-        strokeWidth: 2,
-        duration: 0.2
-      });
-    }
-    
-    if (glow) {
-      glow.to({
-        shadowBlur: 15,
-        opacity: stateConfig.glowIntensity,
-        duration: 0.2
-      });
-    }
+    glowRef.current?.to({ shadowBlur: 20, opacity: varState === 'declared' ? 0 : 0.7, duration: 0.2 });
   };
 
-  // ============================================
-  // RENDER - Position is relative (0,0) inside parent
-  // ============================================
   return (
     <Group
       ref={groupRef}
-      id={id}
-      x={0}
-      y={0}
+      id={`${id}-step-${stepNumber || 0}`}
+      x={x}
+      y={y}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onClick={onClick}
       onTap={onClick}
     >
-      {/* Glow Layer - subtle shadow effect */}
-      <Rect
-        ref={glowRef}
-        width={BOX_WIDTH}
-        height={BOX_HEIGHT}
-        fill="transparent"
-        cornerRadius={12}
-        shadowColor={colors.primary}
-        shadowBlur={15}
-        shadowOpacity={stateConfig.glowIntensity}
-        opacity={0}
-      />
+      {/* Glow Effect - Only for INITIALIZED and UPDATED */}
+      {stateConfig.glowEnabled && (
+        <Rect
+          ref={glowRef}
+          x={-4}
+          y={-4}
+          width={BOX_WIDTH + 8}
+          height={BOX_HEIGHT + 8}
+          fill="transparent"
+          cornerRadius={CORNER_RADIUS + 3}
+          shadowColor={colors.primary}
+          shadowBlur={varState === 'updated' ? 25 : 20}
+          shadowOpacity={varState === 'updated' ? 1 : 0.8}
+          opacity={0}
+        />
+      )}
 
       {/* Main Background */}
       <Rect
-        ref={bgRef}
         width={BOX_WIDTH}
         height={BOX_HEIGHT}
-        fill={boxFill}
-        stroke={strokeColor}
-        strokeWidth={2}
-        cornerRadius={12}
-        shadowColor="rgba(0, 0, 0, 0.3)"
-        shadowBlur={8}
-        shadowOffsetY={2}
+        fill={bgColor}
+        stroke={borderColor}
+        strokeWidth={borderWidth}
+        dash={stateConfig.borderDash}
+        cornerRadius={CORNER_RADIUS}
+        shadowColor={varState === 'declared' ? 'rgba(0, 0, 0, 0.2)' : 'rgba(0, 0, 0, 0.4)'}
+        shadowBlur={varState === 'declared' ? 4 : 12}
+        shadowOffsetY={varState === 'declared' ? 1 : 4}
+        opacity={varState === 'declared' ? 0.8 : 1}
       />
 
-      {/* Status Indicator Dot (Top Right) */}
+      {/* Accent Line on Left */}
+      {varState !== 'declared' && (
+        <Line
+          points={[0, 0, 0, BOX_HEIGHT]}
+          stroke={colors.accent}
+          strokeWidth={5}
+          lineCap="round"
+          opacity={0.6}
+        />
+      )}
+
+      {/* Status Dot (Top Right) - LARGER */}
       <Circle
-        ref={statusDotRef}
+        ref={dotRef}
         x={BOX_WIDTH - 12}
         y={12}
-        radius={5}
-        fill={stateConfig.labelColor}
-        shadowColor={stateConfig.labelColor}
-        shadowBlur={8}
-        shadowOpacity={0.8}
+        radius={6}
+        fill={stateConfig.dotColor}
+        shadowColor={stateConfig.dotColor}
+        shadowBlur={10}
+        shadowOpacity={1}
       />
 
-      {/* State Label (Top Left - Small) */}
-      <Text
-        text={stateConfig.label}
-        x={12}
-        y={8}
-        fontSize={9}
-        fontStyle="bold"
-        fill={stateConfig.labelColor}
-        fontFamily="'SF Pro Display', -apple-system, system-ui, sans-serif"
-        letterSpacing={0.5}
-      />
-
-      {/* Variable Name (BIG & BOLD - Primary Info) */}
-      <Text
-        text={name}
-        x={12}
-        y={28}
-        fontSize={nameFontSize}
-        fontStyle="bold"
-        fill="#F1F5F9"
-        fontFamily="'SF Pro Display', -apple-system, system-ui, sans-serif"
-        width={BOX_WIDTH - 24}
-        ellipsis={true}
-      />
-
-      {/* Value (BIG - Primary Info) */}
-      <Text
-        text={displayValue}
-        x={12}
-        y={52}
-        fontSize={valueFontSize}
-        fontStyle={determinedState === 'declared' ? 'normal' : 'bold'}
-        fill={determinedState === 'declared' ? '#64748B' : colors.light}
-        fontFamily="'SF Mono', 'Monaco', 'Courier New', monospace"
-        width={BOX_WIDTH - 24}
-        ellipsis={true}
-      />
-
-      {/* Type Badge (Bottom Left - Small, Secondary) */}
-      <Rect
-        x={10}
-        y={BOX_HEIGHT - 20}
-        width={type.length * 7 + 12}
-        height={16}
-        fill={colors.primary}
-        cornerRadius={8}
-        opacity={0.2}
-      />
-      <Text
-        text={type.toUpperCase()}
-        x={16}
-        y={BOX_HEIGHT - 18}
-        fontSize={10}
-        fontStyle="bold"
-        fill={colors.light}
-        fontFamily="'SF Pro Display', -apple-system, system-ui, sans-serif"
-      />
-
-      {/* Step Number (Bottom Right - Small, Secondary) */}
-      {stepNumber !== undefined && (
-        <Text
-          text={`#${stepNumber}`}
-          x={BOX_WIDTH - 35}
-          y={BOX_HEIGHT - 18}
-          fontSize={10}
-          fill="#64748B"
-          fontFamily="'SF Mono', monospace"
+      {/* State Label Badge (Top Left) - ENHANCED */}
+      <Group x={PADDING} y={8}>
+        <Rect
+          width={stateConfig.label.length * 6.5 + 14}
+          height={18}
+          fill={stateConfig.labelBg}
+          stroke={stateConfig.labelStroke}
+          strokeWidth={1.5}
+          cornerRadius={9}
+          shadowColor={stateConfig.labelStroke}
+          shadowBlur={varState === 'declared' ? 0 : 8}
+          shadowOpacity={0.5}
         />
-      )}
-
-      {/* Address (Very small, only on hover) */}
-      {address && (
         <Text
-          text={address}
-          x={BOX_WIDTH / 2}
-          y={BOX_HEIGHT - 18}
-          fontSize={8}
-          fill="#475569"
-          fontFamily="'SF Mono', monospace"
-          opacity={isHovered ? 0.7 : 0}
+          text={stateConfig.label}
+          y={3}
+          width={stateConfig.label.length * 6.5 + 14}
+          fontSize={9}
+          fontStyle="bold"
+          fill={varState === 'declared' ? '#94A3B8' : stateConfig.dotColor}
+          fontFamily="'SF Pro Display', system-ui, sans-serif"
           align="center"
+          letterSpacing={0.5}
         />
+      </Group>
+
+      {/* SECTION: Variable Name */}
+      <Group y={32}>
+        <Text
+          text="VAR:"
+          x={PADDING}
+          y={0}
+          fontSize={10}
+          fontStyle="bold"
+          fill="#64748B"
+          fontFamily="'SF Pro Display', system-ui, sans-serif"
+          letterSpacing={1}
+        />
+        <Text
+          text={name}
+          x={PADDING}
+          y={14}
+          width={BOX_WIDTH - PADDING * 2}
+          fontSize={name.length > 10 ? 20 : 24}
+          fontStyle="bold"
+          fill="#FFFFFF"
+          fontFamily="'SF Pro Display', system-ui, sans-serif"
+          ellipsis={true}
+        />
+      </Group>
+
+      {/* SECTION: Value */}
+      <Group y={74}>
+        <Text
+          text="VALUE:"
+          x={PADDING}
+          y={0}
+          fontSize={10}
+          fontStyle="bold"
+          fill="#64748B"
+          fontFamily="'SF Pro Display', system-ui, sans-serif"
+          letterSpacing={1}
+        />
+        <Text
+          text={displayValue}
+          x={PADDING}
+          y={14}
+          width={BOX_WIDTH - PADDING * 2}
+          fontSize={displayValue.length > 10 ? 16 : 18}
+          fontStyle="bold"
+          fill={varState === 'declared' ? '#64748B' : colors.light}
+          fontFamily="'SF Mono', 'Courier New', monospace"
+          wrap="char"
+          ellipsis={true}
+        />
+      </Group>
+
+      {/* SECTION: Reason/Expression */}
+      {expression && (varState === 'updated' || varState === 'initialized') && (
+        <Group y={106}>
+          <Text
+            text="FROM:"
+            x={PADDING}
+            y={0}
+            fontSize={8}
+            fontStyle="bold"
+            fill="#64748B"
+            fontFamily="'SF Pro Display', system-ui, sans-serif"
+            letterSpacing={0.8}
+          />
+          <Text
+            text={expression.length > 20 ? expression.slice(0, 18) + '...' : expression}
+            x={PADDING + 32}
+            y={0}
+            width={BOX_WIDTH - PADDING * 2 - 32}
+            fontSize={9}
+            fill="#94A3B8"
+            fontFamily="'SF Mono', monospace"
+            fontStyle="italic"
+            ellipsis={true}
+          />
+        </Group>
       )}
+
+      {/* Footer: Type + Address + Step */}
+      <Group y={BOX_HEIGHT - 20}>
+        {/* Type Badge */}
+        <Rect
+          x={PADDING}
+          y={0}
+          width={type.length * 7 + 12}
+          height={16}
+          fill={colors.primary}
+          cornerRadius={8}
+          opacity={0.35}
+        />
+        <Text
+          text={type.toUpperCase()}
+          x={PADDING + 6}
+          y={2.5}
+          fontSize={10}
+          fontStyle="bold"
+          fill={colors.light}
+          fontFamily="'SF Pro Display', system-ui, sans-serif"
+          letterSpacing={0.5}
+        />
+
+        {/* Address - ALWAYS VISIBLE */}
+        {address && address !== '0x0' && address !== '00000000' && (
+          <Text
+            text={address.slice(0, 10)}
+            x={BOX_WIDTH / 2 - 25}
+            y={2.5}
+            fontSize={9}
+            fill="#94A3B8"
+            fontFamily="'SF Mono', monospace"
+          />
+        )}
+
+        {/* Step Number */}
+        {stepNumber !== undefined && (
+          <Text
+            text={`#${stepNumber}`}
+            x={BOX_WIDTH - PADDING - 28}
+            y={2.5}
+            fontSize={10}
+            fontStyle="bold"
+            fill="#64748B"
+            fontFamily="'SF Mono', monospace"
+          />
+        )}
+      </Group>
     </Group>
   );
 };
