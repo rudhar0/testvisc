@@ -22,6 +22,8 @@ import { InputDialog } from './InputDialog';
 import { socketService } from '../../api/socket.service';
 
 import { getFocusPosition } from '../../utils/camera';
+// Import optimized components
+import { SmoothUpdateArrow } from './elements/SmoothUpdateArrow';
 
 const COLORS = {
   bg: '#0F172A',
@@ -74,6 +76,8 @@ export default function VisualizationCanvas() {
   const [dragMode, setDragMode] = useState(false);
   const [inputDialogOpen, setInputDialogOpen] = useState(false);
   const [inputDialogProps, setInputDialogProps] = useState<any>(null);
+  // Track active update arrows for the current step
+  const [activeArrows, setActiveArrows] = useState<Map<string, any>>(new Map());
   const prevStepRef = useRef<number>(-1);
   const prevElementsRef = useRef<Map<string, any>>(new Map());
 
@@ -122,8 +126,8 @@ export default function VisualizationCanvas() {
     const filteredElements = fullLayout.elements.filter(el => {
       const stepId = el.data?.birthStep ?? el.stepId;
       if (stepId === undefined || stepId > currentStep) return false;
-      // Exclude element entries that represent arrays; the layout provides an `arrayPanel` for them
-      if (el.type === 'array' || el.type === 'array_panel') return false;
+      // Exclude only the array panel element; keep array variable entries so they can be rendered as lightweight reference boxes
+      if (el.type === 'array_panel') return false;
       return true;
     });
 
@@ -310,6 +314,29 @@ export default function VisualizationCanvas() {
       },
     }).play();
   }, [currentStep, elementAnimationStates, dimensions, zoom, setPosition, visibleLayout]);
+
+  // ============================================
+  // TRACK UPDATE ARROWS
+  // ============================================
+  useEffect(() => {
+    if (!visibleLayout || !visibleLayout.updateArrows) return;
+
+    const newArrows = new Map<string, any>();
+    visibleLayout.updateArrows.forEach((arrow) => {
+      if (arrow.stepId === currentStep) {
+        newArrows.set(arrow.id, arrow.data);
+      }
+    });
+
+    setActiveArrows(newArrows);
+
+    // Auto‑remove arrows after animation completes (duration + fade out)
+    const timeout = setTimeout(() => {
+      setActiveArrows(new Map());
+    }, 1800);
+
+    return () => clearTimeout(timeout);
+  }, [currentStep, visibleLayout]);
 
   // Zoom & Pan controls
   const handleZoomIn = useCallback(() => {
@@ -511,10 +538,33 @@ export default function VisualizationCanvas() {
         // For flow view: treat updates as "new" to trigger appearance animation
         const effectiveIsNew = isNew || isUpdated;
 
-        // If this variable represents an array (type includes []), skip rendering here – it will be shown in the ArrayPanel.
+        // If this variable represents an array, render a lightweight reference instead of skipping.
         const normalizedType = (data?.type || data?.primitive || '').toString().toLowerCase();
         if (normalizedType.includes('[]') || normalizedType.includes('array')) {
-          return null;
+          // Show a simple reference box indicating an array is present.
+          return (
+            <VariableBox
+              key={`${id}-${stepId}`}
+              id={id}
+              name={data?.name || ''}
+              type={data?.type || data?.primitive || 'int'}
+              // Display a hint that this is an array with its length if known.
+              value={`→ array${data?.dimensions?.length ? ` (${data?.dimensions?.join('×')})` : ''}`}
+              address={data?.address || ''}
+              x={x}
+              y={y}
+              width={width}
+              height={height}
+              section="stack"
+              isNew={effectiveIsNew}
+              isUpdated={isUpdated}
+              state="initialized"
+              stepNumber={stepId}
+              enterDelay={enterDelayMap.get(id) || 0}
+              // Use a distinct color for array references to differentiate from scalars.
+              color="#60A5FA"
+            />
+          );
         }
 
         return (
@@ -938,6 +988,7 @@ export default function VisualizationCanvas() {
                     x={visibleLayout.arrayPanel.x}
                     y={visibleLayout.arrayPanel.y}
                     arrays={visibleLayout.arrayPanel.data.arrays}
+                    currentStep={currentStep}
                     isNew={false}
                   />
                 </Group>
@@ -990,6 +1041,32 @@ export default function VisualizationCanvas() {
                       </Group>
                     );
                   })}
+                </Group>
+              )}
+
+              {/* Update Arrows - NEW */}
+              {activeArrows.size > 0 && (
+                <Group>
+                  {Array.from(activeArrows.entries()).map(([arrowId, arrowData]) => (
+                    <SmoothUpdateArrow
+                      key={arrowId}
+                      id={arrowId}
+                      fromX={arrowData.fromX}
+                      fromY={arrowData.fromY}
+                      toX={arrowData.toX}
+                      toY={arrowData.toY}
+                      color="#F59E0B"
+                      label={`${arrowData.arrayName}[${arrowData.indices?.join(',')}]`}
+                      duration={0.6}
+                      onComplete={() => {
+                        setActiveArrows(prev => {
+                          const next = new Map(prev);
+                          next.delete(arrowId);
+                          return next;
+                        });
+                      }}
+                    />
+                  ))}
                 </Group>
               )}
 

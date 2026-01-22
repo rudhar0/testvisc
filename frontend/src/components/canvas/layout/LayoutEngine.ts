@@ -1,7 +1,8 @@
+// frontend/src/components/canvas/layout/LayoutEngine.ts
 /**
- * LayoutEngine - WITH ARRAY EVENT SUPPORT
+ * LayoutEngine - WITH PROGRESSIVE ARRAY VALUES
  * 
- * CRITICAL FIX: Process array_declaration, array_initialization, array_assignment events
+ * CRITICAL FIX: Arrays only show values that have been assigned up to current step
  */
 
 import { 
@@ -37,6 +38,7 @@ export interface Layout {
   arrayPanel: LayoutElement | null;
   elements: LayoutElement[];
   arrayReferences: LayoutElement[];
+  updateArrows: LayoutElement[];  // NEW: Track update arrows
   width: number;
   height: number;
 }
@@ -50,11 +52,114 @@ const MAIN_FUNCTION_WIDTH = 600;
 const GLOBAL_PANEL_WIDTH = 300;
 const PANEL_GAP = 40;
 
+// ============================================
+// PROGRESSIVE ARRAY VALUE TRACKER
+// ============================================
+class ProgressiveArrayTracker {
+  private arrays: Map<string, {
+    name: string;
+    baseType: string;
+    dimensions: number[];
+    address: string;
+    owner: string;
+    birthStep: number;
+    values: Map<string, any>;  // key: "i,j,k" -> value
+    lastUpdateStep: number;
+  }> = new Map();
+
+  createArray(name: string, baseType: string, dimensions: number[], address: string, owner: string, stepIndex: number) {
+    this.arrays.set(name, {
+      name,
+      baseType,
+      dimensions,
+      address,
+      owner,
+      birthStep: stepIndex,
+      values: new Map(),
+      lastUpdateStep: stepIndex
+    });
+  }
+
+  initializeArray(name: string, values: any[], stepIndex: number) {
+    const arr = this.arrays.get(name);
+    if (!arr) return;
+
+    // Initialize all values at once
+    values.forEach((val, idx) => {
+      arr.values.set(String(idx), val);
+    });
+    arr.lastUpdateStep = stepIndex;
+  }
+
+  updateArrayElement(name: string, indices: number[], value: any, stepIndex: number) {
+    const arr = this.arrays.get(name);
+    if (!arr) return;
+
+    const key = indices.join(',');
+    arr.values.set(key, value);
+    arr.lastUpdateStep = stepIndex;
+  }
+
+  getArrayState(name: string, upToStep: number) {
+    const arr = this.arrays.get(name);
+    if (!arr || arr.birthStep > upToStep) return null;
+
+    // Get total size
+    const totalSize = arr.dimensions.reduce((a, b) => a * b, 1);
+    const progressiveValues: any[] = new Array(totalSize).fill(null);
+
+    // Only include values that were set up to this step
+    arr.values.forEach((value, key) => {
+      const indices = key.split(',').map(Number);
+      let flatIdx: number;
+
+      if (arr.dimensions.length === 1) {
+        flatIdx = indices[0];
+      } else if (arr.dimensions.length === 2) {
+        flatIdx = indices[0] * arr.dimensions[1] + indices[1];
+      } else {
+        flatIdx = indices[0] * arr.dimensions[1] * arr.dimensions[2] + 
+                  indices[1] * arr.dimensions[2] + 
+                  indices[2];
+      }
+
+      if (flatIdx >= 0 && flatIdx < totalSize) {
+        progressiveValues[flatIdx] = value;
+      }
+    });
+
+    return {
+      ...arr,
+      values: progressiveValues
+    };
+  }
+
+  getAllArrays(upToStep: number) {
+    const result: any[] = [];
+    this.arrays.forEach((arr, name) => {
+      const state = this.getArrayState(name, upToStep);
+      if (state) {
+        result.push(state);
+      }
+    });
+    return result;
+  }
+
+  getUpdatedIndices(name: string, currentStep: number): number[][] {
+    const arr = this.arrays.get(name);
+    if (!arr || arr.lastUpdateStep !== currentStep) return [];
+
+    // This would need to track individual updates - simplified here
+    return [];
+  }
+}
+
 export class LayoutEngine {
   private static elementHistory: Map<string, LayoutElement> = new Map();
-  private static arrayHistory: Map<string, any> = new Map();
+  private static arrayTracker = new ProgressiveArrayTracker();
   private static parentStack: LayoutElement[] = [];
   private static createdInStep: Map<string, number> = new Map();
+  private static updateArrows: Map<number, LayoutElement[]> = new Map();
 
   public static calculateLayout(
     executionTrace: ExecutionTrace,
@@ -86,115 +191,77 @@ export class LayoutEngine {
       arrayPanel: null,
       elements: [],
       arrayReferences: [],
+      updateArrows: [],
       width: canvasWidth,
       height: canvasHeight,
     };
 
     this.elementHistory.clear();
-    this.arrayHistory.clear();
+    this.arrayTracker = new ProgressiveArrayTracker();
     this.createdInStep.clear();
+    this.updateArrows.clear();
     this.parentStack = [layout.mainFunction];
 
     // Process all steps up to current
     for (let i = 0; i <= currentStepIndex && i < executionTrace.steps.length; i++) {
       const step = executionTrace.steps[i];
-      this.processStep(step, layout, i);
+      this.processStep(step, layout, i, currentStepIndex);
     }
     
     this.updateAllElementsToCurrentState(executionTrace.steps[currentStepIndex], layout);
-    this.createArrayPanel(layout);
+    this.createArrayPanel(layout, currentStepIndex);
     this.positionGlobalPanel(layout);
-    this.createArrayReferences(layout);
+    this.createArrayReferences(layout, currentStepIndex);
+    this.createUpdateArrows(layout, currentStepIndex);
     this.updateContainerHeights(layout);
 
     return layout;
   }
 
-  private static processStep(step: ExecutionStep, layout: Layout, stepIndex: number): void {
+  private static processStep(step: ExecutionStep, layout: Layout, stepIndex: number, currentStep: number): void {
     const stepType: string = (step as any).eventType || (step as any).type;
     const { state, id } = step;
     const currentParent = this.parentStack[this.parentStack.length - 1];
 
-    console.log(`[LayoutEngine] Processing step ${stepIndex}: ${stepType} (name: ${step.name || 'N/A'})`);
+    // ===================================================================
+    // ARRAY EVENTS - PROGRESSIVE TRACKING
+    // ===================================================================
+    
+    if (stepType === 'array_create' || stepType === 'array_declaration') {
+      const { name, baseType, dimensions, address } = step as any;
+      const owner = (step as any).function || 'main';
+      
+      this.arrayTracker.createArray(name, baseType, dimensions, address || '0x0', owner, stepIndex);
+      console.log(`✅ Array ${name} created at step ${stepIndex}`);
+      return;
+    }
 
+    if (stepType === 'array_init' || stepType === 'array_initialization') {
+      const { name, values } = step as any;
+      
+      this.arrayTracker.initializeArray(name, values, stepIndex);
+      console.log(`✅ Array ${name} initialized at step ${stepIndex}`, values);
+      return;
+    }
+
+    if (stepType === 'array_index_assign' || stepType === 'array_assignment') {
+      const { name, indices, value } = step as any;
+      
+      this.arrayTracker.updateArrayElement(name, indices, value, stepIndex);
+      console.log(`✅ Array ${name}[${indices}] = ${value} at step ${stepIndex}`);
+      
+      // Create update arrow for this step
+      if (stepIndex === currentStep) {
+        this.createArrayUpdateArrow(layout, name, indices, stepIndex);
+      }
+      return;
+    }
+
+    // ===================================================================
+    // EXISTING VARIABLE/FUNCTION LOGIC (UNCHANGED)
+    // ===================================================================
+    
     switch (stepType) {
-      // ===================================================================
-      // ARRAY DECLARATION - CRITICAL
-      // ===================================================================
-      case 'array_create':
-      case 'array_declaration': {
-        const arrayData = (step as any).arrayData;
-        if (!arrayData) {
-          console.warn(`[LayoutEngine] No arrayData in step ${stepIndex}`);
-          break;
-        }
-        
-        const arrayId = `array-${arrayData.name}`;
-        
-        if (this.arrayHistory.has(arrayId)) {
-          console.log(`[LayoutEngine] Array ${arrayData.name} already exists, skipping`);
-          break;
-        }
-        
-        const arrayInfo = {
-          id: arrayId,
-          name: arrayData.name,
-          baseType: arrayData.baseType,
-          dimensions: arrayData.dimensions,
-          values: arrayData.values,
-          address: arrayData.address,
-          owner: arrayData.owner || 'main',
-          birthStep: stepIndex,
-          updatedIndices: []
-        };
-        
-        this.arrayHistory.set(arrayId, arrayInfo);
-        this.createdInStep.set(arrayId, stepIndex);
-        
-        console.log(`✅ [LayoutEngine] Array registered: ${arrayData.name}[${arrayData.dimensions.join('][')}]`, arrayInfo);
-        break;
-      }
-      
-      // ===================================================================
-      // ARRAY INITIALIZATION
-      // ===================================================================
-      case 'array_init':
-      case 'array_initialization': {
-        const arrayData = (step as any).arrayData;
-        if (!arrayData) break;
-        
-        const arrayId = `array-${arrayData.name}`;
-        const existingArray = this.arrayHistory.get(arrayId);
-        
-        if (existingArray) {
-          existingArray.values = [...arrayData.values];
-          console.log(`✅ [LayoutEngine] Array initialized: ${arrayData.name} = [${arrayData.values.join(',')}]`);
-        }
-        break;
-      }
-      
-      // ===================================================================
-      // ARRAY ELEMENT ASSIGNMENT
-      // ===================================================================
-      case 'array_index_assign':
-      case 'array_assignment': {
-        const arrayData = (step as any).arrayData;
-        if (!arrayData) break;
-        
-        const arrayId = `array-${arrayData.name}`;
-        const existingArray = this.arrayHistory.get(arrayId);
-        
-        if (existingArray) {
-          existingArray.values = [...arrayData.values];
-          existingArray.updatedIndices = (step as any).updatedIndices || [];
-          console.log(`✅ [LayoutEngine] Array updated: ${arrayData.name}`, existingArray.values);
-        }
-        break;
-      }
-      
-      // ===================================================================
-      // VARIABLE DECLARATION
-      // ===================================================================
       case 'declare': {
         if (!step.name) break;
         const varId = `var-${currentParent.id}-${step.name}`;
@@ -232,9 +299,6 @@ export class LayoutEngine {
         break;
       }
 
-      // ===================================================================
-      // VARIABLE ASSIGNMENT
-      // ===================================================================
       case 'assign': {
         if (!step.name) break;
         const varId = `var-${currentParent.id}-${step.name}`;
@@ -362,10 +426,10 @@ export class LayoutEngine {
     }
   }
 
-  private static createArrayPanel(layout: Layout): void {
-    const arrays = Array.from(this.arrayHistory.values());
+  private static createArrayPanel(layout: Layout, currentStep: number): void {
+    const arrays = this.arrayTracker.getAllArrays(currentStep);
     
-    console.log(`[LayoutEngine] Creating array panel with ${arrays.length} arrays`, arrays);
+    console.log(`[LayoutEngine] Creating array panel with ${arrays.length} arrays at step ${currentStep}`);
     
     if (arrays.length === 0) {
       layout.arrayPanel = null;
@@ -387,7 +451,40 @@ export class LayoutEngine {
       stepId: 0
     };
     
-    console.log(`✅ [LayoutEngine] Array panel created at (${arrayPanelX}, ${arrayPanelY}) with ${arrays.length} arrays`);
+    console.log(`✅ Array panel created with progressive values up to step ${currentStep}`);
+  }
+
+  private static createArrayUpdateArrow(layout: Layout, arrayName: string, indices: number[], stepIndex: number): void {
+    // Create arrow from main panel to array panel showing update
+    if (!layout.arrayPanel) return;
+
+    const arrow: LayoutElement = {
+      id: `arrow-${arrayName}-${stepIndex}`,
+      type: 'array_reference',
+      subtype: 'update_arrow',
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      stepId: stepIndex,
+      data: {
+        arrayName,
+        indices,
+        fromX: MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH,
+        fromY: MAIN_FUNCTION_Y + 100,
+        toX: layout.arrayPanel.x,
+        toY: layout.arrayPanel.y + 100,
+      }
+    };
+
+    if (!this.updateArrows.has(stepIndex)) {
+      this.updateArrows.set(stepIndex, []);
+    }
+    this.updateArrows.get(stepIndex)!.push(arrow);
+  }
+
+  private static createUpdateArrows(layout: Layout, currentStep: number): void {
+    layout.updateArrows = this.updateArrows.get(currentStep) || [];
   }
 
   private static positionGlobalPanel(layout: Layout): void {
@@ -400,8 +497,8 @@ export class LayoutEngine {
     }
   }
 
-  private static createArrayReferences(layout: Layout): void {
-    // TODO: Implement pointer -> array references
+  private static createArrayReferences(layout: Layout, currentStep: number): void {
+    // TODO: Implement pointer → array references
   }
 
   private static updateAllElementsToCurrentState(currentStep: ExecutionStep, layout: Layout): void {

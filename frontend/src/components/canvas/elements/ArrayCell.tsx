@@ -1,4 +1,5 @@
-import React, { useRef, useEffect } from 'react';
+// frontend/src/components/canvas/elements/ArrayCell.tsx
+import React, { useRef, useEffect, memo } from 'react';
 import { Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
 
@@ -8,15 +9,15 @@ import Konva from 'konva';
 
 export interface ArrayCellProps {
   id: string;
-  index: number[];        // [i] for 1D, [i,j] for 2D, [i,j,k] for 3D
+  index: number[];
   value: any;
-  baseType: string;       // int, float, char, etc.
+  baseType: string;
   x: number;
   y: number;
   width: number;
   height: number;
-  isNew?: boolean;        // Just created
-  isUpdated?: boolean;    // Value changed
+  isNew?: boolean;
+  isUpdated?: boolean;
   isHovered?: boolean;
   onClick?: () => void;
 }
@@ -40,10 +41,10 @@ const getTypeColor = (type: string): string => {
 };
 
 // ============================================
-// ARRAY CELL COMPONENT
+// MEMOIZED ARRAY CELL COMPONENT
 // ============================================
 
-export const ArrayCell: React.FC<ArrayCellProps> = ({
+export const ArrayCell: React.FC<ArrayCellProps> = memo(({
   id,
   index,
   value,
@@ -80,30 +81,7 @@ export const ArrayCell: React.FC<ArrayCellProps> = ({
     : `[${index.join(',')}]`;
 
   // ============================================
-  // ANIMATION: ENTRANCE
-  // ============================================
-  useEffect(() => {
-    const group = groupRef.current;
-    if (!group || !isNew) return;
-
-    // Start invisible and scaled down
-    group.opacity(0);
-    group.scaleX(0.5);
-    group.scaleY(0.5);
-
-    const anim = new Konva.Tween({
-      node: group,
-      opacity: 1,
-      scaleX: 1,
-      scaleY: 1,
-      duration: 0.3,
-      easing: Konva.Easings.BackEaseOut
-    });
-    anim.play();
-  }, [isNew]);
-
-  // ============================================
-  // ANIMATION: UPDATE
+  // ANIMATION: UPDATE ONLY
   // ============================================
   useEffect(() => {
     const bg = bgRef.current;
@@ -144,6 +122,7 @@ export const ArrayCell: React.FC<ArrayCellProps> = ({
         shadowColor="rgba(0, 0, 0, 0.2)"
         shadowBlur={isHovered ? 8 : 4}
         shadowOffsetY={2}
+        listening={false}
       />
 
       {/* Index Label (Top) */}
@@ -156,6 +135,7 @@ export const ArrayCell: React.FC<ArrayCellProps> = ({
         fontFamily="'SF Mono', monospace"
         width={width - 8}
         align="center"
+        listening={false}
       />
 
       {/* Value (Center) */}
@@ -169,9 +149,20 @@ export const ArrayCell: React.FC<ArrayCellProps> = ({
         fontFamily="'SF Mono', monospace"
         width={width - 8}
         align="center"
+        listening={false}
       />
     </Group>
   );
-};
+}, (prevProps, nextProps) => {
+  // Custom comparison for memo
+  return (
+    prevProps.value === nextProps.value &&
+    prevProps.isUpdated === nextProps.isUpdated &&
+    prevProps.isHovered === nextProps.isHovered &&
+    prevProps.isNew === nextProps.isNew
+  );
+});
+
+ArrayCell.displayName = 'ArrayCell';
 
 export default ArrayCell;

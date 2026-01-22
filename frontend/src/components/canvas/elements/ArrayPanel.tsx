@@ -1,6 +1,6 @@
-import React, { useRef, useEffect } from 'react';
+// frontend/src/components/canvas/elements/ArrayPanel.tsx
+import React, { useRef, memo, useMemo } from 'react';
 import { Group, Rect, Text, Line } from 'react-konva';
-import Konva from 'konva';
 import { ArrayBox } from './ArrayBox';
 
 // ============================================
@@ -16,6 +16,7 @@ export interface ArrayData {
   address: string;
   owner: string;
   birthStep: number;
+  lastUpdateStep?: number;
   updatedIndices?: number[][];
 }
 
@@ -24,6 +25,7 @@ export interface ArrayPanelProps {
   x: number;
   y: number;
   arrays: ArrayData[];
+  currentStep: number;
   isNew?: boolean;
 }
 
@@ -37,128 +39,80 @@ const ARRAY_SPACING = 20;
 const MIN_WIDTH = 300;
 
 // ============================================
-// ARRAY PANEL COMPONENT
+// OPTIMIZED ARRAY PANEL
 // ============================================
 
-export const ArrayPanel: React.FC<ArrayPanelProps> = ({
+export const ArrayPanel: React.FC<ArrayPanelProps> = memo(({
   id,
   x,
   y,
   arrays,
+  currentStep,
   isNew = false
 }) => {
-  const groupRef = useRef<Konva.Group>(null);
+  const groupRef = useRef<any>(null);
 
   // ============================================
-  // CALCULATE PANEL DIMENSIONS
+  // MEMOIZED SIZE CALCULATION
   // ============================================
-  const calculatePanelSize = () => {
+  const { panelWidth, panelHeight, arrayPositions } = useMemo(() => {
     if (arrays.length === 0) {
-      return { width: MIN_WIDTH, height: HEADER_HEIGHT + PADDING * 2 };
+      return { 
+        panelWidth: MIN_WIDTH, 
+        panelHeight: HEADER_HEIGHT + PADDING * 2,
+        arrayPositions: []
+      };
     }
 
-    // Calculate max width needed
     let maxWidth = MIN_WIDTH;
-    let totalHeight = HEADER_HEIGHT + PADDING;
+    let currentY = HEADER_HEIGHT + PADDING;
+    const positions: { array: ArrayData; y: number; height: number }[] = [];
 
     arrays.forEach(arr => {
       const { width, height } = calculateArrayBoxSize(arr.dimensions);
       maxWidth = Math.max(maxWidth, width + PADDING * 2);
-      totalHeight += height + ARRAY_SPACING;
-    });
-
-    totalHeight += PADDING; // Bottom padding
-
-    return { width: maxWidth, height: totalHeight };
-  };
-
-  const calculateArrayBoxSize = (dimensions: number[]) => {
-    const CELL_WIDTH = 60;
-    const CELL_HEIGHT = 50;
-    const CELL_SPACING = 4;
-    const BOX_HEADER = 50;
-    const BOX_PADDING = 12;
-
-    if (dimensions.length === 1) {
-      const cols = dimensions[0];
-      return {
-        width: cols * (CELL_WIDTH + CELL_SPACING) + BOX_PADDING * 2,
-        height: BOX_HEADER + CELL_HEIGHT + BOX_PADDING * 2
-      };
-    }
-
-    if (dimensions.length === 2) {
-      const cols = dimensions[1];
-      const rows = dimensions[0];
-      return {
-        width: cols * (CELL_WIDTH + CELL_SPACING) + BOX_PADDING * 2,
-        height: BOX_HEADER + rows * (CELL_HEIGHT + CELL_SPACING) + BOX_PADDING * 2
-      };
-    }
-
-    if (dimensions.length === 3) {
-      const cols = dimensions[2];
-      const rows = dimensions[1];
-      return {
-        width: cols * (CELL_WIDTH + CELL_SPACING) + BOX_PADDING * 2,
-        height: BOX_HEADER + 30 + rows * (CELL_HEIGHT + CELL_SPACING) + BOX_PADDING * 2
-      };
-    }
-
-    return { width: 200, height: 100 };
-  };
-
-  const { width: panelWidth, height: panelHeight } = calculatePanelSize();
-
-  // ============================================
-  // ANIMATION: ENTRANCE
-  // ============================================
-  useEffect(() => {
-    const group = groupRef.current;
-    if (!group || !isNew) return;
-
-    group.opacity(0);
-    group.x(x + 50);
-
-    const anim = new Konva.Tween({
-      node: group,
-      opacity: 1,
-      x: x,
-      duration: 0.6,
-      easing: Konva.Easings.BackEaseOut
-    });
-    anim.play();
-  }, [isNew, x]);
-
-  // ============================================
-  // RENDER ARRAYS
-  // ============================================
-  const renderArrays = () => {
-    let currentY = HEADER_HEIGHT + PADDING;
-    
-    return arrays.map(arr => {
-      const { height } = calculateArrayBoxSize(arr.dimensions);
-      const arrayElement = (
-        <ArrayBox
-          key={arr.id}
-          id={arr.id}
-          name={arr.name}
-          baseType={arr.baseType}
-          dimensions={arr.dimensions}
-          values={arr.values}
-          address={arr.address}
-          x={PADDING}
-          y={currentY}
-          isNew={arr.birthStep === arr.birthStep} // Will be properly determined by parent
-          updatedIndices={arr.updatedIndices}
-          owner={arr.owner}
-        />
-      );
+      
+      positions.push({
+        array: arr,
+        y: currentY,
+        height: height
+      });
       
       currentY += height + ARRAY_SPACING;
-      return arrayElement;
     });
-  };
+
+    const totalHeight = currentY + PADDING;
+
+    return { 
+      panelWidth: maxWidth, 
+      panelHeight: totalHeight,
+      arrayPositions: positions
+    };
+  }, [arrays]);
+
+  // ============================================
+  // RENDER ARRAYS (MEMOIZED)
+  // ============================================
+  const renderedArrays = useMemo(() => {
+    return arrayPositions.map(({ array, y }) => (
+      <ArrayBox
+        // Include currentStep and dimensions length in key to guarantee uniqueness across steps and dimensions
+        key={`${array.id}-${currentStep}-${array.dimensions.length}`}
+        id={array.id}
+        name={array.name}
+        baseType={array.baseType}
+        dimensions={array.dimensions}
+        values={array.values}
+        address={array.address}
+        x={PADDING}
+        y={y}
+        isNew={array.birthStep === currentStep}
+        updatedIndices={array.updatedIndices || []}
+        owner={array.owner}
+        currentStep={currentStep}
+      />
+    ));
+  }, [arrayPositions, currentStep]);
 
   // ============================================
   // MAIN RENDER
@@ -176,6 +130,7 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = ({
         shadowColor="rgba(0, 0, 0, 0.4)"
         shadowBlur={16}
         shadowOffsetY={4}
+        listening={false}
       />
 
       {/* Header Background */}
@@ -184,6 +139,7 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = ({
         height={HEADER_HEIGHT}
         fill="rgba(16, 185, 129, 0.2)"
         cornerRadius={[8, 8, 0, 0]}
+        listening={false}
       />
 
       {/* Header Title */}
@@ -195,6 +151,7 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = ({
         fontStyle="bold"
         fill="#F1F5F9"
         fontFamily="'SF Pro Display', system-ui"
+        listening={false}
       />
 
       {/* Array Count Badge */}
@@ -205,6 +162,7 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = ({
           fill="#10B981"
           cornerRadius={13}
           opacity={0.3}
+          listening={false}
         />
         <Text
           text={`${arrays.length} array${arrays.length !== 1 ? 's' : ''}`}
@@ -216,6 +174,7 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = ({
           fill="#34D399"
           align="center"
           fontFamily="'SF Pro Display', system-ui"
+          listening={false}
         />
       </Group>
 
@@ -224,11 +183,12 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = ({
         points={[0, HEADER_HEIGHT, panelWidth, HEADER_HEIGHT]}
         stroke="#334155"
         strokeWidth={1}
+        listening={false}
       />
 
       {/* Arrays */}
       {arrays.length > 0 ? (
-        renderArrays()
+        renderedArrays
       ) : (
         <Text
           text="No arrays yet"
@@ -237,10 +197,59 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = ({
           fontSize={14}
           fill="#64748B"
           fontFamily="system-ui"
+          listening={false}
         />
       )}
     </Group>
   );
-};
+}, (prevProps, nextProps) => {
+  // Custom comparison - only re-render if arrays or currentStep changed
+  return (
+    JSON.stringify(prevProps.arrays) === JSON.stringify(nextProps.arrays) &&
+    prevProps.currentStep === nextProps.currentStep &&
+    prevProps.isNew === nextProps.isNew
+  );
+});
+
+ArrayPanel.displayName = 'ArrayPanel';
+
+// ============================================
+// HELPER: CALCULATE ARRAY BOX SIZE
+// ============================================
+function calculateArrayBoxSize(dimensions: number[]) {
+  const CELL_WIDTH = 60;
+  const CELL_HEIGHT = 50;
+  const CELL_SPACING = 4;
+  const BOX_HEADER = 50;
+  const BOX_PADDING = 12;
+
+  if (dimensions.length === 1) {
+    const cols = dimensions[0];
+    return {
+      width: cols * (CELL_WIDTH + CELL_SPACING) + BOX_PADDING * 2,
+      height: BOX_HEADER + CELL_HEIGHT + BOX_PADDING * 2
+    };
+  }
+
+  if (dimensions.length === 2) {
+    const cols = dimensions[1];
+    const rows = dimensions[0];
+    return {
+      width: cols * (CELL_WIDTH + CELL_SPACING) + BOX_PADDING * 2,
+      height: BOX_HEADER + rows * (CELL_HEIGHT + CELL_SPACING) + BOX_PADDING * 2
+    };
+  }
+
+  if (dimensions.length === 3) {
+    const cols = dimensions[2];
+    const rows = dimensions[1];
+    return {
+      width: cols * (CELL_WIDTH + CELL_SPACING) + BOX_PADDING * 2,
+      height: BOX_HEADER + 30 + rows * (CELL_HEIGHT + CELL_SPACING) + BOX_PADDING * 2
+    };
+  }
+
+  return { width: 200, height: 100 };
+}
 
 export default ArrayPanel;
