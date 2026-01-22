@@ -35,6 +35,22 @@ void __trace_declare_loc(const char* name, const char* type,
 void __trace_assign_loc(const char* name, long long value,
                         const char* file, int line);
 
+/* ✅ NEW: Array tracking functions */
+void __trace_array_create_loc(const char* name, const char* baseType,
+                               void* address, int dim1, int dim2, int dim3,
+                               const char* file, int line);
+void __trace_array_init_loc(const char* name, void* values, int count,
+                             const char* file, int line);
+void __trace_array_index_assign_loc(const char* name, int idx1, int idx2, int idx3,
+                                     long long value, const char* file, int line);
+void __trace_array_reference_loc(const char* fromVar, const char* toArray,
+                                  const char* fromFunc, const char* toFunc,
+                                  const char* file, int line);
+void __trace_pointer_maps_array_loc(const char* pointerName, const char* arrayName,
+                                     const char* file, int line);
+void __trace_array_pass_reference_loc(const char* pointer, const char* targetArray,
+                                       const char* scope, const char* file, int line);
+
 #ifdef __cplusplus
 }
 #endif
@@ -52,6 +68,24 @@ void __trace_assign_loc(const char* name, long long value,
     __trace_declare_loc(#name, #type, __FILE__, line)
 #define __trace_assign(name, value, line) \
     __trace_assign_loc(#name, (long long)(value), __FILE__, line)
+
+/* ✅ NEW: Array macros */
+#define __trace_array_create(name, baseType, dim1, dim2, dim3, line) \
+    __trace_array_create_loc(#name, #baseType, (void*)(name), dim1, dim2, dim3, __FILE__, line)
+#define __trace_array_init(name, values, count, line) \
+    __trace_array_init_loc(#name, (void*)(values), count, __FILE__, line)
+#define __trace_array_index_assign_1d(name, idx, value, line) \
+    __trace_array_index_assign_loc(#name, idx, -1, -1, (long long)(value), __FILE__, line)
+#define __trace_array_index_assign_2d(name, idx1, idx2, value, line) \
+    __trace_array_index_assign_loc(#name, idx1, idx2, -1, (long long)(value), __FILE__, line)
+#define __trace_array_index_assign_3d(name, idx1, idx2, idx3, value, line) \
+    __trace_array_index_assign_loc(#name, idx1, idx2, idx3, (long long)(value), __FILE__, line)
+#define __trace_array_reference(fromVar, toArray, fromFunc, toFunc, line) \
+    __trace_array_reference_loc(#fromVar, #toArray, fromFunc, toFunc, __FILE__, line)
+#define __trace_pointer_maps_array(pointerName, arrayName, line) \
+    __trace_pointer_maps_array_loc(#pointerName, #arrayName, __FILE__, line)
+#define __trace_array_pass_reference(pointer, targetArray, scope, line) \
+    __trace_array_pass_reference_loc(#pointer, #targetArray, scope, __FILE__, line)
 
 #else   /* --------------------------- POSIX prototypes --------------------------- */
 
@@ -83,6 +117,18 @@ void __trace_declare_loc(const char* name, const char* type,
 void __trace_assign_loc(const char* name, long long value,
                         const char* file, int line);
 
+/* ✅ NEW: Array tracking functions */
+void __trace_array_create_loc(const char* name, const char* baseType,
+                               void* address, int dim1, int dim2, int dim3,
+                               const char* file, int line);
+void __trace_array_init_loc(const char* name, void* values, int count,
+                             const char* file, int line);
+void __trace_array_index_assign_loc(const char* name, int idx1, int idx2, int idx3,
+                                     long long value, const char* file, int line);
+void __trace_array_reference_loc(const char* fromVar, const char* toArray,
+                                  const char* fromFunc, const char* toFunc,
+                                  const char* file, int line);
+
 #ifdef __cplusplus
 }
 #endif
@@ -99,5 +145,19 @@ void __trace_assign_loc(const char* name, long long value,
     __trace_declare_loc(#name, #type, __FILE__, line)
 #define __trace_assign(name, value, line) \
     __trace_assign_loc(#name, (long long)(value), __FILE__, line)
+
+/* ✅ NEW: Array macros */
+#define __trace_array_create(name, baseType, dim1, dim2, dim3, line) \
+    __trace_array_create_loc(#name, #baseType, (void*)(name), dim1, dim2, dim3, __FILE__, line)
+#define __trace_array_init(name, values, count, line) \
+    __trace_array_init_loc(#name, (void*)(values), count, __FILE__, line)
+#define __trace_array_index_assign_1d(name, idx, value, line) \
+    __trace_array_index_assign_loc(#name, idx, -1, -1, (long long)(value), __FILE__, line)
+#define __trace_array_index_assign_2d(name, idx1, idx2, value, line) \
+    __trace_array_index_loc(#name, idx1, idx2, -1, (long long)(value), __FILE__, line)
+#define __trace_array_index_assign_3d(name, idx1, idx2, idx3, value, line) \
+    __trace_array_index_assign_loc(#name, idx1, idx2, idx3, (long long)(value), __FILE__, line)
+#define __trace_array_reference(fromVar, toArray, fromFunc, toFunc, line) \
+    __trace_array_reference_loc(#fromVar, #toArray, fromFunc, toFunc, __FILE__, line)
 
 #endif   /* _WIN32 */

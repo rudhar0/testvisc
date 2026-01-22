@@ -5,27 +5,20 @@ import path from 'path';
 import { v4 as uuid } from 'uuid';
 
 /**
- * AST-Based Code Instrumenter with COMPLETE BEGINNER MODE
- * Safely injects variable tracing at STATEMENT LEVEL ONLY
+ * ✅ ENHANCED: Complete array support alongside existing scalar behavior
+ * Arrays emit native array events, scalars remain unchanged
  */
 class CodeInstrumenter {
   constructor() {
     this.tempDir = path.join(process.cwd(), 'temp');
   }
 
-  /**
-   * Inject variable tracing into code
-   */
   async instrumentCode(code, language = 'cpp') {
-    console.log('🔧 Instrumenting code for beginner-mode variable tracing...');
+    console.log('🔧 Instrumenting code (scalars + arrays)...');
 
     try {
-      // 1️⃣ Add trace.h include
       const withHeader = this.addTraceHeader(code);
-
-      // 2️⃣ Inject beginner-mode trace calls
       const traced = await this.injectBeginnerModeTracing(withHeader, language);
-
       console.log('✅ Code instrumentation complete');
       return traced;
     } catch (error) {
@@ -34,10 +27,8 @@ class CodeInstrumenter {
     }
   }
 
-  /** Add `#include "trace.h"` after the last existing include */
   addTraceHeader(code) {
     if (code.includes('trace.h')) return code;
-
     const lines = code.split('\n');
     let insertIdx = 0;
     for (let i = 0; i < lines.length; i++) {
@@ -49,10 +40,39 @@ class CodeInstrumenter {
     return lines.join('\n');
   }
 
-  /**
-   * ✅ NEW: Smart parser for multi-declarations that respects braces and parentheses
-   * Correctly handles: int x=1, y=2, z; and int arr[3]={1,2,3}, b;
-   */
+  // ✅ NEW: Detect if declaration is an array
+  isArrayDeclaration(varDecl) {
+    return /\[/.test(varDecl);
+  }
+
+  // ✅ NEW: Parse array declaration
+  parseArrayDeclaration(type, varDecl) {
+    // Examples: arr[3], mat[2][3], cube[2][3][4]
+    const nameMatch = varDecl.match(/^(\w+)/);
+    if (!nameMatch) return null;
+
+    const name = nameMatch[1];
+    const dimensionsMatch = varDecl.match(/\[([^\]]*)\]/g);
+    if (!dimensionsMatch) return null;
+
+    const dimensions = dimensionsMatch.map(d => {
+      const sizeMatch = d.match(/\[([^\]]*)\]/);
+      return sizeMatch && sizeMatch[1] ? sizeMatch[1] : '0';
+    });
+
+    const hasInitializer = varDecl.includes('=');
+    let initValues = null;
+
+    if (hasInitializer) {
+      const initMatch = varDecl.match(/=\s*\{([^}]*)\}/);
+      if (initMatch) {
+        initValues = initMatch[1];
+      }
+    }
+
+    return { name, type, dimensions, hasInitializer, initValues };
+  }
+
   parseMultiDeclaration(rest) {
     const vars = [];
     let current = '';
@@ -68,7 +88,6 @@ class CodeInstrumenter {
       else if (c === '[') bracketDepth++;
       else if (c === ']') bracketDepth--;
       
-      // Only split on comma if we're at top level (no nested structures)
       if (c === ',' && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
         const trimmed = current.trim();
         if (trimmed) vars.push(trimmed);
@@ -78,52 +97,28 @@ class CodeInstrumenter {
       }
     }
     
-    // Add the last variable
     const trimmed = current.trim();
     if (trimmed) vars.push(trimmed);
-    
     return vars;
   }
 
-  /**
-   * ✅ NEW: Extract variable name from declaration string
-   * Handles: x, x=5, arr[3], arr[3]={1,2,3}, *p, *p=&x
-   */
   extractVariableName(varDecl) {
-    // Remove array initializers first: arr[3]={1,2,3} -> arr[3]
     let cleaned = varDecl.replace(/\s*=\s*\{[^}]*\}/g, '');
-    
-    // Remove simple assignments: x=5 -> x
     cleaned = cleaned.replace(/\s*=.*$/, '');
-    
-    // Handle pointers: *p -> p
     cleaned = cleaned.replace(/^\s*\*+\s*/, '');
-    
-    // Extract just the identifier (handles arr[3] -> arr)
     const match = cleaned.match(/^(\w+)/);
     return match ? match[1] : null;
   }
 
-  /**
-   * ✅ NEW: Check if a variable declaration has an initializer
-   */
   hasInitializer(varDecl) {
     return varDecl.includes('=');
   }
 
-  /**
-   * ✅ NEW: Extract initializer value from declaration
-   * Handles: x=5, arr[3]={1,2,3}, *p=&x
-   */
   extractInitializer(varDecl) {
     const match = varDecl.match(/=\s*(.+)$/);
     return match ? match[1].trim() : null;
   }
 
-  /**
-   * ✅ COMPLETE: Beginner-mode instrumentation
-   * Creates EXPLICIT steps for ALL declarations and assignments
-   */
   async injectBeginnerModeTracing(code, language) {
     const lines = code.split('\n');
     const out = [];
@@ -132,18 +127,21 @@ class CodeInstrumenter {
     let braceDepth = 0;
     let inStruct = false;
     let inClass = false;
+    let currentFunction = null;
+    let functionParams = new Map(); // Track function parameters
+    
+    // ✅ NEW: Track pointer→array mappings for index resolution
+    const pointerToArray = new Map();
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const trimmed = line.trim();
       const indent = line.match(/^\s*/)[0];
 
-      // Track struct/class scope (NEVER instrument inside these)
       if (trimmed.match(/^\s*(struct|class)\s+\w+/)) {
         inStruct = true;
       }
       
-      // Track brace depth
       const openBraces = (line.match(/{/g) || []).length;
       const closeBraces = (line.match(/}/g) || []).length;
       braceDepth += openBraces - closeBraces;
@@ -152,18 +150,48 @@ class CodeInstrumenter {
         inFunc = true;
       }
       
-      // Exit struct/class when braces close
+      // ✅ NEW: Track function entries and detect array parameters
+      const funcDecl = trimmed.match(/^\s*(?:void|int|float|double|char|bool|long)\s+(\w+)\s*\(([^)]*)\)\s*({)?/);
+      if (funcDecl && braceDepth === 0) {
+        currentFunction = funcDecl[1];
+        const params = funcDecl[2];
+        const hasOpenBrace = funcDecl[3] === '{';
+        
+        // Parse parameters to find array parameters
+        const arrayParams = [];
+        if (params.trim()) {
+          const paramList = params.split(',').map(p => p.trim());
+          paramList.forEach(param => {
+            // Detect array parameter: int arr[], int arr[N], int *arr
+            const arrMatch = param.match(/(?:int|long|float|double|char|bool)\s*(?:\*|(\w+)\s*\[)/);
+            if (arrMatch) {
+              const nameMatch = param.match(/(\w+)(?:\s*\[|\s*$)/);
+              if (nameMatch) {
+                arrayParams.push(nameMatch[1]);
+              }
+            }
+          });
+        }
+        
+        functionParams.set(currentFunction, arrayParams);
+        
+        // If function has array params and opening brace on same line, inject traces
+        if (hasOpenBrace && arrayParams.length > 0 && currentFunction !== 'main') {
+          out.push(line);
+          // We'll inject array_reference at call sites, not here
+          continue;
+        }
+      }
+      
       if (inStruct && braceDepth === 0 && closeBraces > 0) {
         inStruct = false;
       }
 
-      // ❌ SAFETY: Never instrument inside struct/class
       if (inStruct || inClass) {
         out.push(line);
         continue;
       }
 
-      // ❌ SAFETY: Skip non-statement lines
       if (trimmed.startsWith('//') ||
           trimmed.startsWith('/*') ||
           trimmed.startsWith('#') ||
@@ -174,60 +202,121 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 1: Multi-declaration detection (int x=1, y=2, z; or int arr[3]={1,2,3}, b;)
+      // ✅ PATTERN: Multi-declaration
       const multiDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(.+);$/);
       if (multiDecl && multiDecl[2].includes(',')) {
         const [, type, rest] = multiDecl;
-        
-        console.log(`[Instrumenter] Line ${i + 1}: Multi-declaration detected`);
-        console.log(`[Instrumenter] Type: "${type}", Rest: "${rest}"`);
-        
-        // Use smart parser that respects braces
         const vars = this.parseMultiDeclaration(rest);
-        
-        console.log(`[Instrumenter] Found ${vars.length} variables:`, JSON.stringify(vars));
         
         for (let idx = 0; idx < vars.length; idx++) {
           const varDecl = vars[idx];
-          const varName = this.extractVariableName(varDecl);
           
-          if (!varName || !/^\w+$/.test(varName)) {
-            console.warn(`  [${idx}] SKIPPED invalid variable name in: "${varDecl}"`);
-            continue;
-          }
-          
-          const hasInit = this.hasInitializer(varDecl);
-          
-          if (hasInit) {
-            const initValue = this.extractInitializer(varDecl);
-            console.log(`  [${idx}] "${varName}" = ${initValue} (initialized)`);
+          // ✅ NEW: Check if it's an array
+          if (this.isArrayDeclaration(varDecl)) {
+            const arrayInfo = this.parseArrayDeclaration(type, varDecl);
+            if (!arrayInfo) continue;
+
+            const { name, dimensions, hasInitializer, initValues } = arrayInfo;
             
-            // For arrays with initializers, keep original syntax
-            if (varDecl.includes('[') && varDecl.includes('{')) {
-              out.push(`${indent}${type} ${varDecl};`);
-              out.push(`${indent}__trace_declare(${varName}, ${type}[], ${i + 1});`);
-            } else {
-              // Regular variable with initializer
+            // Emit array_create
+            const dimArgs = dimensions.slice(0, 3).join(',');
+            const paddedDims = dimensions.length === 1 ? `${dimArgs},0,0` :
+                              dimensions.length === 2 ? `${dimArgs},0` : dimArgs;
+            
+            out.push(`${indent}${type} ${varDecl};`);
+            out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
+            
+            // Emit array_init if has initializer
+            if (hasInitializer && initValues) {
+              const totalSize = dimensions.reduce((a, b) => a * (parseInt(b) || 1), 1);
+              out.push(`${indent}{`);
+              out.push(`${indent}  int __temp_${name}[] = {${initValues}};`);
+              out.push(`${indent}  __trace_array_init(${name}, __temp_${name}, ${totalSize}, ${i + 1});`);
+              out.push(`${indent}}`);
+            }
+          } else {
+            // ✅ EXISTING: Regular scalar variable
+            const varName = this.extractVariableName(varDecl);
+            if (!varName || !/^\w+$/.test(varName)) continue;
+            
+            const hasInit = this.hasInitializer(varDecl);
+            
+            if (hasInit) {
+              const initValue = this.extractInitializer(varDecl);
               out.push(`${indent}${type} ${varName};`);
               out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
               out.push(`${indent}${varName} = ${initValue};`);
               out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
+            } else {
+              out.push(`${indent}${type} ${varDecl};`);
+              out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
             }
-          } else {
-            console.log(`  [${idx}] "${varName}" (uninitialized)`);
-            // Declaration only
-            out.push(`${indent}${type} ${varDecl};`);
-            
-            // Determine if it's an array
-            const isArray = varDecl.includes('[');
-            const typeStr = isArray ? `${type}[]` : type;
-            out.push(`${indent}__trace_declare(${varName}, ${typeStr}, ${i + 1});`);
           }
         }
         continue;
       }
 
-      // ✅ PATTERN 2: Single declaration without initializer (int a;)
+      // ✅ PATTERN: Single array declaration (int arr[3];)
+      const arrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\](\s*\[([^\]]+)\])?(\s*\[([^\]]+)\])?\s*;/);
+      if (arrDecl) {
+        const [, type, name, dim1, , dim2, , dim3] = arrDecl;
+        const dims = [dim1, dim2, dim3].filter(Boolean);
+        const dimArgs = dims.slice(0, 3).join(',');
+        const paddedDims = dims.length === 1 ? `${dimArgs},0,0` :
+                          dims.length === 2 ? `${dimArgs},0` : dimArgs;
+        
+        out.push(line);
+        out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
+        continue;
+      }
+
+      // ✅ PATTERN: Array with initializer (int arr[3] = {1,2,3};)
+      const arrDeclInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\](\s*\[([^\]]+)\])?(\s*\[([^\]]+)\])?\s*=\s*\{([^}]*)\}\s*;/);
+      if (arrDeclInit) {
+        const [, type, name, dim1, , dim2, , dim3, initValues] = arrDeclInit;
+        const dims = [dim1, dim2, dim3].filter(Boolean);
+        const dimArgs = dims.slice(0, 3).join(',');
+        const paddedDims = dims.length === 1 ? `${dimArgs},0,0` :
+                          dims.length === 2 ? `${dimArgs},0` : dimArgs;
+        const totalSize = dims.reduce((a, b) => a * (parseInt(b) || 1), 1);
+        
+        out.push(line);
+        out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
+        out.push(`${indent}{`);
+        out.push(`${indent}  int __temp_${name}[] = {${initValues}};`);
+        out.push(`${indent}  __trace_array_init(${name}, __temp_${name}, ${totalSize}, ${i + 1});`);
+        out.push(`${indent}}`);
+        continue;
+      }
+
+      // ✅ PATTERN: Array element assignment (arr[0] = 10;)
+      const arrAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
+      if (arrAssign) {
+        const [, varName, index, value] = arrAssign;
+        out.push(line);
+        out.push(`${indent}__trace_array_index_assign_1d(${varName}, ${index}, ${value}, ${i + 1});`);
+        continue;
+      }
+
+      // ✅ PATTERN: 2D array element assignment (mat[0][1] = 20;)
+      const arr2DAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
+      if (arr2DAssign) {
+        const [, varName, idx1, idx2, value] = arr2DAssign;
+        out.push(line);
+        out.push(`${indent}__trace_array_index_assign_2d(${varName}, ${idx1}, ${idx2}, ${value}, ${i + 1});`);
+        continue;
+      }
+
+      // ✅ PATTERN: 3D array element assignment (cube[0][1][2] = 30;)
+      const arr3DAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
+      if (arr3DAssign) {
+        const [, varName, idx1, idx2, idx3, value] = arr3DAssign;
+        out.push(line);
+        out.push(`${indent}__trace_array_index_assign_3d(${varName}, ${idx1}, ${idx2}, ${idx3}, ${value}, ${i + 1});`);
+        continue;
+      }
+
+      // ✅ EXISTING PATTERNS: All scalar patterns remain unchanged
       const declOnly = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*;/);
       if (declOnly) {
         const [, type, varName] = declOnly;
@@ -236,7 +325,32 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 3: Declaration with initializer (int a = 5;)
+      // ✅ NEW: Detect function calls with array arguments
+      const funcCall = trimmed.match(/^\s*(\w+)\s*\(([^)]+)\)\s*;/);
+      if (funcCall && currentFunction) {
+        const [, calledFunc, args] = funcCall;
+        
+        // Check if called function has array parameters
+        const targetParams = functionParams.get(calledFunc);
+        
+        if (targetParams && targetParams.length > 0) {
+          // Parse arguments
+          const argList = args.split(',').map(a => a.trim());
+          
+          // Emit array_reference for each array argument
+          argList.forEach((arg, idx) => {
+            if (idx < targetParams.length && /^\w+$/.test(arg)) {
+              const paramName = targetParams[idx];
+              // Emit: array_reference(fromVar=paramName, toArray=arg, from=current, to=calledFunc)
+              out.push(`${indent}__trace_array_reference(${paramName}, ${arg}, "${currentFunction}", "${calledFunc}", ${i + 1});`);
+            }
+          });
+        }
+        
+        out.push(line);
+        continue;
+      }
+
       const declInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*=\s*([^;]+);/);
       if (declInit) {
         const [, type, varName, value] = declInit;
@@ -246,7 +360,6 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 4: Const declaration (const int c = 7;)
       const constDecl = trimmed.match(/^\s*const\s+(int|long|float|double|char|bool)\s+(\w+)\s*=\s*([^;]+);/);
       if (constDecl) {
         const [, type, varName, value] = constDecl;
@@ -256,44 +369,21 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 5: Pointer declaration (int *p = &a;)
       const ptrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s*\*\s*(\w+)\s*=\s*([^;]+);/);
       if (ptrDecl) {
         const [, type, varName, value] = ptrDecl;
         out.push(`${indent}__trace_declare(${varName}, ${type}*, ${i + 1});`);
         out.push(line);
         out.push(`${indent}__trace_assign(${varName}, (long long)${varName}, ${i + 1});`);
+        
+        // ✅ NEW: If assigning an array, emit mapping
+        const arrayName = value.trim().replace(/&/g, '');
+        if (/^\w+$/.test(arrayName)) {
+          out.push(`${indent}__trace_pointer_maps_array(${varName}, ${arrayName}, ${i + 1});`);
+        }
         continue;
       }
 
-      // ✅ PATTERN 6: Array declaration (int arr[3];)
-      const arrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[(\d+)\]\s*;/);
-      if (arrDecl) {
-        const [, type, varName, size] = arrDecl;
-        out.push(line);
-        out.push(`${indent}__trace_declare(${varName}, ${type}[${size}], ${i + 1});`);
-        continue;
-      }
-
-      // ✅ PATTERN 7: Array with initializer (int arr[3] = {1,2,3};)
-      const arrDeclInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\]\s*=\s*\{[^}]*\}\s*;/);
-      if (arrDeclInit) {
-        const [, type, varName, size] = arrDeclInit;
-        out.push(line);
-        out.push(`${indent}__trace_declare(${varName}, ${type}[${size}], ${i + 1});`);
-        continue;
-      }
-
-      // ✅ PATTERN 8: Array element assignment (arr[0] = 10;)
-      const arrAssign = trimmed.match(/^\s*(\w+)\s*\[\s*(\d+)\s*\]\s*=\s*([^;]+);/);
-      if (arrAssign) {
-        const [, varName, index, value] = arrAssign;
-        out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
-        out.push(line);
-        continue;
-      }
-
-      // ✅ PATTERN 9: Pointer dereference (*p = 15;)
       const ptrDeref = trimmed.match(/^\s*\*\s*(\w+)\s*=\s*([^;]+);/);
       if (ptrDeref) {
         const [, varName, value] = ptrDeref;
@@ -302,7 +392,6 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 10: Struct member assignment (pt.x = 3;)
       const memberAssign = trimmed.match(/^\s*(\w+)\.(\w+)\s*=\s*([^;]+);/);
       if (memberAssign) {
         const [, structName, memberName, value] = memberAssign;
@@ -311,16 +400,6 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 11: 2D array element assignment (mat[0][1] = 20;)
-      const arr2DAssign = trimmed.match(/^\s*(\w+)\s*\[\s*(\d+)\s*\]\s*\[\s*(\d+)\s*\]\s*=\s*([^;]+);/);
-      if (arr2DAssign) {
-        const [, varName, idx1, idx2, value] = arr2DAssign;
-        out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
-        out.push(line);
-        continue;
-      }
-
-      // ✅ PATTERN 12: Simple assignment (a = 5;)
       const assign = trimmed.match(/^\s*(\w+)\s*=\s*([^;]+);/);
       if (assign && !trimmed.includes('(') && !trimmed.includes('[') && !trimmed.includes('.')) {
         const [, varName, value] = assign;
@@ -329,7 +408,6 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 13: Compound assignment (b += 2;)
       const compound = trimmed.match(/^\s*(\w+)\s*([+\-*/%]|<<|>>)=\s*([^;]+);/);
       if (compound) {
         const [, varName, op, value] = compound;
@@ -338,7 +416,6 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 14: Increment/decrement (i++, ++i, i--, --i)
       const inc = trimmed.match(/^\s*(\+\+|--)?(\w+)(\+\+|--)?;/);
       if (inc) {
         const varName = inc[2];
@@ -355,14 +432,11 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN 15: For-loop with initialization (for (int i = 0; ...))
       const forLoop = trimmed.match(/^\s*for\s*\(\s*(int|long)\s+(\w+)\s*=\s*([^;]+);/);
       if (forLoop) {
         const [, type, varName, initValue] = forLoop;
-        // Insert declaration trace before the for statement
         out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
         out.push(line);
-        // Find the opening brace and insert assignment trace
         if (trimmed.includes('{')) {
           const braceIdx = line.indexOf('{');
           const before = line.substring(0, braceIdx + 1);
@@ -376,7 +450,6 @@ class CodeInstrumenter {
         continue;
       }
 
-      // Default: keep line as-is
       out.push(line);
     }
     

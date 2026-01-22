@@ -1,12 +1,10 @@
 /**
- * useSocket Hook - IMMUTABLE & BACKEND-AGNOSTIC VERSION
+ * useSocket Hook - WITH ARRAY SUPPORT
  * 
- * CRITICAL FIXES:
- * 1. NEVER mutates backend objects (they are READ-ONLY)
- * 2. Deep clones all steps before processing
- * 3. Normalizes backend step types to semantic types
- * 4. Handles global scope, constructors, loops correctly
- * 5. Works with LLDB now, GDB later, any debugger future
+ * FIXES:
+ * 1. Added array event type normalization
+ * 2. Added array event handlers in step processing
+ * 3. Proper array state tracking
  */
 
 import { useEffect, useState, useCallback } from 'react';
@@ -17,41 +15,22 @@ import toast from 'react-hot-toast';
 import { ExecutionTrace, ExecutionStep, Variable } from '@types/index';
 
 // ============================================================================
-// HELPER FUNCTIONS - IMMUTABILITY & NORMALIZATION
+// HELPER FUNCTIONS
 // ============================================================================
 
-/**
- * Deep clone a step to ensure immutability
- * ALSO: Transform backend property names to frontend property names
- * 
- * BACKEND → FRONTEND MAPPING:
- *   eventType → type (instrumentation backend uses eventType)
- *   stdout → value (for output events)
- * 
- * WHY: Backend objects can be frozen/read-only (from Zustand, Object.freeze, etc.)
- * SOLUTION: Always work on a deep copy, never mutate originals
- */
 const cloneStep = (step: ExecutionStep): ExecutionStep => {
   if (!step) return {} as ExecutionStep;
   
   try {
-    // JSON stringify/parse is simple and effective for plain data objects
     const cloned = JSON.parse(JSON.stringify(step));
     
-    // ===================================================================
-    // BACKEND → FRONTEND PROPERTY MAPPING
-    // ===================================================================
+    if ((cloned as any).eventType && !cloned.type) {
+      cloned.type = (cloned as any).eventType;
+    }
+    if ((cloned as any).eventType) {
+      (cloned as any).originalEventType = (cloned as any).eventType;
+    }
     
-      // Map backend eventType → frontend type (instrumentation tracer uses eventType)
-      if ((cloned as any).eventType && !cloned.type) {
-        cloned.type = (cloned as any).eventType;
-      }
-      // Preserve original event type for downstream components (e.g., VariableLifetime) to infer primitive types
-      if ((cloned as any).eventType) {
-        (cloned as any).originalEventType = (cloned as any).eventType;
-      }
-    
-    // Map backend stdout → frontend value for output events
     if ((cloned as any).stdout && cloned.type === 'output') {
       cloned.value = (cloned as any).stdout;
     }
@@ -64,42 +43,23 @@ const cloneStep = (step: ExecutionStep): ExecutionStep => {
 };
 
 /**
- * Normalize backend step types to semantic frontend types
- * 
- * WHY: Backend debuggers (LLDB, GDB) use different keywords
- * GOAL: Frontend uses semantic types independent of debugger
- * 
- * SEMANTIC TYPE SYSTEM:
- * - program_start: execution begins
- * - program_end: execution completes
- * - func_enter: entering function (NEW: instrumentation backend)
- * - func_exit: leaving function (NEW: instrumentation backend)
- * - var: variable trace event (NEW: instrumentation backend)
- * - heap_alloc: heap memory allocated (NEW: instrumentation backend)
- * - heap_free: heap memory freed (NEW: instrumentation backend)
- * - line_execution: generic line step
- * - variable_declaration: new variable created
- * - assignment: variable value changed
- * - object_creation: C++ object constructed
- * - object_destruction: C++ object destructed
- * - function_call: entering function
- * - function_return: leaving function
- * - loop_start: entering loop
- * - loop_iteration: loop iteration
- * - loop_end: exiting loop
- * - array_access: array element accessed
- * - pointer_deref: pointer dereferenced
+ * Normalize backend step types including ARRAY EVENTS
  */
 const normalizeStepType = (type: string): string => {
   if (!type) return 'line_execution';
   
   const lowerType = type.toLowerCase().trim();
   
-  // Direct mapping table
   const typeMapping: Record<string, string> = {
     // ===================================================================
-    // NEW INSTRUMENTATION BACKEND TYPES (2026-01-18)
-    // Map to semantic frontend StepTypes
+    // ARRAY EVENT TYPES (NEW - CRITICAL)
+    // ===================================================================
+    'array_create': 'array_declaration',
+    'array_init': 'array_initialization', 
+    'array_index_assign': 'array_assignment',
+    
+    // ===================================================================
+    // INSTRUMENTATION BACKEND TYPES
     // ===================================================================
     'func_enter': 'func_enter',
     'func_exit': 'func_exit',
@@ -107,20 +67,22 @@ const normalizeStepType = (type: string): string => {
     'heap_alloc': 'heap_allocation',
     'heap_free': 'heap_free',
     'program_end': 'program_end',
+    'program_start': 'program_start',
     'stdout': 'output',
     'print': 'output',
+    'declare': 'declare',
+    'assign': 'assign',
     
     // LLDB types
     'step_in': 'function_call',
     'step_out': 'function_return',
     'step_over': 'line_execution',
     
-    // Semantic types (already normalized)
-    'program_start': 'program_start',
+    // Semantic types
     'line_execution': 'line_execution',
     'variable_declaration': 'variable_declaration',
     'pointer_declaration': 'variable_declaration',
-    'array_declaration': 'variable_declaration',
+    'array_declaration': 'array_declaration',
     'assignment': 'assignment',
     'object_creation': 'object_creation',
     'object_destruction': 'object_destruction',
@@ -136,7 +98,8 @@ const normalizeStepType = (type: string): string => {
     'heap_allocation': 'heap_allocation',
     'output': 'output',
     'input_request': 'input_request',
-    // Backend emitted primitive/type names (map them to variable events)
+    
+    // Backend primitive types
     'int': 'var',
     'double': 'var',
     'float': 'var',
@@ -149,7 +112,7 @@ const normalizeStepType = (type: string): string => {
     'variable_assignment': 'assignment',
     'variable_change': 'assignment',
     
-    // GDB types (future-proofing)
+    // GDB types
     'next': 'line_execution',
     'step': 'function_call',
     'finish': 'function_return',
@@ -160,30 +123,17 @@ const normalizeStepType = (type: string): string => {
     return normalized;
   }
   
-  // Unknown type - log warning but don't crash
   console.warn(`[normalizeStepType] Unknown step type: "${type}". Defaulting to "line_execution".`);
   return 'line_execution';
 };
 
-/**
- * Normalize call stack - handle missing/invalid call stacks
- * 
- * WHY: Backend might not send callStack for:
- * - Global scope execution (before main)
- * - Static initializers
- * - Destructor cleanup (after main)
- * 
- * SOLUTION: Provide a valid default representing global scope
- */
 const normalizeCallStack = (
   callStack: ExecutionStep['state']['callStack']
 ): NonNullable<ExecutionStep['state']['callStack']> => {
-  // If valid call stack exists, return it (cloned via cloneStep)
   if (callStack && Array.isArray(callStack) && callStack.length > 0) {
     return callStack;
   }
   
-  // Provide default global scope frame
   return [{
     function: '(global scope)',
     file: 'unknown',
@@ -192,21 +142,13 @@ const normalizeCallStack = (
   }];
 };
 
-/**
- * Ensure locals is an object, not an array
- * 
- * WHY: Legacy backend versions sent locals as array
- * SOLUTION: Convert array to object by variable name
- */
 const normalizeLocals = (locals: any): Record<string, Variable> => {
   if (!locals) return {};
   
-  // Already an object
   if (!Array.isArray(locals)) {
     return locals as Record<string, Variable>;
   }
   
-  // Convert array to object
   const localsObj: Record<string, Variable> = {};
   (locals as Variable[]).forEach((v: any) => {
     if (v && v.name) {
@@ -216,6 +158,20 @@ const normalizeLocals = (locals: any): Record<string, Variable> => {
   
   return localsObj;
 };
+
+// ============================================================================
+// ARRAY TRACKING
+// ============================================================================
+
+interface ArrayState {
+  name: string;
+  baseType: string;
+  dimensions: number[];
+  values: any[];
+  address: string;
+  birthStep: number;
+  owner: string;
+}
 
 // ============================================================================
 // MAIN HOOK
@@ -252,7 +208,6 @@ export function useSocket() {
   }, []);
 
   useEffect(() => {
-    // Event handlers
     const handleConnectionState: SocketEventCallback = (data) => 
       setIsConnected(data.connected);
     
@@ -280,15 +235,13 @@ export function useSocket() {
     };
 
     /**
-     * CRITICAL HANDLER - Process trace with full immutability
+     * CRITICAL HANDLER - WITH ARRAY SUPPORT
      */
     const handleTraceComplete: SocketEventCallback = (data) => {
       console.log(`✅ Trace complete: ${data.totalSteps} total steps`);
       
       try {
-        // ===================================================================
-        // STEP 1: Collect and expand all raw steps from chunks
-        // ===================================================================
+        // Collect chunks
         if (receivedChunks.length === 0) {
           if (data && data.steps) {
             receivedChunks.push(data);
@@ -299,6 +252,7 @@ export function useSocket() {
 
         const allRawSteps: any[] = receivedChunks.flatMap(chunk => chunk.steps || []);
 
+        // Expand internal events
         const expandedSteps: any[] = [];
         allRawSteps.forEach(step => {
             const { internalEvents, ...mainStep } = step;
@@ -318,10 +272,10 @@ export function useSocket() {
           throw new Error('No steps found in received trace data.');
         }
 
-        console.log(`📋 Processing ${expandedSteps.length} raw steps from backend`, expandedSteps);
+        console.log(`📋 Processing ${expandedSteps.length} raw steps from backend`);
 
         // ===================================================================
-        // STEP 2: Process steps and build state immutably
+        // PROCESS STEPS WITH ARRAY SUPPORT
         // ===================================================================
         let currentMemoryState: MemoryState = {
             globals: {},
@@ -330,6 +284,9 @@ export function useSocket() {
             callStack: [],
             stdout: ""
         };
+        
+        // Track arrays separately
+        const arrayRegistry = new Map<string, ArrayState>();
         const variableBirthStepMap = new Map<string, number>();
         const processedSteps: ExecutionStep[] = [];
 
@@ -342,6 +299,8 @@ export function useSocket() {
 
           const functionName = (step.function || "").trim().replace(/\r/g, '');
           
+          console.log(`[Step ${index}] Type: ${step.type}, Name: ${step.name || 'N/A'}`);
+          
           switch (step.type) {
             case 'func_enter':
               nextMemoryState.callStack.push({
@@ -349,68 +308,163 @@ export function useSocket() {
                 line: step.line,
                 locals: {},
               });
+              console.log(`✅ Function entered: ${functionName}`);
               break;
+              
             case 'func_exit':
               if (nextMemoryState.callStack.length > 0) {
-                nextMemoryState.callStack.pop();
+                const exited = nextMemoryState.callStack.pop();
+                console.log(`✅ Function exited: ${exited?.function}`);
               }
               break;
-                  case 'var': {
-                    const currentFrame = nextMemoryState.callStack[nextMemoryState.callStack.length - 1];
-                    // Determine the variable's declared type: backend may provide varType or we can fallback to the original event type (e.g., "int", "double")
-                    const declaredType = (step as any).varType || (step as any).eventType || originalType;
-                    if (currentFrame) {
-                      const varName = step.name;
-                      if (varName) {
-                        const existingVar = currentFrame.locals[varName];
-                        if (!existingVar) {
-                          const newVar: Variable = {
-                            name: varName,
-                            value: step.value,
-                            type: declaredType,
-                            primitive: declaredType,
-                            address: step.addr,
-                            scope: 'local',
-                            isInitialized: true,
-                            isAlive: true,
-                            birthStep: index,
-                          };
-                          currentFrame.locals[varName] = newVar;
-                          variableBirthStepMap.set(varName, index);
-                        } else {
-                          existingVar.value = step.value;
-                        }
-                      }
-                    } else {
-                      // No active function call, assume global scope
-                      const varName = step.name;
-                      if (varName) {
-                        const existingVar = nextMemoryState.globals[varName];
-                        if (!existingVar) {
-                          const newVar: Variable = {
-                            name: varName,
-                            value: step.value,
-                            type: declaredType,
-                            primitive: declaredType,
-                            address: step.addr,
-                            scope: 'global',
-                            isInitialized: true,
-                            isAlive: true,
-                            birthStep: index,
-                          };
-                          nextMemoryState.globals[varName] = newVar;
-                          variableBirthStepMap.set(varName, index);
-                        } else {
-                          existingVar.value = step.value;
-                        }
-                      }
-                    }
-                    break;
+              
+            // ===================================================================
+            // ARRAY DECLARATION
+            // ===================================================================
+            case 'array_declaration': {
+              const arrayName = step.name;
+              const baseType = (step as any).baseType || 'int';
+              const dimensions = (step as any).dimensions || [1];
+              const address = (step as any).address || step.addr;
+              
+              console.log(`🔲 ARRAY CREATED: ${arrayName}[${dimensions.join('][')}] (${baseType}) @ ${address}`);
+              
+              // Initialize with default values
+              const totalSize = dimensions.reduce((a: number, b: number) => a * b, 1);
+              const initialValues = new Array(totalSize).fill(0);
+              
+              const arrayState: ArrayState = {
+                name: arrayName,
+                baseType,
+                dimensions,
+                values: initialValues,
+                address,
+                birthStep: index,
+                owner: functionName || 'main'
+              };
+              
+              arrayRegistry.set(arrayName, arrayState);
+              
+              // Store array metadata in step
+              (step as any).arrayData = arrayState;
+              break;
+            }
+            
+            // ===================================================================
+            // ARRAY INITIALIZATION
+            // ===================================================================
+            case 'array_initialization': {
+              const arrayName = step.name;
+              const values = (step as any).values || [];
+              
+              console.log(`🔲 ARRAY INITIALIZED: ${arrayName} = [${values.join(',')}]`);
+              
+              const arrayState = arrayRegistry.get(arrayName);
+              if (arrayState) {
+                arrayState.values = [...values];
+                (step as any).arrayData = arrayState;
+              }
+              break;
+            }
+            
+            // ===================================================================
+            // ARRAY ELEMENT ASSIGNMENT
+            // ===================================================================
+            case 'array_assignment': {
+              const arrayName = step.name;
+              const indices = (step as any).indices || [];
+              const value = step.value;
+              
+              console.log(`🔲 ARRAY UPDATED: ${arrayName}[${indices.join('][')}] = ${value}`);
+              
+              const arrayState = arrayRegistry.get(arrayName);
+              if (arrayState) {
+                // Convert multi-dimensional index to flat index
+                const flatIndex = calculateFlatIndex(indices, arrayState.dimensions);
+                if (flatIndex >= 0 && flatIndex < arrayState.values.length) {
+                  arrayState.values[flatIndex] = value;
+                  (step as any).arrayData = { ...arrayState };
+                  (step as any).updatedIndices = [indices];
+                }
+              }
+              break;
+            }
+            
+            // ===================================================================
+            // REGULAR VARIABLE
+            // ===================================================================
+            case 'var': {
+              const currentFrame = nextMemoryState.callStack[nextMemoryState.callStack.length - 1];
+              const declaredType = (step as any).varType || (step as any).eventType || originalType;
+              
+              if (currentFrame) {
+                const varName = step.name;
+                if (varName) {
+                  const existingVar = currentFrame.locals[varName];
+                  if (!existingVar) {
+                    const newVar: Variable = {
+                      name: varName,
+                      value: step.value,
+                      type: declaredType,
+                      primitive: declaredType,
+                      address: step.addr,
+                      scope: 'local',
+                      isInitialized: true,
+                      isAlive: true,
+                      birthStep: index,
+                    };
+                    currentFrame.locals[varName] = newVar;
+                    variableBirthStepMap.set(varName, index);
+                  } else {
+                    existingVar.value = step.value;
                   }
+                }
+              } else {
+                // Global variable
+                const varName = step.name;
+                if (varName) {
+                  const existingVar = nextMemoryState.globals[varName];
+                  if (!existingVar) {
+                    const newVar: Variable = {
+                      name: varName,
+                      value: step.value,
+                      type: declaredType,
+                      primitive: declaredType,
+                      address: step.addr,
+                      scope: 'global',
+                      isInitialized: true,
+                      isAlive: true,
+                      birthStep: index,
+                    };
+                    nextMemoryState.globals[varName] = newVar;
+                    variableBirthStepMap.set(varName, index);
+                  } else {
+                    existingVar.value = step.value;
+                  }
+                }
+              }
+              break;
+            }
+            
+            case 'declare': {
+              // Handle declare event
+              console.log(`📝 Variable declared: ${step.name}`);
+              break;
+            }
+            
+            case 'assign': {
+              // Handle assign event
+              console.log(`📝 Variable assigned: ${step.name} = ${step.value}`);
+              break;
+            }
+            
             case 'output':
               nextMemoryState.stdout = (nextMemoryState.stdout || "") + step.value;
               break;
           }
+          
+          // Attach current array states to step
+          (step as any).arrays = Array.from(arrayRegistry.values());
           
           step.state = nextMemoryState;
           step.id = index;
@@ -423,7 +477,7 @@ export function useSocket() {
         });
 
         // ===================================================================
-        // STEP 3: Final processing and store update
+        // FINAL PROCESSING
         // ===================================================================
         const validSteps = processedSteps.filter(step => step.id !== undefined);
 
@@ -431,19 +485,25 @@ export function useSocket() {
           throw new Error('No valid steps after processing.');
         }
 
-        console.log(`✅ Processed ${validSteps.length} valid steps`);
+        console.log(`✅ Processed ${validSteps.length} valid steps with ${arrayRegistry.size} arrays`);
         
         const trace: ExecutionTrace = {
           steps: validSteps,
           totalSteps: validSteps.length,
           globals: receivedChunks[0]?.globals || [],
           functions: receivedChunks[0]?.functions || [],
-          metadata: receivedChunks[0]?.metadata || { debugger: 'unknown', hasSemanticInfo: true },
+          metadata: { 
+            ...receivedChunks[0]?.metadata || {}, 
+            debugger: 'instrumentation',
+            hasSemanticInfo: true,
+            hasArraySupport: true,
+            arrayCount: arrayRegistry.size
+          },
         };
 
         setTrace(trace);
         setAnalyzing(false);
-        toast.success(`✅ Generated ${validSteps.length} execution steps`);
+        toast.success(`✅ Generated ${validSteps.length} execution steps with ${arrayRegistry.size} arrays`);
         
         receivedChunks = [];
 
@@ -463,7 +523,6 @@ export function useSocket() {
 
     const handleInputRequired: SocketEventCallback = (data) => {
       console.log('📥 Input required:', data);
-      // Input handling is done in VisualizationCanvas
     };
 
     // Subscribe to events
@@ -511,6 +570,24 @@ export function useSocket() {
     generateTrace,
     requestGCCStatus,
   };
+}
+
+// ============================================================================
+// HELPER: CALCULATE FLAT INDEX
+// ============================================================================
+function calculateFlatIndex(indices: number[], dimensions: number[]): number {
+  if (indices.length === 1) {
+    return indices[0];
+  }
+  if (indices.length === 2) {
+    const [i, j] = indices;
+    return i * dimensions[1] + j;
+  }
+  if (indices.length === 3) {
+    const [i, j, k] = indices;
+    return i * dimensions[1] * dimensions[2] + j * dimensions[2] + k;
+  }
+  return indices[0];
 }
 
 export default useSocket;
