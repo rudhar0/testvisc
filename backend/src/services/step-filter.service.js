@@ -60,9 +60,7 @@ class StepFilterService {
 
     // ===================================================================
     // STEP 1: Detect main() entry
-    // ===================================================================
-    if (!this.mainStarted && this.isMainEntry(processed)) {
-      this.mainStarted = true;
+    // ==================================================================      this.mainStarted = true;
       this.globalInitPhase = false;
       console.log(`✅ Main entry at step ${index}`);
       
@@ -96,6 +94,9 @@ class StepFilterService {
     // ===================================================================
     if (this.isSystemCode(processed)) {
       console.log(`🔇 Filtered system code: ${processed.function}`);
+dling)
+    if (!this.isUserSourceFile(processed.file)) {
+      console.log(`🔇 Filtered step not in source file: ${processed.file}`);
       return null;
     }
 

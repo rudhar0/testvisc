@@ -5,8 +5,11 @@ import path from 'path';
 import { v4 as uuid } from 'uuid';
 
 /**
- * ✅ ENHANCED: Complete array support alongside existing scalar behavior
- * Arrays emit native array events, scalars remain unchanged
+ * Complete code instrumenter with:
+ * - Proper array initialization (zero-padding)
+ * - Array-to-pointer decay detection
+ * - Minimal step generation (one line → one step max)
+ * - No spurious heap events
  */
 class CodeInstrumenter {
   constructor() {
@@ -14,7 +17,7 @@ class CodeInstrumenter {
   }
 
   async instrumentCode(code, language = 'cpp') {
-    console.log('🔧 Instrumenting code (scalars + arrays)...');
+    console.log('🔧 Instrumenting code...');
 
     try {
       const withHeader = this.addTraceHeader(code);
@@ -40,14 +43,11 @@ class CodeInstrumenter {
     return lines.join('\n');
   }
 
-  // ✅ NEW: Detect if declaration is an array
   isArrayDeclaration(varDecl) {
     return /\[/.test(varDecl);
   }
 
-  // ✅ NEW: Parse array declaration
   parseArrayDeclaration(type, varDecl) {
-    // Examples: arr[3], mat[2][3], cube[2][3][4]
     const nameMatch = varDecl.match(/^(\w+)/);
     if (!nameMatch) return null;
 
@@ -119,6 +119,22 @@ class CodeInstrumenter {
     return match ? match[1].trim() : null;
   }
 
+  // Detect if pointer is assigned from array (decay)
+  isArrayDecay(value) {
+    const trimmed = value.trim();
+    // Cases: arr, &arr[0], (arr), etc.
+    if (/^\w+$/.test(trimmed)) return trimmed; // Plain identifier
+    if (/^&\w+\[0\]$/.test(trimmed)) {
+      const match = trimmed.match(/^&(\w+)\[0\]$/);
+      return match ? match[1] : null;
+    }
+    if (/^\(\w+\)$/.test(trimmed)) {
+      const match = trimmed.match(/^\((\w+)\)$/);
+      return match ? match[1] : null;
+    }
+    return null;
+  }
+
   async injectBeginnerModeTracing(code, language) {
     const lines = code.split('\n');
     const out = [];
@@ -127,11 +143,6 @@ class CodeInstrumenter {
     let braceDepth = 0;
     let inStruct = false;
     let inClass = false;
-    let currentFunction = null;
-    let functionParams = new Map(); // Track function parameters
-    
-    // ✅ NEW: Track pointer→array mappings for index resolution
-    const pointerToArray = new Map();
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -148,39 +159,6 @@ class CodeInstrumenter {
       
       if (braceDepth > 0 && !inStruct) {
         inFunc = true;
-      }
-      
-      // ✅ NEW: Track function entries and detect array parameters
-      const funcDecl = trimmed.match(/^\s*(?:void|int|float|double|char|bool|long)\s+(\w+)\s*\(([^)]*)\)\s*({)?/);
-      if (funcDecl && braceDepth === 0) {
-        currentFunction = funcDecl[1];
-        const params = funcDecl[2];
-        const hasOpenBrace = funcDecl[3] === '{';
-        
-        // Parse parameters to find array parameters
-        const arrayParams = [];
-        if (params.trim()) {
-          const paramList = params.split(',').map(p => p.trim());
-          paramList.forEach(param => {
-            // Detect array parameter: int arr[], int arr[N], int *arr
-            const arrMatch = param.match(/(?:int|long|float|double|char|bool)\s*(?:\*|(\w+)\s*\[)/);
-            if (arrMatch) {
-              const nameMatch = param.match(/(\w+)(?:\s*\[|\s*$)/);
-              if (nameMatch) {
-                arrayParams.push(nameMatch[1]);
-              }
-            }
-          });
-        }
-        
-        functionParams.set(currentFunction, arrayParams);
-        
-        // If function has array params and opening brace on same line, inject traces
-        if (hasOpenBrace && arrayParams.length > 0 && currentFunction !== 'main') {
-          out.push(line);
-          // We'll inject array_reference at call sites, not here
-          continue;
-        }
       }
       
       if (inStruct && braceDepth === 0 && closeBraces > 0) {
@@ -202,7 +180,7 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN: Multi-declaration
+      // Multi-declaration
       const multiDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(.+);$/);
       if (multiDecl && multiDecl[2].includes(',')) {
         const [, type, rest] = multiDecl;
@@ -211,14 +189,12 @@ class CodeInstrumenter {
         for (let idx = 0; idx < vars.length; idx++) {
           const varDecl = vars[idx];
           
-          // ✅ NEW: Check if it's an array
           if (this.isArrayDeclaration(varDecl)) {
             const arrayInfo = this.parseArrayDeclaration(type, varDecl);
             if (!arrayInfo) continue;
 
             const { name, dimensions, hasInitializer, initValues } = arrayInfo;
             
-            // Emit array_create
             const dimArgs = dimensions.slice(0, 3).join(',');
             const paddedDims = dimensions.length === 1 ? `${dimArgs},0,0` :
                               dimensions.length === 2 ? `${dimArgs},0` : dimArgs;
@@ -226,16 +202,18 @@ class CodeInstrumenter {
             out.push(`${indent}${type} ${varDecl};`);
             out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
             
-            // Emit array_init if has initializer
             if (hasInitializer && initValues) {
               const totalSize = dimensions.reduce((a, b) => a * (parseInt(b) || 1), 1);
+              const initList = initValues.split(',').map(v => v.trim()).filter(Boolean);
+              // Zero-pad partial initialization
+              const paddedInit = [...initList, ...Array(totalSize - initList.length).fill('0')].join(',');
+              
               out.push(`${indent}{`);
-              out.push(`${indent}  int __temp_${name}[] = {${initValues}};`);
+              out.push(`${indent}  int __temp_${name}[] = {${paddedInit}};`);
               out.push(`${indent}  __trace_array_init(${name}, __temp_${name}, ${totalSize}, ${i + 1});`);
               out.push(`${indent}}`);
             }
           } else {
-            // ✅ EXISTING: Regular scalar variable
             const varName = this.extractVariableName(varDecl);
             if (!varName || !/^\w+$/.test(varName)) continue;
             
@@ -256,7 +234,7 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN: Single array declaration (int arr[3];)
+      // Single array declaration
       const arrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\](\s*\[([^\]]+)\])?(\s*\[([^\]]+)\])?\s*;/);
       if (arrDecl) {
         const [, type, name, dim1, , dim2, , dim3] = arrDecl;
@@ -270,7 +248,7 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN: Array with initializer (int arr[3] = {1,2,3};)
+      // Array with initializer - zero-pad partial init
       const arrDeclInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\](\s*\[([^\]]+)\])?(\s*\[([^\]]+)\])?\s*=\s*\{([^}]*)\}\s*;/);
       if (arrDeclInit) {
         const [, type, name, dim1, , dim2, , dim3, initValues] = arrDeclInit;
@@ -278,18 +256,22 @@ class CodeInstrumenter {
         const dimArgs = dims.slice(0, 3).join(',');
         const paddedDims = dims.length === 1 ? `${dimArgs},0,0` :
                           dims.length === 2 ? `${dimArgs},0` : dimArgs;
+        
         const totalSize = dims.reduce((a, b) => a * (parseInt(b) || 1), 1);
+        const initList = initValues.split(',').map(v => v.trim()).filter(Boolean);
+        // Zero-pad
+        const paddedInit = [...initList, ...Array(totalSize - initList.length).fill('0')].join(',');
         
         out.push(line);
         out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
         out.push(`${indent}{`);
-        out.push(`${indent}  int __temp_${name}[] = {${initValues}};`);
+        out.push(`${indent}  int __temp_${name}[] = {${paddedInit}};`);
         out.push(`${indent}  __trace_array_init(${name}, __temp_${name}, ${totalSize}, ${i + 1});`);
         out.push(`${indent}}`);
         continue;
       }
 
-      // ✅ PATTERN: Array element assignment (arr[0] = 10;)
+      // Array element assignment
       const arrAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
       if (arrAssign) {
         const [, varName, index, value] = arrAssign;
@@ -298,7 +280,6 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN: 2D array element assignment (mat[0][1] = 20;)
       const arr2DAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
       if (arr2DAssign) {
         const [, varName, idx1, idx2, value] = arr2DAssign;
@@ -307,7 +288,6 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ PATTERN: 3D array element assignment (cube[0][1][2] = 30;)
       const arr3DAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
       if (arr3DAssign) {
         const [, varName, idx1, idx2, idx3, value] = arr3DAssign;
@@ -316,38 +296,12 @@ class CodeInstrumenter {
         continue;
       }
 
-      // ✅ EXISTING PATTERNS: All scalar patterns remain unchanged
+      // Scalar declarations
       const declOnly = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*;/);
       if (declOnly) {
         const [, type, varName] = declOnly;
         out.push(line);
         out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-        continue;
-      }
-
-      // ✅ NEW: Detect function calls with array arguments
-      const funcCall = trimmed.match(/^\s*(\w+)\s*\(([^)]+)\)\s*;/);
-      if (funcCall && currentFunction) {
-        const [, calledFunc, args] = funcCall;
-        
-        // Check if called function has array parameters
-        const targetParams = functionParams.get(calledFunc);
-        
-        if (targetParams && targetParams.length > 0) {
-          // Parse arguments
-          const argList = args.split(',').map(a => a.trim());
-          
-          // Emit array_reference for each array argument
-          argList.forEach((arg, idx) => {
-            if (idx < targetParams.length && /^\w+$/.test(arg)) {
-              const paramName = targetParams[idx];
-              // Emit: array_reference(fromVar=paramName, toArray=arg, from=current, to=calledFunc)
-              out.push(`${indent}__trace_array_reference(${paramName}, ${arg}, "${currentFunction}", "${calledFunc}", ${i + 1});`);
-            }
-          });
-        }
-        
-        out.push(line);
         continue;
       }
 
@@ -369,17 +323,22 @@ class CodeInstrumenter {
         continue;
       }
 
+      // Pointer declaration - detect array decay
       const ptrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s*\*\s*(\w+)\s*=\s*([^;]+);/);
       if (ptrDecl) {
         const [, type, varName, value] = ptrDecl;
+        
+        const arrayName = this.isArrayDecay(value);
+        
         out.push(`${indent}__trace_declare(${varName}, ${type}*, ${i + 1});`);
         out.push(line);
-        out.push(`${indent}__trace_assign(${varName}, (long long)${varName}, ${i + 1});`);
         
-        // ✅ NEW: If assigning an array, emit mapping
-        const arrayName = value.trim().replace(/&/g, '');
-        if (/^\w+$/.test(arrayName)) {
-          out.push(`${indent}__trace_pointer_maps_array(${varName}, ${arrayName}, ${i + 1});`);
+        if (arrayName) {
+          // Array decay detected
+          out.push(`${indent}__trace_pointer_alias(${varName}, ${arrayName}, true, ${i + 1});`);
+        } else {
+          // Regular pointer
+          out.push(`${indent}__trace_assign(${varName}, (long long)${varName}, ${i + 1});`);
         }
         continue;
       }

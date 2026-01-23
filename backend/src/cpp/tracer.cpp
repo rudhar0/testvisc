@@ -1,8 +1,5 @@
 // src/cpp/tracer.cpp
-// ------------------------------------------------------------
-// Cross-platform instrumentation tracer (C & C++)
-// ✅ ENHANCED: Full array support with native events
-// ------------------------------------------------------------
+// Complete implementation with minimal, clean step generation
 
 #include <cstdio>
 #include <cstdlib>
@@ -12,6 +9,7 @@
 #include <algorithm>
 #include <string>
 #include <map>
+#include <set>
 
 #ifdef _WIN32
     #include <windows.h>
@@ -25,27 +23,25 @@
 
 #include "trace.h"
 
-// --------------------------------------------------------------------
 // Global state
-// --------------------------------------------------------------------
-static FILE*   g_trace_file    = nullptr;
-static int     g_depth         = 0;
+static FILE* g_trace_file = nullptr;
+static int g_depth = 0;
 static unsigned long g_event_counter = 0;
 
 #ifndef _WIN32
 static std::mutex g_trace_mutex;
 #endif
 
-// ✅ NEW: Array tracking registry
+// Track arrays with stack flag
 struct ArrayInfo {
     std::string name;
     std::string baseType;
     void* address;
     int dim1, dim2, dim3;
-    std::string ownerFunc;
+    bool isStack;
 };
 
-// ✅ NEW: Track array element values to filter duplicates
+// Track array element values to prevent duplicate events
 struct ArrayElementKey {
     std::string arrayName;
     int idx1, idx2, idx3;
@@ -58,15 +54,14 @@ struct ArrayElementKey {
     }
 };
 
+// Track variable values to prevent duplicate assign events
+static std::map<std::string, long long> g_variable_values;
 static std::map<void*, ArrayInfo> g_array_registry;
-static std::map<void*, void*> g_pointer_to_array;  // pointer addr -> array addr
-static std::map<std::string, std::string> g_pointer_name_to_array_name; // NEW: name mapping
-static std::string g_current_function = "main"; // Track current function scope
-static std::map<ArrayElementKey, long long> g_array_element_values; // Track element values
+static std::map<ArrayElementKey, long long> g_array_element_values;
+static std::set<std::string> g_tracked_functions;
+static std::string g_current_function = "main";
 
-// --------------------------------------------------------------------
 // Helper functions
-// --------------------------------------------------------------------
 static inline unsigned long get_timestamp_us() {
 #ifdef _WIN32
     static LARGE_INTEGER freq{};
@@ -122,7 +117,6 @@ static std::string json_safe_path(const char* raw) {
     return s;
 }
 
-// ✅ NEW: Normalize function names (strip \r \n)
 static std::string normalize_function_name(const char* name) {
     if (!name) return "unknown";
     std::string s(name);
@@ -153,19 +147,15 @@ static void write_json_event(const char* type, void* addr,
     unlock_trace();
 }
 
-// --------------------------------------------------------------------
-// ✅ NEW: Array tracking implementations
-// --------------------------------------------------------------------
-
+// Array operations - ONLY for stack arrays, never emit heap events
 extern "C" void __trace_array_create_loc(const char* name, const char* baseType,
                                          void* address, int dim1, int dim2, int dim3,
-                                         const char* file, int line) {
+                                         bool isStack, const char* file, int line) {
     if (!g_trace_file) return;
     
     const std::string f = json_safe_path(file);
     char extra[512];
     
-    // Build dimensions array
     char dims[64];
     if (dim3 > 0) {
         snprintf(dims, sizeof(dims), "[%d,%d,%d]", dim1, dim2, dim3);
@@ -176,12 +166,11 @@ extern "C" void __trace_array_create_loc(const char* name, const char* baseType,
     }
     
     snprintf(extra, sizeof(extra),
-             "\"name\":\"%s\",\"baseType\":\"%s\",\"dimensions\":%s,\"isStackArray\":true,\"ownerFunction\":\"%s\",\"file\":\"%s\",\"line\":%d",
-             name, baseType, dims, g_current_function.c_str(), f.c_str(), line);
+             "\"name\":\"%s\",\"baseType\":\"%s\",\"dimensions\":%s,\"isStack\":%s,\"file\":\"%s\",\"line\":%d",
+             name, baseType, dims, isStack ? "true" : "false", f.c_str(), line);
     
     write_json_event("array_create", address, g_current_function.c_str(), g_depth, extra);
     
-    // Register array
     ArrayInfo info;
     info.name = name;
     info.baseType = baseType;
@@ -189,20 +178,20 @@ extern "C" void __trace_array_create_loc(const char* name, const char* baseType,
     info.dim1 = dim1;
     info.dim2 = dim2;
     info.dim3 = dim3;
-    info.ownerFunc = g_current_function;
+    info.isStack = isStack;
     
     g_array_registry[address] = info;
 }
 
+// ONE event for entire array initialization
 extern "C" void __trace_array_init_loc(const char* name, void* values, int count,
                                        const char* file, int line) {
     if (!g_trace_file) return;
     
     const std::string f = json_safe_path(file);
     
-    // Convert values to JSON array
     int* intValues = static_cast<int*>(values);
-    char valueStr[1024] = "[";
+    char valueStr[2048] = "[";
     char temp[32];
     for (int i = 0; i < count && i < 100; i++) {
         if (i > 0) strcat(valueStr, ",");
@@ -211,7 +200,7 @@ extern "C" void __trace_array_init_loc(const char* name, void* values, int count
     }
     strcat(valueStr, "]");
     
-    char extra[2048];
+    char extra[4096];
     snprintf(extra, sizeof(extra),
              "\"name\":\"%s\",\"values\":%s,\"file\":\"%s\",\"line\":%d",
              name, valueStr, f.c_str(), line);
@@ -219,11 +208,11 @@ extern "C" void __trace_array_init_loc(const char* name, void* values, int count
     write_json_event("array_init", values, g_current_function.c_str(), g_depth, extra);
 }
 
+// Array element assignment - skip if value unchanged
 extern "C" void __trace_array_index_assign_loc(const char* name, int idx1, int idx2, int idx3,
                                                 long long value, const char* file, int line) {
     if (!g_trace_file) return;
     
-    // ✅ NEW: Check if value actually changed
     ArrayElementKey key;
     key.arrayName = name;
     key.idx1 = idx1;
@@ -232,16 +221,13 @@ extern "C" void __trace_array_index_assign_loc(const char* name, int idx1, int i
     
     auto it = g_array_element_values.find(key);
     if (it != g_array_element_values.end() && it->second == value) {
-        // Value unchanged - skip event
-        return;
+        return; // Value unchanged - skip event
     }
     
-    // Update tracked value
     g_array_element_values[key] = value;
     
     const std::string f = json_safe_path(file);
     
-    // Build indices array
     char indices[64];
     if (idx3 >= 0) {
         snprintf(indices, sizeof(indices), "[%d,%d,%d]", idx1, idx2, idx3);
@@ -259,55 +245,21 @@ extern "C" void __trace_array_index_assign_loc(const char* name, int idx1, int i
     write_json_event("array_index_assign", nullptr, g_current_function.c_str(), g_depth, extra);
 }
 
-extern "C" void __trace_array_reference_loc(const char* fromVar, const char* toArray,
-                                            const char* fromFunc, const char* toFunc,
-                                            const char* file, int line) {
+// Pointer alias - for array decay
+extern "C" void __trace_pointer_alias_loc(const char* name, const char* aliasOf, bool decayedFromArray,
+                                          const char* file, int line) {
     if (!g_trace_file) return;
     
     const std::string f = json_safe_path(file);
     char extra[512];
     snprintf(extra, sizeof(extra),
-             "\"fromVariable\":\"%s\",\"toArray\":\"%s\",\"fromFunction\":\"%s\",\"toFunction\":\"%s\",\"file\":\"%s\",\"line\":%d",
-             fromVar, toArray, fromFunc, toFunc, f.c_str(), line);
+             "\"name\":\"%s\",\"aliasOf\":\"%s\",\"decayedFromArray\":%s,\"file\":\"%s\",\"line\":%d",
+             name, aliasOf, decayedFromArray ? "true" : "false", f.c_str(), line);
     
-    write_json_event("array_reference", nullptr, "array_ref", g_depth, extra);
+    write_json_event("pointer_alias", nullptr, g_current_function.c_str(), g_depth, extra);
 }
 
-// ✅ NEW: Map pointer name to array name for index resolution
-extern "C" void __trace_pointer_maps_array_loc(const char* pointerName, const char* arrayName,
-                                                const char* file, int line) {
-    if (!g_trace_file) return;
-    
-    g_pointer_name_to_array_name[pointerName] = arrayName;
-    
-    // Also emit as internal tracking event (won't create a step)
-    const std::string f = json_safe_path(file);
-    char extra[256];
-    snprintf(extra, sizeof(extra),
-             "\"pointer\":\"%s\",\"array\":\"%s\",\"file\":\"%s\",\"line\":%d",
-             pointerName, arrayName, f.c_str(), line);
-    
-    write_json_event("pointer_array_map", nullptr, "internal", g_depth, extra);
-}
-
-// ✅ NEW: Explicit array pass reference event (pointer = array)
-extern "C" void __trace_array_pass_reference_loc(const char* pointer, const char* targetArray,
-                                                  const char* scope, const char* file, int line) {
-    if (!g_trace_file) return;
-    
-    const std::string f = json_safe_path(file);
-    char extra[512];
-    snprintf(extra, sizeof(extra),
-             "\"pointer\":\"%s\",\"targetArray\":\"%s\",\"scope\":\"%s\",\"file\":\"%s\",\"line\":%d",
-             pointer, targetArray, scope, f.c_str(), line);
-    
-    write_json_event("array_pass_reference", nullptr, g_current_function.c_str(), g_depth, extra);
-}
-
-// --------------------------------------------------------------------
-// Existing implementations (UNCHANGED)
-// --------------------------------------------------------------------
-
+// Variable declare
 extern "C" void __trace_declare_loc(const char* name, const char* type,
                                     const char* file, int line) {
     if (!g_trace_file) return;
@@ -319,9 +271,19 @@ extern "C" void __trace_declare_loc(const char* name, const char* type,
     write_json_event("declare", nullptr, name, g_depth, extra);
 }
 
+// Variable assign - skip if value unchanged
 extern "C" void __trace_assign_loc(const char* name, long long value,
                                    const char* file, int line) {
     if (!g_trace_file) return;
+    
+    // Check for duplicate value
+    auto it = g_variable_values.find(name);
+    if (it != g_variable_values.end() && it->second == value) {
+        return; // Value unchanged - skip event
+    }
+    
+    g_variable_values[name] = value;
+    
     const std::string f = json_safe_path(file);
     char extra[256];
     snprintf(extra, sizeof(extra),
@@ -330,6 +292,7 @@ extern "C" void __trace_assign_loc(const char* name, long long value,
     write_json_event("assign", nullptr, name, g_depth, extra);
 }
 
+// Backward-compatible trace functions
 extern "C" void trace_var_int_loc(const char* name, int value,
                                    const char* file, int line) {
     if (!g_trace_file) return;
@@ -408,7 +371,7 @@ extern "C" void trace_var_str(const char* name, const char* value) {
     trace_var_str_loc(name, value, "unknown", 0);
 }
 
-// Function entry/exit, heap tracking, lifecycle - ALL UNCHANGED
+// Function entry/exit tracking - track ALL functions
 extern "C" void __cyg_profile_func_enter(void* func, void* caller)
     __attribute__((no_instrument_function));
 void __cyg_profile_func_enter(void* func, void* caller) {
@@ -428,6 +391,10 @@ void __cyg_profile_func_enter(void* func, void* caller) {
     }
 #endif
 
+    std::string fn = normalize_function_name(func_name);
+    g_tracked_functions.insert(fn);
+    g_current_function = fn;
+    
     char extra[256];
     snprintf(extra, sizeof(extra), "\"caller\":\"%p\"", caller);
     write_json_event("func_enter", func, func_name, g_depth++, extra);
@@ -453,11 +420,12 @@ void __cyg_profile_func_exit(void* func, void* caller) {
     write_json_event("func_exit", func, func_name, --g_depth);
 }
 
+// Heap tracking - ONLY emit for real allocators (malloc/new)
 void* operator new(std::size_t size) {
     void* ptr = std::malloc(size);
-    if (ptr && g_depth > 0) {
+    if (ptr && g_trace_file) {
         char extra[128];
-        snprintf(extra, sizeof(extra), "\"size\":%zu", size);
+        snprintf(extra, sizeof(extra), "\"size\":%zu,\"isHeap\":true", size);
         write_json_event("heap_alloc", ptr, "operator new", g_depth, extra);
     }
     return ptr;
@@ -465,23 +433,23 @@ void* operator new(std::size_t size) {
 
 void* operator new[](std::size_t size) {
     void* ptr = std::malloc(size);
-    if (ptr && g_depth > 0) {
+    if (ptr && g_trace_file) {
         char extra[128];
-        snprintf(extra, sizeof(extra), "\"size\":%zu", size);
+        snprintf(extra, sizeof(extra), "\"size\":%zu,\"isHeap\":true", size);
         write_json_event("heap_alloc", ptr, "operator new[]", g_depth, extra);
     }
     return ptr;
 }
 
 void operator delete(void* ptr) noexcept {
-    if (ptr && g_depth > 0) {
+    if (ptr && g_trace_file) {
         write_json_event("heap_free", ptr, "operator delete", g_depth);
     }
     std::free(ptr);
 }
 
 void operator delete[](void* ptr) noexcept {
-    if (ptr && g_depth > 0) {
+    if (ptr && g_trace_file) {
         write_json_event("heap_free", ptr, "operator delete[]", g_depth);
     }
     std::free(ptr);
@@ -502,9 +470,9 @@ extern "C" {
     void* malloc(std::size_t size) {
         if (!real_malloc) init_malloc_hooks();
         void* ptr = real_malloc(size);
-        if (ptr && g_depth > 0 && g_trace_file) {
+        if (ptr && g_trace_file) {
             char extra[128];
-            snprintf(extra, sizeof(extra), "\"size\":%zu", size);
+            snprintf(extra, sizeof(extra), "\"size\":%zu,\"isHeap\":true", size);
             write_json_event("heap_alloc", ptr, "malloc", g_depth, extra);
         }
         return ptr;
@@ -513,7 +481,7 @@ extern "C" {
     void free(void* ptr) __attribute__((no_instrument_function));
     void free(void* ptr) {
         if (!real_free) init_malloc_hooks();
-        if (ptr && g_depth > 0 && g_trace_file) {
+        if (ptr && g_trace_file) {
             write_json_event("heap_free", ptr, "free", g_depth);
         }
         real_free(ptr);
@@ -530,7 +498,7 @@ void init_tracer() {
     g_trace_file = std::fopen(trace_path, "w");
     if (g_trace_file) {
         std::fprintf(g_trace_file,
-                     "{\"version\":\"1.0\",\"events\":[\n");
+                     "{\"version\":\"1.0\",\"functions\":[],\"events\":[\n");
         std::fflush(g_trace_file);
     }
 }
@@ -539,8 +507,15 @@ extern "C" void __attribute__((destructor)) finish_tracer()
     __attribute__((no_instrument_function));
 void finish_tracer() {
     if (g_trace_file) {
-        std::fprintf(g_trace_file,
-                     "\n],\"total_events\":%lu}\n", g_event_counter);
+        // Write tracked functions
+        std::fprintf(g_trace_file, "\n],\"tracked_functions\":[");
+        bool first = true;
+        for (const auto& fn : g_tracked_functions) {
+            if (!first) std::fprintf(g_trace_file, ",");
+            std::fprintf(g_trace_file, "\"%s\"", fn.c_str());
+            first = false;
+        }
+        std::fprintf(g_trace_file, "],\"total_events\":%lu}\n", g_event_counter);
         std::fclose(g_trace_file);
         g_trace_file = nullptr;
     }

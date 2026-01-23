@@ -134,20 +134,20 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
       const value = getValueAt([i]);
       
       // Render all cells (empty or filled)
-      cells.push(
-        <ArrayCell
-          key={`${id}-cell-${i}`}
-          id={`${id}-cell-${i}`}
-          index={[i]}
-          value={value}
-          baseType={baseType}
-          x={cellX}
-          y={cellY}
-          width={CELL_WIDTH}
-          height={CELL_HEIGHT}
-          isUpdated={isCellUpdated([i])}
-        />
-      );
+     cells.push(
+  <ArrayCell
+    key={`cell-${i}`}  // FIXED: Remove id prefix, just use index
+    id={`${id}-cell-${i}`}
+    index={[i]}
+    value={value}
+    baseType={baseType}
+    x={cellX}
+    y={cellY}
+    width={CELL_WIDTH}
+    height={CELL_HEIGHT}
+    isUpdated={isCellUpdated([i])}
+  />
+);
     }
     
     return cells;
@@ -167,20 +167,20 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
         const value = getValueAt([i, j]);
         
         // Render all cells
-        cells.push(
-          <ArrayCell
-            key={`${id}-cell-${i}-${j}`}
-            id={`${id}-cell-${i}-${j}`}
-            index={[i, j]}
-            value={value}
-            baseType={baseType}
-            x={cellX}
-            y={cellY}
-            width={CELL_WIDTH}
-            height={CELL_HEIGHT}
-            isUpdated={isCellUpdated([i, j])}
-          />
-        );
+      cells.push(
+  <ArrayCell
+    key={`${id}-cell-${i}-${j}`}  // ✅ FIXED: Full coordinates
+    id={`${id}-cell-${i}-${j}`}
+    index={[i, j]}
+    value={value}
+    baseType={baseType}
+    x={cellX}
+    y={cellY}
+    width={CELL_WIDTH}
+    height={CELL_HEIGHT}
+    isUpdated={isCellUpdated([i, j])}
+  />
+);
       }
     }
     

@@ -93,26 +93,26 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = memo(({
   // ============================================
   // RENDER ARRAYS (MEMOIZED)
   // ============================================
-  const renderedArrays = useMemo(() => {
-    return arrayPositions.map(({ array, y }) => (
-      <ArrayBox
-        // Include currentStep and dimensions length in key to guarantee uniqueness across steps and dimensions
-        key={`${array.id}-${currentStep}-${array.dimensions.length}`}
-        id={array.id}
-        name={array.name}
-        baseType={array.baseType}
-        dimensions={array.dimensions}
-        values={array.values}
-        address={array.address}
-        x={PADDING}
-        y={y}
-        isNew={array.birthStep === currentStep}
-        updatedIndices={array.updatedIndices || []}
-        owner={array.owner}
-        currentStep={currentStep}
-      />
-    ));
-  }, [arrayPositions, currentStep]);
+const renderedArrays = useMemo(() => {
+  return arrayPositions.map(({ array, y }) => (
+    <ArrayBox
+      // FIXED: Remove currentStep from key - use only stable identifiers
+      key={`${array.id}-${array.dimensions.length}`}
+      id={array.id}
+      name={array.name}
+      baseType={array.baseType}
+      dimensions={array.dimensions}
+      values={array.values}
+      address={array.address}
+      x={PADDING}
+      y={y}
+      isNew={array.birthStep === currentStep}
+      updatedIndices={array.updatedIndices || []}
+      owner={array.owner}
+      currentStep={currentStep}
+    />
+  ));
+}, [arrayPositions, currentStep]);
 
   // ============================================
   // MAIN RENDER

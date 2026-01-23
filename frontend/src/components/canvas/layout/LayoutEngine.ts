@@ -1,7 +1,7 @@
 // frontend/src/components/canvas/layout/LayoutEngine.ts
 /**
  * LayoutEngine - OPTIMIZED WITH MULTI-DIMENSIONAL ARRAY SUPPORT
- * 
+ *
  * FIXES:
  * 1. Cached array positions (no recalculation lag)
  * 2. Progressive array value tracking (no re-renders)
@@ -9,16 +9,30 @@
  * 4. Array variable references in stack
  */
 
-import { 
-  MemoryState, 
-  ExecutionStep, 
-  Variable, 
+import type {
+  MemoryState,
+  ExecutionStep,
+  Variable,
   ExecutionTrace,
-} from '@types/index';
+} from "@types/index";
 
 export interface LayoutElement {
   id: string;
-  type: 'main' | 'variable' | 'array' | 'pointer' | 'loop' | 'condition' | 'output' | 'input' | 'global' | 'function' | 'struct' | 'class' | 'array_panel' | 'array_reference';
+  type:
+    | "main"
+    | "variable"
+    | "array"
+    | "pointer"
+    | "loop"
+    | "condition"
+    | "output"
+    | "input"
+    | "global"
+    | "function"
+    | "struct"
+    | "class"
+    | "array_panel"
+    | "array_reference";
   subtype?: string;
   x: number;
   y: number;
@@ -48,33 +62,52 @@ export interface Layout {
 }
 
 const ELEMENT_SPACING = 16;
-const INDENT_SIZE = 20;
+const INDENT_SIZE = -10;
 const HEADER_HEIGHT = 40;
 const MAIN_FUNCTION_X = 40;
 const MAIN_FUNCTION_Y = 40;
-const MAIN_FUNCTION_WIDTH = 600;
-const GLOBAL_PANEL_WIDTH = 300;
+const MAIN_FUNCTION_WIDTH = 400;
+const GLOBAL_PANEL_WIDTH = 400;
 const PANEL_GAP = 40;
 
 // ============================================
 // PROGRESSIVE ARRAY VALUE TRACKER - ENHANCED
 // ============================================
 class ProgressiveArrayTracker {
-  private arrays: Map<string, {
-    name: string;
-    baseType: string;
-    dimensions: number[];
-    address: string;
-    owner: string;
-    birthStep: number;
-    values: Map<string, any>;
-    lastUpdateStep: number;
-  }> = new Map();
+  private arrays: Map<
+    string,
+    {
+      name: string;
+      baseType: string;
+      dimensions: number[];
+      address: string;
+      owner: string;
+      birthStep: number;
+      values: Map<string, any>;
+      lastUpdateStep: number;
+    }
+  > = new Map();
 
   // Cache for computed states
   private stateCache: Map<string, any> = new Map();
 
-  createArray(name: string, baseType: string, dimensions: number[], address: string, owner: string, stepIndex: number) {
+  createArray(
+    name: string,
+    baseType: string,
+    dimensions: number[],
+    address: string,
+    owner: string,
+    stepIndex: number,
+  ) {
+    // VALIDATION: Ensure dimensions array is non‑empty and contains only positive integers
+    if (!Array.isArray(dimensions) || dimensions.length === 0) {
+      console.error(`Invalid dimensions for array ${name}. Falling back to [1]`);
+      dimensions = [1];
+    }
+    // Compute total size for debugging purposes
+    const totalSize = dimensions.reduce((a, b) => a * b, 1);
+    console.log(`✅ Array ${name} created with dimensions [${dimensions.join(',')}], total size ${totalSize}`);
+
     this.arrays.set(name, {
       name,
       baseType,
@@ -83,7 +116,7 @@ class ProgressiveArrayTracker {
       owner,
       birthStep: stepIndex,
       values: new Map(),
-      lastUpdateStep: stepIndex
+      lastUpdateStep: stepIndex,
     });
     this.invalidateCache(name);
   }
@@ -91,19 +124,48 @@ class ProgressiveArrayTracker {
   initializeArray(name: string, values: any[], stepIndex: number) {
     const arr = this.arrays.get(name);
     if (!arr) return;
-
-    values.forEach((val, idx) => {
-      arr.values.set(String(idx), val);
+    // Convert flat index to multi‑dimensional index strings (e.g. "i,j" or "i,j,k")
+    const dimensions = arr.dimensions;
+    const totalSize = dimensions.reduce((a, b) => a * b, 1);
+    values.forEach((val, flatIdx) => {
+      if (flatIdx >= totalSize) {
+        // Extra values beyond declared size are ignored but logged for debugging
+        console.warn(`Array ${name} received extra initialization value at flat index ${flatIdx}`);
+        return;
+      }
+      const indices = this.flatIndexToIndices(flatIdx, dimensions);
+      const key = indices.join(',');
+      arr.values.set(key, val);
     });
     arr.lastUpdateStep = stepIndex;
     this.invalidateCache(name);
   }
 
-  updateArrayElement(name: string, indices: number[], value: any, stepIndex: number) {
+  /**
+   * Convert a flat index into an array of dimension indices.
+   * Supports 1‑D, 2‑D, 3‑D and N‑D arrays.
+   */
+  private flatIndexToIndices(flatIdx: number, dimensions: number[]): number[] {
+    const indices: number[] = new Array(dimensions.length).fill(0);
+    let remainder = flatIdx;
+    for (let d = dimensions.length - 1; d >= 0; d--) {
+      const dimSize = dimensions[d];
+      indices[d] = remainder % dimSize;
+      remainder = Math.floor(remainder / dimSize);
+    }
+    return indices;
+  }
+
+  updateArrayElement(
+    name: string,
+    indices: number[],
+    value: any,
+    stepIndex: number,
+  ) {
     const arr = this.arrays.get(name);
     if (!arr) return;
 
-    const key = indices.join(',');
+    const key = indices.join(",");
     arr.values.set(key, value);
     arr.lastUpdateStep = stepIndex;
     this.invalidateCache(name);
@@ -112,7 +174,7 @@ class ProgressiveArrayTracker {
   private invalidateCache(name: string) {
     // Clear cache for this array
     for (const key of this.stateCache.keys()) {
-      if (key.startsWith(name + '-')) {
+      if (key.startsWith(name + "-")) {
         this.stateCache.delete(key);
       }
     }
@@ -120,7 +182,7 @@ class ProgressiveArrayTracker {
 
   getArrayState(name: string, upToStep: number) {
     const cacheKey = `${name}-${upToStep}`;
-    
+
     // Return cached if available
     if (this.stateCache.has(cacheKey)) {
       return this.stateCache.get(cacheKey);
@@ -133,7 +195,7 @@ class ProgressiveArrayTracker {
     const progressiveValues: any[] = new Array(totalSize).fill(null);
 
     arr.values.forEach((value, key) => {
-      const indices = key.split(',').map(Number);
+      const indices = key.split(",").map(Number);
       const flatIdx = this.calculateFlatIndex(indices, arr.dimensions);
 
       if (flatIdx >= 0 && flatIdx < totalSize) {
@@ -143,7 +205,7 @@ class ProgressiveArrayTracker {
 
     const state = {
       ...arr,
-      values: progressiveValues
+      values: progressiveValues,
     };
 
     // Cache result
@@ -165,16 +227,16 @@ class ProgressiveArrayTracker {
   getUpdatedIndices(name: string, currentStep: number): number[][] {
     const arr = this.arrays.get(name);
     if (!arr || arr.lastUpdateStep !== currentStep) return [];
-    
+
     // Track which indices were updated in this step
     const updated: number[][] = [];
     arr.values.forEach((value, key) => {
-      const indices = key.split(',').map(Number);
+      const indices = key.split(",").map(Number);
       // Simple heuristic: if this is the current step, assume it was just updated
       // In production, you'd track this more explicitly
       updated.push(indices);
     });
-    
+
     return updated;
   }
 
@@ -236,28 +298,28 @@ export class LayoutEngine {
     executionTrace: ExecutionTrace,
     currentStepIndex: number,
     canvasWidth: number,
-    canvasHeight: number
+    canvasHeight: number,
   ): Layout {
     const layout: Layout = {
-      mainFunction: { 
-        id: 'main-function', 
-        type: 'main', 
-        x: MAIN_FUNCTION_X, 
-        y: MAIN_FUNCTION_Y, 
-        width: MAIN_FUNCTION_WIDTH, 
-        height: 80, 
-        children: [], 
-        stepId: 0 
+      mainFunction: {
+        id: "main-function",
+        type: "main",
+        x: MAIN_FUNCTION_X,
+        y: MAIN_FUNCTION_Y,
+        width: MAIN_FUNCTION_WIDTH,
+        height: 80,
+        children: [],
+        stepId: 0,
       },
-      globalPanel: { 
-        id: 'global-panel', 
-        type: 'global', 
+      globalPanel: {
+        id: "global-panel",
+        type: "global",
         x: 0,
         y: 0,
-        width: GLOBAL_PANEL_WIDTH, 
-        height: 60, 
-        children: [], 
-        stepId: 0 
+        width: GLOBAL_PANEL_WIDTH,
+        height: 60,
+        children: [],
+        stepId: 0,
       },
       arrayPanel: null,
       elements: [],
@@ -275,12 +337,19 @@ export class LayoutEngine {
     this.parentStack = [layout.mainFunction];
 
     // Process all steps up to current
-    for (let i = 0; i <= currentStepIndex && i < executionTrace.steps.length; i++) {
+    for (
+      let i = 0;
+      i <= currentStepIndex && i < executionTrace.steps.length;
+      i++
+    ) {
       const step = executionTrace.steps[i];
       this.processStep(step, layout, i, currentStepIndex);
     }
-    
-    this.updateAllElementsToCurrentState(executionTrace.steps[currentStepIndex], layout);
+
+    this.updateAllElementsToCurrentState(
+      executionTrace.steps[currentStepIndex],
+      layout,
+    );
     this.createArrayPanel(layout, currentStepIndex);
     this.positionGlobalPanel(layout);
     this.createArrayReferences(layout, currentStepIndex);
@@ -290,7 +359,12 @@ export class LayoutEngine {
     return layout;
   }
 
-  private static processStep(step: ExecutionStep, layout: Layout, stepIndex: number, currentStep: number): void {
+  private static processStep(
+    step: ExecutionStep,
+    layout: Layout,
+    stepIndex: number,
+    currentStep: number,
+  ): void {
     const stepType: string = (step as any).eventType || (step as any).type;
     const { state, id } = step;
     const currentParent = this.parentStack[this.parentStack.length - 1];
@@ -298,44 +372,51 @@ export class LayoutEngine {
     // ===================================================================
     // ARRAY EVENTS - WITH MULTI-DIMENSIONAL SUPPORT
     // ===================================================================
-    
-    if (stepType === 'array_create' || stepType === 'array_declaration') {
+
+    if (stepType === "array_create" || stepType === "array_declaration") {
       const { name, baseType, dimensions, address } = step as any;
-      const owner = (step as any).function || 'main';
-      
-      this.arrayTracker.createArray(name, baseType, dimensions, address || '0x0', owner, stepIndex);
-      
+      const owner = (step as any).function || "main";
+
+      this.arrayTracker.createArray(
+        name,
+        baseType,
+        dimensions,
+        address || "0x0",
+        owner,
+        stepIndex,
+      );
+
       // Create array REFERENCE variable in stack
       const varId = `var-${currentParent.id}-${name}`;
       if (!this.elementHistory.has(varId)) {
         const arrayRefVar: any = {
           name: name,
-          value: `→ array[${dimensions.join('][')}]`,
+          value: `→ array[${dimensions.join("][")}]`,
           type: `${baseType}[]`,
           primitive: `${baseType}[]`,
           address: address,
-          scope: 'local',
+          scope: "local",
           isInitialized: true,
           isAlive: true,
           birthStep: stepIndex,
           isArrayReference: true,
-          arrayName: name
+          arrayName: name,
         };
 
         const varElement: LayoutElement = {
           id: varId,
-          type: 'variable',
-          subtype: 'array_reference',
+          type: "variable",
+          subtype: "array_reference",
           x: currentParent.x + INDENT_SIZE,
           y: this.getNextCursorY(currentParent),
-          width: currentParent.width - (INDENT_SIZE * 2),
+          width: currentParent.width - INDENT_SIZE * 2,
           height: 70,
           parentId: currentParent.id,
           stepId: stepIndex,
           data: arrayRefVar,
           metadata: {
-            referencesArray: name
-          }
+            referencesArray: name,
+          },
         };
 
         currentParent.children!.push(varElement);
@@ -343,20 +424,20 @@ export class LayoutEngine {
         this.elementHistory.set(varId, varElement);
         this.createdInStep.set(varId, stepIndex);
       }
-      
+
       return;
     }
 
-    if (stepType === 'array_init' || stepType === 'array_initialization') {
+    if (stepType === "array_init" || stepType === "array_initialization") {
       const { name, values } = step as any;
       this.arrayTracker.initializeArray(name, values, stepIndex);
       return;
     }
 
-    if (stepType === 'array_index_assign' || stepType === 'array_assignment') {
+    if (stepType === "array_index_assign" || stepType === "array_assignment") {
       const { name, indices, value } = step as any;
       this.arrayTracker.updateArrayElement(name, indices, value, stepIndex);
-      
+
       // Create update arrow for this step
       if (stepIndex === currentStep) {
         this.createArrayUpdateArrow(layout, name, indices, stepIndex);
@@ -367,9 +448,9 @@ export class LayoutEngine {
     // ===================================================================
     // EXISTING VARIABLE/FUNCTION LOGIC (UNCHANGED)
     // ===================================================================
-    
+
     switch (stepType) {
-      case 'declare': {
+      case "declare": {
         if (!step.name) break;
         const varId = `var-${currentParent.id}-${step.name}`;
         if (this.elementHistory.has(varId)) break;
@@ -377,10 +458,10 @@ export class LayoutEngine {
         const variable: any = {
           name: step.name,
           value: null,
-          type: (step as any).varType || 'int',
-          primitive: (step as any).varType || 'int',
-          address: step.addr || '0x0',
-          scope: 'local',
+          type: (step as any).varType || "int",
+          primitive: (step as any).varType || "int",
+          address: step.addr || "0x0",
+          scope: "local",
           isInitialized: false,
           isAlive: true,
           birthStep: stepIndex,
@@ -388,11 +469,11 @@ export class LayoutEngine {
 
         const varElement: LayoutElement = {
           id: varId,
-          type: 'variable',
-          subtype: 'variable_declaration',
+          type: "variable",
+          subtype: "variable_declaration",
           x: currentParent.x + INDENT_SIZE,
           y: this.getNextCursorY(currentParent),
-          width: currentParent.width - (INDENT_SIZE * 2),
+          width: currentParent.width - INDENT_SIZE * 2,
           height: 70,
           parentId: currentParent.id,
           stepId: stepIndex,
@@ -406,10 +487,10 @@ export class LayoutEngine {
         break;
       }
 
-      case 'assign': {
+      case "assign": {
         if (!step.name) break;
         const varId = `var-${currentParent.id}-${step.name}`;
-        
+
         if (this.elementHistory.has(varId)) {
           const existingElement = this.elementHistory.get(varId)!;
           existingElement.data = {
@@ -425,10 +506,10 @@ export class LayoutEngine {
           const variable: any = {
             name: step.name,
             value: step.value,
-            type: (step as any).varType || 'int',
-            primitive: (step as any).varType || 'int',
-            address: step.addr || '0x0',
-            scope: 'local',
+            type: (step as any).varType || "int",
+            primitive: (step as any).varType || "int",
+            address: step.addr || "0x0",
+            scope: "local",
             isInitialized: true,
             isAlive: true,
             birthStep: stepIndex,
@@ -436,11 +517,11 @@ export class LayoutEngine {
 
           const varElement: LayoutElement = {
             id: varId,
-            type: 'variable',
-            subtype: 'variable_initialization',
+            type: "variable",
+            subtype: "variable_initialization",
             x: currentParent.x + INDENT_SIZE,
             y: this.getNextCursorY(currentParent),
-            width: currentParent.width - (INDENT_SIZE * 2),
+            width: currentParent.width - INDENT_SIZE * 2,
             height: 70,
             parentId: currentParent.id,
             stepId: stepIndex,
@@ -455,16 +536,16 @@ export class LayoutEngine {
         break;
       }
 
-      case 'output': {
+      case "output": {
         const outputId = `output-${stepIndex}`;
         if (this.elementHistory.has(outputId)) break;
 
         const outputElement: LayoutElement = {
           id: outputId,
-          type: 'output',
+          type: "output",
           x: currentParent.x + INDENT_SIZE,
           y: this.getNextCursorY(currentParent),
-          width: currentParent.width - (INDENT_SIZE * 2),
+          width: currentParent.width - INDENT_SIZE * 2,
           height: 60,
           parentId: currentParent.id,
           stepId: stepIndex,
@@ -482,23 +563,23 @@ export class LayoutEngine {
         break;
       }
 
-      case 'func_enter':
-      case 'function_call': {
+      case "func_enter":
+      case "function_call": {
         if (!state?.callStack || state.callStack.length === 0) break;
         const frame = state.callStack[state.callStack.length - 1];
-        
+
         const parentFrame = this.parentStack[this.parentStack.length - 1];
         if (parentFrame.data?.function === frame.function) break;
-        
+
         const funcId = `func-${frame.function}-${step.line}`;
-        if(this.elementHistory.has(funcId)) break;
+        if (this.elementHistory.has(funcId)) break;
 
         const functionElement: LayoutElement = {
           id: funcId,
-          type: 'function',
+          type: "function",
           x: currentParent.x + INDENT_SIZE,
           y: this.getNextCursorY(currentParent),
-          width: currentParent.width - (INDENT_SIZE * 2),
+          width: currentParent.width - INDENT_SIZE * 2,
           height: 60,
           parentId: currentParent.id,
           stepId: stepIndex,
@@ -513,18 +594,18 @@ export class LayoutEngine {
         this.parentStack.push(functionElement);
         break;
       }
-      
-      case 'func_exit':
-      case 'function_return': {
+
+      case "func_exit":
+      case "function_return": {
         if (this.parentStack.length > 1) {
           this.parentStack.pop();
         }
         break;
       }
 
-      case 'program_start':
-      case 'program_end':
-      case 'line_execution':
+      case "program_start":
+      case "program_end":
+      case "line_execution":
         break;
     }
 
@@ -535,7 +616,7 @@ export class LayoutEngine {
 
   private static createArrayPanel(layout: Layout, currentStep: number): void {
     const arrays = this.arrayTracker.getAllArrays(currentStep);
-    
+
     if (arrays.length === 0) {
       layout.arrayPanel = null;
       return;
@@ -545,33 +626,65 @@ export class LayoutEngine {
     const arrayPanelY = MAIN_FUNCTION_Y;
 
     // Use cached position if available
-    const cachedPos = this.positionCache.get('array-panel');
+    const cachedPos = this.positionCache.get("array-panel");
     const finalX = cachedPos ? cachedPos.x : arrayPanelX;
     const finalY = cachedPos ? cachedPos.y : arrayPanelY;
 
     layout.arrayPanel = {
-      id: 'array-panel',
-      type: 'array_panel',
+      id: "array-panel",
+      type: "array_panel",
       x: finalX,
       y: finalY,
       width: 400,
       height: 200,
       children: [],
       data: { arrays },
-      stepId: 0
+      stepId: 0,
     };
 
     // Cache position
-    this.positionCache.set('array-panel', finalX, finalY);
+    this.positionCache.set("array-panel", finalX, finalY);
   }
 
-  private static createArrayUpdateArrow(layout: Layout, arrayName: string, indices: number[], stepIndex: number): void {
+  private static createArrayUpdateArrow(
+    layout: Layout,
+    arrayName: string,
+    indices: number[],
+    stepIndex: number,
+  ): void {
     if (!layout.arrayPanel) return;
+
+    // Find the variable element that references this array
+    // Search in main function children for a variable with this array name
+    let varElement: LayoutElement | undefined;
+
+    const searchForVariable = (children: LayoutElement[] | undefined): void => {
+      if (!children) return;
+      for (const child of children) {
+        if (child.type === "variable" && child.data?.name === arrayName) {
+          varElement = child;
+          return;
+        }
+        if (child.children) {
+          searchForVariable(child.children);
+        }
+      }
+    };
+
+    searchForVariable(layout.mainFunction.children);
+
+    // Fallback to main panel if variable not found
+    const fromX = varElement
+      ? varElement.x + varElement.width
+      : MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH;
+    const fromY = varElement
+      ? varElement.y + varElement.height / 2
+      : MAIN_FUNCTION_Y + 100;
 
     const arrow: LayoutElement = {
       id: `arrow-${arrayName}-${stepIndex}`,
-      type: 'array_reference',
-      subtype: 'update_arrow',
+      type: "array_reference",
+      subtype: "update_arrow",
       x: 0,
       y: 0,
       width: 0,
@@ -580,11 +693,11 @@ export class LayoutEngine {
       data: {
         arrayName,
         indices,
-        fromX: MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH,
-        fromY: MAIN_FUNCTION_Y + 100,
+        fromX,
+        fromY,
         toX: layout.arrayPanel.x,
         toY: layout.arrayPanel.y + 100,
-      }
+      },
     };
 
     if (!this.updateArrows.has(stepIndex)) {
@@ -600,30 +713,39 @@ export class LayoutEngine {
   private static positionGlobalPanel(layout: Layout): void {
     if (layout.arrayPanel) {
       layout.globalPanel.x = layout.arrayPanel.x;
-      layout.globalPanel.y = layout.arrayPanel.y + layout.arrayPanel.height + PANEL_GAP;
+      layout.globalPanel.y =
+        layout.arrayPanel.y + layout.arrayPanel.height + PANEL_GAP;
     } else {
       layout.globalPanel.x = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP;
       layout.globalPanel.y = MAIN_FUNCTION_Y;
     }
   }
 
-  private static createArrayReferences(layout: Layout, currentStep: number): void {
+  private static createArrayReferences(
+    layout: Layout,
+    currentStep: number,
+  ): void {
     if (!layout.arrayPanel) return;
 
     // Find all array reference variables in stack
-    const arrayRefVars = layout.elements.filter(el => 
-      el.metadata?.referencesArray && el.stepId !== undefined && el.stepId <= currentStep
+    const arrayRefVars = layout.elements.filter(
+      (el) =>
+        el.metadata?.referencesArray &&
+        el.stepId !== undefined &&
+        el.stepId <= currentStep,
     );
 
-    arrayRefVars.forEach(refVar => {
+    arrayRefVars.forEach((refVar) => {
       const arrayName = refVar.metadata!.referencesArray!;
-      const array = layout.arrayPanel!.data?.arrays?.find((arr: any) => arr.name === arrayName);
-      
+      const array = layout.arrayPanel!.data?.arrays?.find(
+        (arr: any) => arr.name === arrayName,
+      );
+
       if (array) {
         const refArrow: LayoutElement = {
           id: `ref-${refVar.id}-${arrayName}`,
-          type: 'array_reference',
-          subtype: 'reference_arrow',
+          type: "array_reference",
+          subtype: "reference_arrow",
           x: 0,
           y: 0,
           width: 0,
@@ -637,8 +759,8 @@ export class LayoutEngine {
             fromX: refVar.x + refVar.width,
             fromY: refVar.y + refVar.height / 2,
             toX: layout.arrayPanel!.x,
-            toY: layout.arrayPanel!.y + 100
-          }
+            toY: layout.arrayPanel!.y + 100,
+          },
         };
 
         layout.arrayReferences.push(refArrow);
@@ -646,46 +768,60 @@ export class LayoutEngine {
     });
   }
 
-  private static updateAllElementsToCurrentState(currentStep: ExecutionStep, layout: Layout): void {
+  private static updateAllElementsToCurrentState(
+    currentStep: ExecutionStep,
+    layout: Layout,
+  ): void {
     if (!currentStep || !currentStep.state) return;
 
     const { callStack, globals } = currentStep.state;
     const allLocals: Record<string, Variable> = {};
-    
-    callStack.forEach(frame => {
-        Object.assign(allLocals, frame.locals);
+
+    callStack.forEach((frame) => {
+      Object.assign(allLocals, frame.locals);
     });
 
-    layout.elements.forEach(el => {
-        let updatedVar: Variable | undefined;
+    layout.elements.forEach((el) => {
+      let updatedVar: Variable | undefined;
 
-        if (el.type === 'variable' || el.type === 'pointer') {
-            updatedVar = allLocals[el.data.name] || globals[el.data.name];
-        }
+      if (el.type === "variable" || el.type === "pointer") {
+        updatedVar = allLocals[el.data.name] || globals[el.data.name];
+      }
 
-        if (updatedVar) {
-            el.data = { ...el.data, ...updatedVar };
-        }
+      if (updatedVar) {
+        el.data = { ...el.data, ...updatedVar };
+      }
     });
   }
 
-  private static updateGlobals(globals: Record<string, Variable>, layout: Layout, stepIndex: number): void {
+  private static updateGlobals(
+    globals: Record<string, Variable>,
+    layout: Layout,
+    stepIndex: number,
+  ): void {
     Object.values(globals).forEach((variable: Variable) => {
-      if (variable.birthStep !== undefined && variable.birthStep > stepIndex) return;
+      if (variable.birthStep !== undefined && variable.birthStep > stepIndex)
+        return;
       const globalId = `global-${variable.address}`;
-      
+
       if (!this.elementHistory.has(globalId)) {
         const isInitialized = variable.value !== undefined;
         const globalElement: LayoutElement = {
           id: globalId,
-          type: 'global',
+          type: "global",
           x: layout.globalPanel.x + 10,
-          y: layout.globalPanel.y + HEADER_HEIGHT + (layout.globalPanel.children!.length * (70 + ELEMENT_SPACING)),
+          y:
+            layout.globalPanel.y +
+            HEADER_HEIGHT +
+            layout.globalPanel.children!.length * (70 + ELEMENT_SPACING),
           width: GLOBAL_PANEL_WIDTH - 20,
           height: 70,
-          parentId: 'global-panel',
+          parentId: "global-panel",
           stepId: variable.birthStep ?? stepIndex,
-          data: { ...variable, state: isInitialized ? 'initialized' : 'declared' },
+          data: {
+            ...variable,
+            state: isInitialized ? "initialized" : "declared",
+          },
         };
         layout.globalPanel.children!.push(globalElement);
         layout.elements.push(globalElement);
@@ -708,14 +844,18 @@ export class LayoutEngine {
       if (!element.children || element.children.length === 0) {
         return element.y + element.height;
       }
+
       let maxY = element.y + HEADER_HEIGHT;
-      element.children.forEach(child => {
+      element.children.forEach((child) => {
         const childBottom = updateHeight(child);
         maxY = Math.max(maxY, childBottom);
       });
+
+      // CRITICAL FIX: Add bottom padding
       element.height = maxY - element.y + ELEMENT_SPACING;
       return maxY + ELEMENT_SPACING;
     };
+
     updateHeight(layout.mainFunction);
     updateHeight(layout.globalPanel);
     if (layout.arrayPanel) {

@@ -1,31 +1,31 @@
 // frontend/src/components/canvas/VisualizationCanvas.tsx
-import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { Stage, Layer, Group, Rect, Line, Text, Arrow } from 'react-konva';
-import Konva from 'konva';
-import { ZoomIn, ZoomOut, Maximize2, Move, Hand } from 'lucide-react';
-import { useExecutionStore } from '@store/slices/executionSlice';
-import { useCanvasStore } from '@store/slices/canvasSlice';
+import { useRef, useEffect, useState, useCallback, useMemo } from "react";
+import { Stage, Layer, Group, Rect, Line, Text, Arrow } from "react-konva";
+import Konva from "konva";
+import { ZoomIn, ZoomOut, Maximize2, Move, Hand } from "lucide-react";
+import { useExecutionStore } from "@store/slices/executionSlice";
+import { useCanvasStore } from "@store/slices/canvasSlice";
 
 // Import element components
-import { VariableBox } from './elements/VariableBox';
-import { ArrayPanel } from './elements/ArrayPanel';
-import { ArrayReference } from './elements/ArrayReference';
-import { StackFrame } from './elements/StackFrame';
-import { StructView } from './elements/StructView';
-import { ClassView } from './elements/ClassView';
-import { OutputElement } from './elements/OutputElement';
-import { InputElement } from './elements/InputElement';
-import { LayoutEngine, LayoutElement } from './layout/LayoutEngine';
-import { InputDialog } from './InputDialog';
-import { socketService } from '../../api/socket.service';
-import { getFocusPosition } from '../../utils/camera';
-import { SmoothUpdateArrow } from './elements/SmoothUpdateArrow';
+import { VariableBox } from "./elements/VariableBox";
+import { ArrayPanel } from "./elements/ArrayPanel";
+import { ArrayReference } from "./elements/ArrayReference";
+import { StackFrame } from "./elements/StackFrame";
+import { StructView } from "./elements/StructView";
+import { ClassView } from "./elements/ClassView";
+import { OutputElement } from "./elements/OutputElement";
+import { InputElement } from "./elements/InputElement";
+import { LayoutEngine, LayoutElement } from "./layout/LayoutEngine";
+import { InputDialog } from "./InputDialog";
+import { socketService } from "../../api/socket.service";
+import { getFocusPosition } from "../../utils/camera";
+import { SmoothUpdateArrow } from "./elements/SmoothUpdateArrow";
 
 const COLORS = {
-  bg: '#0F172A',
-  grid: '#1E293B',
-  mainBorder: '#A855F7',
-  globalBorder: '#2DD4BF',
+  bg: "#0F172A",
+  grid: "#1E293B",
+  mainBorder: "#A855F7",
+  globalBorder: "#2DD4BF",
 };
 
 // Spacing constants
@@ -37,21 +37,22 @@ const SPACING = {
 };
 
 const VAR_COLORS: Record<string, string> = {
-  int: '#3B82F6',
-  float: '#14B8A6',
-  double: '#0891B2',
-  string: '#8B5CF6',
-  char: '#D946EF',
-  boolean: '#F59E0B',
-  long: '#6366F1',
-  short: '#0EA5E9',
-  byte: '#0284C7',
-  default: '#64748B',
+  int: "#3B82F6",
+  float: "#14B8A6",
+  double: "#0891B2",
+  string: "#8B5CF6",
+  char: "#D946EF",
+  boolean: "#F59E0B",
+  long: "#6366F1",
+  short: "#0EA5E9",
+  byte: "#0284C7",
+  default: "#64748B",
 };
 
 const getVarColor = (type: string) => {
-  const normalized = type?.toLowerCase() || 'default';
-  if (normalized.includes('[]') || normalized.includes('array')) return '#10B981';
+  const normalized = type?.toLowerCase() || "default";
+  if (normalized.includes("[]") || normalized.includes("array"))
+    return "#10B981";
   return VAR_COLORS[normalized] || VAR_COLORS.default;
 };
 
@@ -65,7 +66,8 @@ export default function VisualizationCanvas() {
   const getCurrentStep = useExecutionStore((state) => state.getCurrentStep);
   const isAnalyzing = useExecutionStore((state) => state.isAnalyzing);
 
-  const { setCanvasSize, zoom, setZoom, position, setPosition } = useCanvasStore();
+  const { setCanvasSize, zoom, setZoom, position, setPosition } =
+    useCanvasStore();
 
   // Local state
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
@@ -81,15 +83,16 @@ export default function VisualizationCanvas() {
 
   // Calculate full layout (all elements up to current step)
   const fullLayout = useMemo(() => {
-    if (!state || !executionTrace || executionTrace.steps.length === 0) return null;
-    
+    if (!state || !executionTrace || executionTrace.steps.length === 0)
+      return null;
+
     const layout = LayoutEngine.calculateLayout(
       executionTrace,
       currentStep,
       dimensions.width,
-      dimensions.height
+      dimensions.height,
     );
-    
+
     return layout;
   }, [state, currentStep, executionTrace, dimensions.width, dimensions.height]);
 
@@ -97,25 +100,31 @@ export default function VisualizationCanvas() {
   const visibleLayout = useMemo(() => {
     if (!fullLayout) return null;
 
-    const filterChildren = (children: LayoutElement[] | undefined): LayoutElement[] => {
+    const filterChildren = (
+      children: LayoutElement[] | undefined,
+    ): LayoutElement[] => {
       if (!children) return [];
       return children
-        .filter(child => {
+        .filter((child) => {
           const stepId = child.data?.birthStep ?? child.stepId;
           return stepId !== undefined && stepId <= currentStep;
         })
-        .map(child => ({
+        .map((child) => ({
           ...child,
-          children: filterChildren(child.children)
+          children: filterChildren(child.children),
         }));
     };
 
-    const filteredMainChildren = filterChildren(fullLayout.mainFunction.children);
-    const filteredGlobalChildren = filterChildren(fullLayout.globalPanel.children);
-    const filteredElements = fullLayout.elements.filter(el => {
+    const filteredMainChildren = filterChildren(
+      fullLayout.mainFunction.children,
+    );
+    const filteredGlobalChildren = filterChildren(
+      fullLayout.globalPanel.children,
+    );
+    const filteredElements = fullLayout.elements.filter((el) => {
       const stepId = el.data?.birthStep ?? el.stepId;
       if (stepId === undefined || stepId > currentStep) return false;
-      if (el.type === 'array_panel') return false;
+      if (el.type === "array_panel") return false;
       return true;
     });
 
@@ -123,13 +132,13 @@ export default function VisualizationCanvas() {
       ...fullLayout,
       mainFunction: {
         ...fullLayout.mainFunction,
-        children: filteredMainChildren
+        children: filteredMainChildren,
       },
       globalPanel: {
         ...fullLayout.globalPanel,
-        children: filteredGlobalChildren
+        children: filteredGlobalChildren,
       },
-      elements: filteredElements
+      elements: filteredElements,
     };
 
     return filtered;
@@ -143,12 +152,17 @@ export default function VisualizationCanvas() {
     const prevStep = prevStepRef.current;
     const prevElements = prevElementsRef.current;
 
-    visibleLayout.elements.forEach(element => {
+    visibleLayout.elements.forEach((element) => {
       const didExistBefore = prevElements.has(element.id);
-      const isNew = element.stepId === currentStep && prevStep < currentStep && !didExistBefore;
+      const isNew =
+        element.stepId === currentStep &&
+        prevStep < currentStep &&
+        !didExistBefore;
 
       const prev = prevElements.get(element.id);
-      const dataChanged = prev ? JSON.stringify(prev.data) !== JSON.stringify(element.data) : false;
+      const dataChanged = prev
+        ? JSON.stringify(prev.data) !== JSON.stringify(element.data)
+        : false;
       const isUpdated = !isNew && !!prev && dataChanged;
 
       states.set(element.id, { isNew, isUpdated });
@@ -170,12 +184,14 @@ export default function VisualizationCanvas() {
       allVisibleElements.push(el);
       if (el.children) el.children.forEach(traverse);
     };
-    
+
     if (visibleLayout.mainFunction) traverse(visibleLayout.mainFunction);
     if (visibleLayout.globalPanel) traverse(visibleLayout.globalPanel);
     visibleLayout.elements.forEach(traverse);
 
-    const newElements = allVisibleElements.filter(el => elementAnimationStates.get(el.id)?.isNew);
+    const newElements = allVisibleElements.filter(
+      (el) => elementAnimationStates.get(el.id)?.isNew,
+    );
     newElements.sort((a, b) => (a.y || 0) - (b.y || 0));
 
     newElements.forEach((el, idx) => {
@@ -189,10 +205,10 @@ export default function VisualizationCanvas() {
   useEffect(() => {
     if (!visibleLayout) return;
     const map = new Map<string, any>();
-    visibleLayout.elements.forEach(el => {
+    visibleLayout.elements.forEach((el) => {
       map.set(el.id, {
         id: el.id,
-        data: el.data ? JSON.parse(JSON.stringify(el.data)) : undefined
+        data: el.data ? JSON.parse(JSON.stringify(el.data)) : undefined,
       });
     });
     prevElementsRef.current = map;
@@ -214,11 +230,14 @@ export default function VisualizationCanvas() {
     };
 
     updateSize();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateSize) : null;
+    const ro =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(updateSize)
+        : null;
     if (ro && containerRef.current) ro.observe(containerRef.current);
-    window.addEventListener('resize', updateSize);
+    window.addEventListener("resize", updateSize);
     return () => {
-      window.removeEventListener('resize', updateSize);
+      window.removeEventListener("resize", updateSize);
       if (ro) ro.disconnect();
     };
   }, [setCanvasSize]);
@@ -229,16 +248,23 @@ export default function VisualizationCanvas() {
 
     const movingForward = prevStepRef.current < currentStep;
 
-    const focusCandidates = visibleLayout.elements.filter(el => {
+    const focusCandidates = visibleLayout.elements.filter((el) => {
       const animState = elementAnimationStates.get(el.id);
       return (animState?.isNew && movingForward) || animState?.isUpdated;
     });
 
     // Check if array panel is new
     if (visibleLayout.arrayPanel && movingForward) {
-      const arrayPanelStepId = visibleLayout.arrayPanel.stepId || visibleLayout.arrayPanel.data?.stepId || 0;
+      const arrayPanelStepId =
+        visibleLayout.arrayPanel.stepId ||
+        visibleLayout.arrayPanel.data?.stepId ||
+        0;
       if (arrayPanelStepId === currentStep) {
-        const targetPos = getFocusPosition(visibleLayout.arrayPanel, dimensions, zoom);
+        const targetPos = getFocusPosition(
+          visibleLayout.arrayPanel,
+          dimensions,
+          zoom,
+        );
         const stage = stageRef.current;
 
         new Konva.Tween({
@@ -257,10 +283,13 @@ export default function VisualizationCanvas() {
 
     if (focusCandidates.length === 0) return;
 
-    const focusTarget = focusCandidates.reduce((prev, curr) => {
-      if (!prev) return curr;
-      return (prev.y ?? 0) > (curr.y ?? 0) ? prev : curr;
-    }, undefined as LayoutElement | undefined);
+    const focusTarget = focusCandidates.reduce(
+      (prev, curr) => {
+        if (!prev) return curr;
+        return (prev.y ?? 0) > (curr.y ?? 0) ? prev : curr;
+      },
+      undefined as LayoutElement | undefined,
+    );
 
     if (!focusTarget) return;
 
@@ -277,7 +306,14 @@ export default function VisualizationCanvas() {
         setPosition({ x: stage.x(), y: stage.y() });
       },
     }).play();
-  }, [currentStep, elementAnimationStates, dimensions, zoom, setPosition, visibleLayout]);
+  }, [
+    currentStep,
+    elementAnimationStates,
+    dimensions,
+    zoom,
+    setPosition,
+    visibleLayout,
+  ]);
 
   // Track update arrows
   useEffect(() => {
@@ -313,59 +349,65 @@ export default function VisualizationCanvas() {
     setPosition({ x: 0, y: 0 });
   }, [setZoom, setPosition]);
 
-  const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
-    e.evt.preventDefault();
-    const stage = stageRef.current;
-    if (!stage) return;
+  const handleWheel = useCallback(
+    (e: Konva.KonvaEventObject<WheelEvent>) => {
+      e.evt.preventDefault();
+      const stage = stageRef.current;
+      if (!stage) return;
 
-    const oldScale = stage.scaleX();
-    const pointer = stage.getPointerPosition();
-    if (!pointer) return;
+      const oldScale = stage.scaleX();
+      const pointer = stage.getPointerPosition();
+      if (!pointer) return;
 
-    const mousePointTo = {
-      x: (pointer.x - stage.x()) / oldScale,
-      y: (pointer.y - stage.y()) / oldScale,
-    };
+      const mousePointTo = {
+        x: (pointer.x - stage.x()) / oldScale,
+        y: (pointer.y - stage.y()) / oldScale,
+      };
 
-    const newScale = e.evt.deltaY > 0 ? oldScale * 0.9 : oldScale * 1.1;
-    const clampedScale = Math.max(0.1, Math.min(newScale, 5));
+      const newScale = e.evt.deltaY > 0 ? oldScale * 0.9 : oldScale * 1.1;
+      const clampedScale = Math.max(0.1, Math.min(newScale, 5));
 
-    setZoom(clampedScale);
-    setPosition({
-      x: pointer.x - mousePointTo.x * clampedScale,
-      y: pointer.y - mousePointTo.y * clampedScale,
-    });
-  }, [setZoom, setPosition]);
+      setZoom(clampedScale);
+      setPosition({
+        x: pointer.x - mousePointTo.x * clampedScale,
+        y: pointer.y - mousePointTo.y * clampedScale,
+      });
+    },
+    [setZoom, setPosition],
+  );
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === ' ') {
+      if (e.key === " ") {
         e.preventDefault();
         setDragMode(!dragMode);
-      } else if (e.key === '+' || e.key === '=') {
+      } else if (e.key === "+" || e.key === "=") {
         handleZoomIn();
-      } else if (e.key === '-' || e.key === '_') {
+      } else if (e.key === "-" || e.key === "_") {
         handleZoomOut();
-      } else if (e.key === '0') {
+      } else if (e.key === "0") {
         handleFitToScreen();
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [dragMode, handleZoomIn, handleZoomOut, handleFitToScreen]);
 
   // Listen for input required
   useEffect(() => {
     const handleInputRequired = (data: any) => {
-      console.log('[VisualizationCanvas] Input required during analysis:', data);
+      console.log(
+        "[VisualizationCanvas] Input required during analysis:",
+        data,
+      );
       useExecutionStore.getState().pause();
-      
+
       setInputDialogProps({
-        prompt: data.prompt || `Enter value for ${data.varName || 'variable'}:`,
-        format: data.format || '%d',
-        expectedType: data.type || 'int',
+        prompt: data.prompt || `Enter value for ${data.varName || "variable"}:`,
+        format: data.format || "%d",
+        expectedType: data.type || "int",
         varName: data.varName,
         line: data.line,
         isAnalysis: isAnalyzing,
@@ -373,30 +415,32 @@ export default function VisualizationCanvas() {
       setInputDialogOpen(true);
     };
 
-    socketService.on('execution:input_required', handleInputRequired);
+    socketService.on("execution:input_required", handleInputRequired);
     return () => {
-      socketService.off('execution:input_required', handleInputRequired);
+      socketService.off("execution:input_required", handleInputRequired);
     };
   }, [isAnalyzing]);
 
   // Handle input submission
   const handleInputSubmit = (value: string | number) => {
-    console.log('[VisualizationCanvas] Submitting input:', value);
+    console.log("[VisualizationCanvas] Submitting input:", value);
     socketService.provideInput(value);
-    
+
     if (visibleLayout) {
-      const inputElements = visibleLayout.elements.filter(el => el.type === 'input' && el.data?.isWaiting);
-      inputElements.forEach(inputEl => {
+      const inputElements = visibleLayout.elements.filter(
+        (el) => el.type === "input" && el.data?.isWaiting,
+      );
+      inputElements.forEach((inputEl) => {
         inputEl.data = {
           ...inputEl.data,
           value: value,
           isWaiting: false,
         };
       });
-      
+
       if (visibleLayout.mainFunction?.children) {
-        visibleLayout.mainFunction.children.forEach(child => {
-          if (child.type === 'input' && child.data?.isWaiting) {
+        visibleLayout.mainFunction.children.forEach((child) => {
+          if (child.type === "input" && child.data?.isWaiting) {
             child.data = {
               ...child.data,
               value: value,
@@ -406,7 +450,7 @@ export default function VisualizationCanvas() {
         });
       }
     }
-    
+
     setInputDialogOpen(false);
     setInputDialogProps(null);
   };
@@ -414,46 +458,58 @@ export default function VisualizationCanvas() {
   // Helper to filter redundant declaration/initialization pairs
   const filterChildren = (children: LayoutElement[] | undefined) => {
     if (!children) return [];
-    
+
     const idsToExclude = new Set<string>();
     const varGroups = new Map<string, LayoutElement[]>();
-    
-    children.forEach(child => {
-      if (child.type === 'variable' && child.data?.name) {
+
+    children.forEach((child) => {
+      if (child.type === "variable" && child.data?.name) {
         const name = child.data.name;
         if (!varGroups.has(name)) varGroups.set(name, []);
         varGroups.get(name)!.push(child);
       }
     });
-    
+
     varGroups.forEach((vars) => {
       if (vars.length > 1) {
         vars.sort((a, b) => (a.stepId || 0) - (b.stepId || 0));
-        
+
         for (let i = 0; i < vars.length; i++) {
           const current = vars[i];
-          const next = vars[i+1];
-          
-          if (next && current.stepId === next.stepId && current.data?.value === undefined && next.data?.value !== undefined) {
-             idsToExclude.add(current.id);
+          const next = vars[i + 1];
+
+          if (
+            next &&
+            current.stepId === next.stepId &&
+            current.data?.value === undefined &&
+            next.data?.value !== undefined
+          ) {
+            idsToExclude.add(current.id);
           }
         }
       }
     });
-    
-    return children.filter(c => !idsToExclude.has(c.id));
+
+    return children.filter((c) => !idsToExclude.has(c.id));
   };
 
   // ============================================
   // RENDER ELEMENT - FIXED WITH ARRAY SUPPORT
   // ============================================
-  const renderElement = (element: LayoutElement, parentX: number = 0, parentY: number = 0) => {
+  const renderElement = (
+    element: LayoutElement,
+    parentX: number = 0,
+    parentY: number = 0,
+  ) => {
     const { type, data, id, x, y, width, height, children, stepId } = element;
-    const animState = elementAnimationStates.get(id) || { isNew: false, isUpdated: false };
+    const animState = elementAnimationStates.get(id) || {
+      isNew: false,
+      isUpdated: false,
+    };
     const { isNew, isUpdated } = animState;
 
     switch (type) {
-      case 'main':
+      case "main":
         return (
           <StackFrame
             key={id}
@@ -468,7 +524,7 @@ export default function VisualizationCanvas() {
             {filterChildren(children).map((child, idx) => {
               const relativeX = child.x - x;
               const relativeY = child.y - y - SPACING.HEADER_HEIGHT;
-              
+
               return (
                 <Group key={child.id} x={relativeX} y={relativeY}>
                   {renderElement(child, x, y)}
@@ -478,37 +534,54 @@ export default function VisualizationCanvas() {
           </StackFrame>
         );
 
-      case 'variable': {
-        let varState: 'declared' | 'initialized' | 'multiple-init' | 'updated' = 'initialized';
-        if (data?.state === 'declared') {
-          varState = 'declared';
-        } else if (data?.state === 'multiple-init') {
-          varState = 'multiple-init';
-        } else if (data?.state === 'updated') {
-          varState = 'updated';
-        } else if (element.subtype === 'variable_declaration_only') {
-          varState = 'declared';
-        } else if (element.subtype === 'variable_multiple_declaration') {
-          varState = 'multiple-init';
-        } else if (element.subtype === 'variable_value_change' || isUpdated) {
-          varState = 'updated';
+      case "variable": {
+        // Determine variable state
+        let varState: "declared" | "initialized" | "multiple-init" | "updated" =
+          "initialized";
+        if (data?.state === "declared") {
+          varState = "declared";
+        } else if (data?.state === "multiple-init") {
+          varState = "multiple-init";
+        } else if (data?.state === "updated") {
+          varState = "updated";
+        } else if (element.subtype === "variable_declaration_only") {
+          varState = "declared";
+        } else if (element.subtype === "variable_multiple_declaration") {
+          varState = "multiple-init";
+        } else if (element.subtype === "variable_value_change" || isUpdated) {
+          varState = "updated";
         }
 
         const effectiveIsNew = isNew || isUpdated;
 
-        // ✅ ARRAY REFERENCE DETECTION
-        const normalizedType = (data?.type || data?.primitive || '').toString().toLowerCase();
-        const isArrayRef = data?.isArrayReference || normalizedType.includes('[]') || normalizedType.includes('array');
-        
-        if (isArrayRef) {
+        // CRITICAL FIX: Detect arrays via eventType or dimensions
+        const normalizedType = (data?.type || data?.primitive || "")
+          .toString()
+          .toLowerCase();
+        const isArrayVar =
+          normalizedType.includes("[]") ||
+          normalizedType.includes("array") ||
+          data?.dimensions?.length > 0;
+
+        if (isArrayVar) {
+          // Format dimensions for display
+          let dimensionText = "";
+          if (data?.dimensions && data.dimensions.length > 0) {
+            dimensionText = ` [${data.dimensions.join("][")}]`;
+          } else if (normalizedType.includes("[")) {
+            // Extract from type string if available
+            const match = normalizedType.match(/\[(\d+)\]/);
+            dimensionText = match ? ` [${match[1]}]` : "";
+          }
+
           return (
             <VariableBox
               key={`${id}-${stepId}`}
               id={id}
-              name={data?.name || ''}
-              type={data?.type || data?.primitive || 'int[]'}
-              value={data?.value || `→ array`}
-              address={data?.address || ''}
+              name={data?.name || ""}
+              type={data?.type || data?.primitive || "int"}
+              value={`→ array${dimensionText}`}
+              address={data?.address || ""}
               x={x}
               y={y}
               width={width}
@@ -519,19 +592,20 @@ export default function VisualizationCanvas() {
               state="initialized"
               stepNumber={stepId}
               enterDelay={enterDelayMap.get(id) || 0}
-              color="#10B981"
+              color="#60A5FA"
             />
           );
         }
 
+        // Regular variable rendering
         return (
           <VariableBox
             key={`${id}-${stepId}`}
             id={id}
-            name={data?.name || ''}
-            type={data?.type || data?.primitive || 'int'}
+            name={data?.name || ""}
+            type={data?.type || data?.primitive || "int"}
             value={data?.value}
-            address={data?.address || ''}
+            address={data?.address || ""}
             x={x}
             y={y}
             width={width}
@@ -547,15 +621,15 @@ export default function VisualizationCanvas() {
         );
       }
 
-      case 'array_panel':
+      case "array_panel":
         return null;
 
-      case 'output':
+      case "output":
         return (
           <OutputElement
             key={id}
             id={id}
-            value={data?.value || ''}
+            value={data?.value || ""}
             x={x}
             y={y}
             width={width}
@@ -565,7 +639,7 @@ export default function VisualizationCanvas() {
           />
         );
 
-      case 'input':
+      case "input":
         return (
           <InputElement
             key={id}
@@ -583,11 +657,15 @@ export default function VisualizationCanvas() {
           />
         );
 
-      case 'global':
-        let globalState: 'declared' | 'initialized' | 'multiple-init' | 'updated' = 'initialized';
-        if (data?.state === 'declared') globalState = 'declared';
-        else if (data?.state === 'updated') globalState = 'updated';
-        else if (isUpdated) globalState = 'updated';
+      case "global":
+        let globalState:
+          | "declared"
+          | "initialized"
+          | "multiple-init"
+          | "updated" = "initialized";
+        if (data?.state === "declared") globalState = "declared";
+        else if (data?.state === "updated") globalState = "updated";
+        else if (isUpdated) globalState = "updated";
 
         const effectiveGlobalIsNew = isNew || isUpdated;
 
@@ -595,10 +673,10 @@ export default function VisualizationCanvas() {
           <VariableBox
             key={`${id}-${stepId}`}
             id={id}
-            name={data?.name || ''}
-            type={data?.type || data?.primitive || 'int'}
+            name={data?.name || ""}
+            type={data?.type || data?.primitive || "int"}
             value={data?.value}
-            address={data?.address || ''}
+            address={data?.address || ""}
             x={x}
             y={y}
             width={width}
@@ -612,12 +690,12 @@ export default function VisualizationCanvas() {
           />
         );
 
-      case 'function':
+      case "function":
         return (
           <StackFrame
             key={id}
             id={id}
-            functionName={data?.function || 'function()'}
+            functionName={data?.function || "function()"}
             x={x}
             y={y}
             width={width}
@@ -636,12 +714,12 @@ export default function VisualizationCanvas() {
           </StackFrame>
         );
 
-      case 'struct':
+      case "struct":
         return (
           <StructView
             key={id}
             id={id}
-            typeName={data?.type || 'struct'}
+            typeName={data?.type || "struct"}
             x={x}
             y={y}
             width={width}
@@ -660,13 +738,13 @@ export default function VisualizationCanvas() {
           </StructView>
         );
 
-      case 'class':
+      case "class":
         return (
           <ClassView
             key={id}
             id={id}
-            typeName={data?.type || 'class'}
-            objectName={data?.name || ''}
+            typeName={data?.type || "class"}
+            objectName={data?.name || ""}
             x={x}
             y={y}
             width={width}
@@ -685,7 +763,7 @@ export default function VisualizationCanvas() {
           </ClassView>
         );
 
-      case 'loop':
+      case "loop":
         return (
           <Group key={id} x={x} y={y}>
             <Rect
@@ -697,7 +775,7 @@ export default function VisualizationCanvas() {
               cornerRadius={8}
             />
             <Text
-              text={`Loop: ${data?.condition || data?.explanation || 'for/while'}`}
+              text={`Loop: ${data?.condition || data?.explanation || "for/while"}`}
               x={12}
               y={20}
               fontSize={14}
@@ -716,7 +794,7 @@ export default function VisualizationCanvas() {
           </Group>
         );
 
-      case 'condition':
+      case "condition":
         return (
           <Group key={id} x={x} y={y}>
             <Rect
@@ -728,7 +806,7 @@ export default function VisualizationCanvas() {
               cornerRadius={8}
             />
             <Text
-              text={`Condition: ${data?.explanation || 'if/else'}`}
+              text={`Condition: ${data?.explanation || "if/else"}`}
               x={x}
               y={y}
               fontSize={14}
@@ -760,22 +838,31 @@ export default function VisualizationCanvas() {
       <div
         ref={containerRef}
         style={{
-          width: '100%',
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
           backgroundColor: COLORS.bg,
-          color: '#94A3B8',
-          fontFamily: 'system-ui'
+          color: "#94A3B8",
+          fontFamily: "system-ui",
         }}
       >
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '64px', marginBottom: '20px', opacity: 0.5 }}>🎨</div>
-          <div style={{ fontSize: '20px', fontWeight: 600, marginBottom: '12px', color: '#F1F5F9' }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "64px", marginBottom: "20px", opacity: 0.5 }}>
+            🎨
+          </div>
+          <div
+            style={{
+              fontSize: "20px",
+              fontWeight: 600,
+              marginBottom: "12px",
+              color: "#F1F5F9",
+            }}
+          >
             Responsive Canvas Ready
           </div>
-          <div style={{ fontSize: '14px', color: '#64748B' }}>
+          <div style={{ fontSize: "14px", color: "#64748B" }}>
             Run your code to see animated visualization
           </div>
         </div>
@@ -788,99 +875,115 @@ export default function VisualizationCanvas() {
       <div
         ref={containerRef}
         style={{
-          width: '100%',
-          height: '100%',
+          width: "100%",
+          height: "100%",
           backgroundColor: COLORS.bg,
-          position: 'relative',
-          overflow: 'hidden'
+          position: "relative",
+          overflow: "hidden",
         }}
       >
         {/* Controls */}
-        <div style={{ 
-          position: 'absolute',
-          top: 16,
-          right: 16,
-          zIndex: 100,
-          display: 'flex',
-          gap: '8px',
-          backgroundColor: '#1E293B',
-          padding: '10px',
-          borderRadius: '10px',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-          border: '1px solid #334155'
-        }}>
+        <div
+          style={{
+            position: "absolute",
+            top: 16,
+            right: 16,
+            zIndex: 100,
+            display: "flex",
+            gap: "8px",
+            backgroundColor: "#1E293B",
+            padding: "10px",
+            borderRadius: "10px",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+            border: "1px solid #334155",
+          }}
+        >
           <button
             onClick={() => setDragMode(!dragMode)}
             style={{
-              padding: '8px 12px',
-              backgroundColor: dragMode ? '#3B82F6' : '#334155',
-              border: 'none',
-              borderRadius: '6px',
-              color: '#F1F5F9',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontSize: '12px', 
+              padding: "8px 12px",
+              backgroundColor: dragMode ? "#3B82F6" : "#334155",
+              border: "none",
+              borderRadius: "6px",
+              color: "#F1F5F9",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              fontSize: "12px",
               fontWeight: 600,
-              transition: 'all 0.2s'
+              transition: "all 0.2s",
             }}
             title="Pan Mode (Space)"
           >
             {dragMode ? <Hand size={16} /> : <Move size={16} />}
-            {dragMode ? 'Pan' : 'Select'}
+            {dragMode ? "Pan" : "Select"}
           </button>
 
-          <button onClick={handleZoomIn} title="Zoom In (+)" style={{
-            padding: '8px',
-            backgroundColor: '#334155',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center'
-          }}>
+          <button
+            onClick={handleZoomIn}
+            title="Zoom In (+)"
+            style={{
+              padding: "8px",
+              backgroundColor: "#334155",
+              border: "none",
+              borderRadius: "6px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
             <ZoomIn size={20} color="#F1F5F9" />
           </button>
-          <button onClick={handleZoomOut} title="Zoom Out (-)" style={{
-            padding: '8px',
-            backgroundColor: '#334155',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center'
-          }}>
+          <button
+            onClick={handleZoomOut}
+            title="Zoom Out (-)"
+            style={{
+              padding: "8px",
+              backgroundColor: "#334155",
+              border: "none",
+              borderRadius: "6px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
             <ZoomOut size={20} color="#F1F5F9" />
           </button>
-          <button onClick={handleFitToScreen} title="Fit to Screen (0)" style={{
-            padding: '8px',
-            backgroundColor: '#334155',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center'
-          }}>
+          <button
+            onClick={handleFitToScreen}
+            title="Fit to Screen (0)"
+            style={{
+              padding: "8px",
+              backgroundColor: "#334155",
+              border: "none",
+              borderRadius: "6px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
             <Maximize2 size={20} color="#F1F5F9" />
           </button>
         </div>
 
         {/* Step Info */}
-        <div style={{
-          position: 'absolute',
-          top: 16,
-          left: 16,
-          zIndex: 100,
-          backgroundColor: '#1E293B',
-          padding: '10px 16px',
-          borderRadius: '10px',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-          border: '1px solid #334155',
-          color: '#F1F5F9',
-          fontSize: '14px',
-          fontWeight: 600
-        }}>
+        <div
+          style={{
+            position: "absolute",
+            top: 16,
+            left: 16,
+            zIndex: 100,
+            backgroundColor: "#1E293B",
+            padding: "10px 16px",
+            borderRadius: "10px",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+            border: "1px solid #334155",
+            color: "#F1F5F9",
+            fontSize: "14px",
+            fontWeight: 600,
+          }}
+        >
           Step {currentStep + 1} / {executionTrace.totalSteps}
         </div>
 
@@ -912,22 +1015,26 @@ export default function VisualizationCanvas() {
             <Layer>
               {/* Grid */}
               <Group>
-                {Array.from({ length: Math.floor(dimensions.width / 20) }).map((_, i) => (
-                  <Line
-                    key={`v-grid-${i}`}
-                    points={[i * 20, 0, i * 20, dimensions.height]}
-                    stroke={COLORS.grid}
-                    strokeWidth={0.5}
-                  />
-                ))}
-                {Array.from({ length: Math.floor(dimensions.height / 20) }).map((_, i) => (
-                  <Line
-                    key={`h-grid-${i}`}
-                    points={[0, i * 20, dimensions.width, i * 20]}
-                    stroke={COLORS.grid}
-                    strokeWidth={0.5}
-                  />
-                ))}
+                {Array.from({ length: Math.floor(dimensions.width / 20) }).map(
+                  (_, i) => (
+                    <Line
+                      key={`v-grid-${i}`}
+                      points={[i * 20, 0, i * 20, dimensions.height]}
+                      stroke={COLORS.grid}
+                      strokeWidth={0.5}
+                    />
+                  ),
+                )}
+                {Array.from({ length: Math.floor(dimensions.height / 20) }).map(
+                  (_, i) => (
+                    <Line
+                      key={`h-grid-${i}`}
+                      points={[0, i * 20, dimensions.width, i * 20]}
+                      stroke={COLORS.grid}
+                      strokeWidth={0.5}
+                    />
+                  ),
+                )}
               </Group>
 
               {/* Main Function Container */}
@@ -938,127 +1045,142 @@ export default function VisualizationCanvas() {
               )}
 
               {/* Array Panel */}
-              {visibleLayout.arrayPanel && visibleLayout.arrayPanel.data?.arrays && visibleLayout.arrayPanel.data.arrays.length > 0 && (
-                <Group x={0} y={0}>
-                  <ArrayPanel
-                    id={visibleLayout.arrayPanel.id}
-                    x={visibleLayout.arrayPanel.x}
-                    y={visibleLayout.arrayPanel.y}
-                    arrays={visibleLayout.arrayPanel.data.arrays}
-                    currentStep={currentStep}
-                    isNew={false}
-                  />
-                </Group>
-              )}
+              {visibleLayout.arrayPanel &&
+                visibleLayout.arrayPanel.data?.arrays &&
+                visibleLayout.arrayPanel.data.arrays.length > 0 && (
+                  <Group x={0} y={0}>
+                    <ArrayPanel
+                      id={visibleLayout.arrayPanel.id}
+                      x={visibleLayout.arrayPanel.x}
+                      y={visibleLayout.arrayPanel.y}
+                      arrays={visibleLayout.arrayPanel.data.arrays}
+                      currentStep={currentStep}
+                      isNew={false}
+                    />
+                  </Group>
+                )}
 
               {/* Global Panel with Arrow */}
-              {visibleLayout.globalPanel && visibleLayout.globalPanel.children && visibleLayout.globalPanel.children.length > 0 && (
-                <Group x={0} y={0}>
-                  {/* Arrow from main to globals */}
-                  <Arrow
-                    points={[
-                      visibleLayout.mainFunction.x + visibleLayout.mainFunction.width,
-                      visibleLayout.mainFunction.y + visibleLayout.mainFunction.height / 2,
-                      visibleLayout.globalPanel.x - 20,
-                      visibleLayout.globalPanel.y + 60
-                    ]}
-                    stroke={COLORS.globalBorder}
-                    strokeWidth={2}
-                    fill={COLORS.globalBorder}
-                    pointerLength={10}
-                    pointerWidth={10}
-                    dash={[10, 5]}
-                    opacity={0.6}
-                  />
-                  
-                  <Rect
-                    x={visibleLayout.globalPanel.x}
-                    y={visibleLayout.globalPanel.y}
-                    width={visibleLayout.globalPanel.width}
-                    height={SPACING.HEADER_HEIGHT}
-                    fill={COLORS.globalBorder}
-                    fillOpacity={0.2}
-                    stroke={COLORS.globalBorder}
-                    strokeWidth={2}
-                    cornerRadius={[8, 8, 0, 0]}
-                  />
-                  <Text
-                    text="Globals"
-                    x={visibleLayout.globalPanel.x + 12}
-                    y={visibleLayout.globalPanel.y + 12}
-                    fontSize={16}
-                    fontStyle="bold"
-                    fill="#F1F5F9"
-                    fontFamily="monospace"
-                  />
-                  {filterChildren(visibleLayout.globalPanel.children).map((child) => {
-                    return (
-                      <Group key={child.id} x={child.x} y={child.y}>
-                        {renderElement(child)}
-                      </Group>
-                    );
-                  })}
-                </Group>
-              )}
+              {visibleLayout.globalPanel &&
+                visibleLayout.globalPanel.children &&
+                visibleLayout.globalPanel.children.length > 0 && (
+                  <Group x={0} y={0}>
+                    {/* Arrow from main to globals */}
+                    <Arrow
+                      points={[
+                        visibleLayout.mainFunction.x +
+                          visibleLayout.mainFunction.width,
+                        visibleLayout.mainFunction.y +
+                          visibleLayout.mainFunction.height / 2,
+                        visibleLayout.globalPanel.x - 20,
+                        visibleLayout.globalPanel.y + 60,
+                      ]}
+                      stroke={COLORS.globalBorder}
+                      strokeWidth={2}
+                      fill={COLORS.globalBorder}
+                      pointerLength={10}
+                      pointerWidth={10}
+                      dash={[10, 5]}
+                      opacity={0.6}
+                    />
+
+                    <Rect
+                      x={visibleLayout.globalPanel.x}
+                      y={visibleLayout.globalPanel.y}
+                      width={visibleLayout.globalPanel.width}
+                      height={SPACING.HEADER_HEIGHT}
+                      fill={COLORS.globalBorder}
+                      fillOpacity={0.2}
+                      stroke={COLORS.globalBorder}
+                      strokeWidth={2}
+                      cornerRadius={[8, 8, 0, 0]}
+                    />
+                    <Text
+                      text="Globals"
+                      x={visibleLayout.globalPanel.x + 12}
+                      y={visibleLayout.globalPanel.y + 12}
+                      fontSize={16}
+                      fontStyle="bold"
+                      fill="#F1F5F9"
+                      fontFamily="monospace"
+                    />
+                    {filterChildren(visibleLayout.globalPanel.children).map(
+                      (child) => {
+                        return (
+                          <Group key={child.id} x={child.x} y={child.y}>
+                            {renderElement(child)}
+                          </Group>
+                        );
+                      },
+                    )}
+                  </Group>
+                )}
 
               {/* Update Arrows */}
               {activeArrows.size > 0 && (
                 <Group>
-                  {Array.from(activeArrows.entries()).map(([arrowId, arrowData]) => (
-                    <SmoothUpdateArrow
-                      key={arrowId}
-                      id={arrowId}
-                      fromX={arrowData.fromX}
-                      fromY={arrowData.fromY}
-                      toX={arrowData.toX}
-                      toY={arrowData.toY}
-                      color="#F59E0B"
-                      label={`${arrowData.arrayName}[${arrowData.indices?.join(',')}]`}
-                      duration={0.6}
-                      onComplete={() => {
-                        setActiveArrows(prev => {
-                          const next = new Map(prev);
-                          next.delete(arrowId);
-                          return next;
-                        });
-                      }}
-                    />
-                  ))}
+                  {Array.from(activeArrows.entries()).map(
+                    ([arrowId, arrowData]) => (
+                      <SmoothUpdateArrow
+                        key={arrowId}
+                        id={arrowId}
+                        fromX={arrowData.fromX}
+                        fromY={arrowData.fromY}
+                        toX={arrowData.toX}
+                        toY={arrowData.toY}
+                        color="#F59E0B"
+                        label={`${arrowData.arrayName}[${arrowData.indices?.join(",")}]`}
+                        duration={0.6}
+                        onComplete={() => {
+                          setActiveArrows((prev) => {
+                            const next = new Map(prev);
+                            next.delete(arrowId);
+                            return next;
+                          });
+                        }}
+                      />
+                    ),
+                  )}
                 </Group>
               )}
 
               {/* Array References (Arrows from stack to array panel) */}
-              {visibleLayout.arrayReferences && visibleLayout.arrayReferences.length > 0 && (
-                <Group>
-                  {visibleLayout.arrayReferences.map(ref => {
-                    const fromElement = visibleLayout.elements.find(el => el.id === ref.data.fromElement);
-                    const toArray = visibleLayout.arrayPanel?.data?.arrays?.find(
-                      (arr: any) => arr.name === ref.data.arrayName
-                    );
-                    
-                    if (!fromElement || !toArray || !visibleLayout.arrayPanel) return null;
-                    
-                    const fromX = fromElement.x + fromElement.width;
-                    const fromY = fromElement.y + fromElement.height / 2;
-                    const toX = visibleLayout.arrayPanel.x;
-                    const toY = visibleLayout.arrayPanel.y + 100;
-                    
-                    return (
-                      <ArrayReference
-                        key={ref.id}
-                        id={ref.id}
-                        fromX={fromX}
-                        fromY={fromY}
-                        toX={toX}
-                        toY={toY}
-                        variableName={ref.data.variableName}
-                        arrayName={ref.data.arrayName}
-                        isNew={ref.stepId === currentStep}
-                      />
-                    );
-                  })}
-                </Group>
-              )}
+              {visibleLayout.arrayReferences &&
+                visibleLayout.arrayReferences.length > 0 && (
+                  <Group>
+                    {visibleLayout.arrayReferences.map((ref) => {
+                      const fromElement = visibleLayout.elements.find(
+                        (el) => el.id === ref.data.fromElement,
+                      );
+                      const toArray =
+                        visibleLayout.arrayPanel?.data?.arrays?.find(
+                          (arr: any) => arr.name === ref.data.arrayName,
+                        );
+
+                      if (!fromElement || !toArray || !visibleLayout.arrayPanel)
+                        return null;
+
+                      const fromX = fromElement.x + fromElement.width;
+                      const fromY = fromElement.y + fromElement.height / 2;
+                      const toX = visibleLayout.arrayPanel.x;
+                      const toY = visibleLayout.arrayPanel.y + 100;
+
+                      return (
+                        <ArrayReference
+                          key={ref.id}
+                          id={ref.id}
+                          fromX={fromX}
+                          fromY={fromY}
+                          toX={toX}
+                          toY={toY}
+                          variableName={ref.data.variableName}
+                          arrayName={ref.data.arrayName}
+                          isNew={ref.stepId === currentStep}
+                        />
+                      );
+                    })}
+                  </Group>
+                )}
             </Layer>
           </Stage>
         )}

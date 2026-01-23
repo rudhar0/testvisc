@@ -178,10 +178,10 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   const isInitialMount = useRef(true);
 
   // LARGER DIMENSIONS FOR MORE CONTENT
-  const BOX_WIDTH = 180;
+  const BOX_WIDTH = 360;
   const BOX_HEIGHT = 140;
-  const CORNER_RADIUS = 18;
-  const PADDING = 14;
+  const CORNER_RADIUS = 19;
+  const PADDING = 24;
 
   // Determine state
   const varState: VariableState = state || 
