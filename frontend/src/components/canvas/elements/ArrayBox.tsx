@@ -13,14 +13,14 @@ export interface ArrayBoxProps {
   name: string;
   baseType: string;
   dimensions: number[];
-  values: any[];              // Progressive values - only filled indices
+  values: any[];
   address: string;
   x: number;
   y: number;
   isNew?: boolean;
-  updatedIndices?: number[][]; // Which cells were updated this step
+  updatedIndices?: number[][];
   owner?: string;
-  currentStep?: number;        // Current execution step
+  currentStep?: number;
 }
 
 // ============================================
@@ -35,7 +35,7 @@ const PADDING = 12;
 const TAB_HEIGHT = 30;
 
 // ============================================
-// OPTIMIZED ARRAY BOX COMPONENT
+// OPTIMIZED ARRAY BOX - MULTI-DIMENSIONAL
 // ============================================
 
 export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
@@ -60,7 +60,7 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
   const is3D = dimensions.length === 3;
 
   // ============================================
-  // MEMOIZED CALCULATIONS
+  // MEMOIZED BOX DIMENSIONS
   // ============================================
   const { width: boxWidth, height: boxHeight } = useMemo(() => {
     if (is1D) {
@@ -90,7 +90,7 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
   }, [dimensions, is1D, is2D, is3D]);
 
   // ============================================
-  // PROGRESSIVE VALUE TRACKING
+  // VALUE ACCESSOR - PROGRESSIVE
   // ============================================
   const getValueAt = useMemo(() => {
     return (indices: number[]): any => {
@@ -133,23 +133,21 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
       const cellY = HEADER_HEIGHT + PADDING;
       const value = getValueAt([i]);
       
-      // Only render if value exists or is being updated
-      if (value !== null || isCellUpdated([i])) {
-        cells.push(
-          <ArrayCell
-            key={`${id}-cell-${i}`}
-            id={`${id}-cell-${i}`}
-            index={[i]}
-            value={value}
-            baseType={baseType}
-            x={cellX}
-            y={cellY}
-            width={CELL_WIDTH}
-            height={CELL_HEIGHT}
-            isUpdated={isCellUpdated([i])}
-          />
-        );
-      }
+      // Render all cells (empty or filled)
+      cells.push(
+        <ArrayCell
+          key={`${id}-cell-${i}`}
+          id={`${id}-cell-${i}`}
+          index={[i]}
+          value={value}
+          baseType={baseType}
+          x={cellX}
+          y={cellY}
+          width={CELL_WIDTH}
+          height={CELL_HEIGHT}
+          isUpdated={isCellUpdated([i])}
+        />
+      );
     }
     
     return cells;
@@ -168,23 +166,21 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
         const cellY = HEADER_HEIGHT + PADDING + i * (CELL_HEIGHT + CELL_SPACING);
         const value = getValueAt([i, j]);
         
-        // Only render if value exists or is being updated
-        if (value !== null || isCellUpdated([i, j])) {
-          cells.push(
-            <ArrayCell
-              key={`${id}-cell-${i}-${j}`}
-              id={`${id}-cell-${i}-${j}`}
-              index={[i, j]}
-              value={value}
-              baseType={baseType}
-              x={cellX}
-              y={cellY}
-              width={CELL_WIDTH}
-              height={CELL_HEIGHT}
-              isUpdated={isCellUpdated([i, j])}
-            />
-          );
-        }
+        // Render all cells
+        cells.push(
+          <ArrayCell
+            key={`${id}-cell-${i}-${j}`}
+            id={`${id}-cell-${i}-${j}`}
+            index={[i, j]}
+            value={value}
+            baseType={baseType}
+            x={cellX}
+            y={cellY}
+            width={CELL_WIDTH}
+            height={CELL_HEIGHT}
+            isUpdated={isCellUpdated([i, j])}
+          />
+        );
       }
     }
     
@@ -240,23 +236,20 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
         const cellY = HEADER_HEIGHT + TAB_HEIGHT + PADDING + i * (CELL_HEIGHT + CELL_SPACING);
         const value = getValueAt([activeTab, i, j]);
         
-        // Only render if value exists or is being updated
-        if (value !== null || isCellUpdated([activeTab, i, j])) {
-          elements.push(
-            <ArrayCell
-              key={`${id}-cell-${activeTab}-${i}-${j}`}
-              id={`${id}-cell-${activeTab}-${i}-${j}`}
-              index={[activeTab, i, j]}
-              value={value}
-              baseType={baseType}
-              x={cellX}
-              y={cellY}
-              width={CELL_WIDTH}
-              height={CELL_HEIGHT}
-              isUpdated={isCellUpdated([activeTab, i, j])}
-            />
-          );
-        }
+        elements.push(
+          <ArrayCell
+            key={`${id}-cell-${activeTab}-${i}-${j}`}
+            id={`${id}-cell-${activeTab}-${i}-${j}`}
+            index={[activeTab, i, j]}
+            value={value}
+            baseType={baseType}
+            x={cellX}
+            y={cellY}
+            width={CELL_WIDTH}
+            height={CELL_HEIGHT}
+            isUpdated={isCellUpdated([activeTab, i, j])}
+          />
+        );
       }
     }
     
@@ -264,7 +257,7 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
   }, [dimensions, activeTab, baseType, id, getValueAt, updatedIndices]);
 
   // ============================================
-  // ENTRANCE ANIMATION (REMOVED - PERFORMANCE)
+  // NO ENTRANCE ANIMATION - PERFORMANCE
   // ============================================
 
   // ============================================
@@ -333,13 +326,11 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
     </Group>
   );
 }, (prevProps, nextProps) => {
-  // Custom comparison for memo - re-render when any visual‑relevant prop changes.
-  // Added dimensions check to support 2D/3D arrays which depend on the shape.
+  // Only re-render if values or updatedIndices changed
   return (
     prevProps.values === nextProps.values &&
     JSON.stringify(prevProps.updatedIndices) === JSON.stringify(nextProps.updatedIndices) &&
     prevProps.currentStep === nextProps.currentStep &&
-    prevProps.isNew === nextProps.isNew &&
     JSON.stringify(prevProps.dimensions) === JSON.stringify(nextProps.dimensions)
   );
 });

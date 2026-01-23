@@ -1,4 +1,4 @@
-
+// frontend/src/components/canvas/VisualizationCanvas.tsx
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { Stage, Layer, Group, Rect, Line, Text, Arrow } from 'react-konva';
 import Konva from 'konva';
@@ -8,10 +8,8 @@ import { useCanvasStore } from '@store/slices/canvasSlice';
 
 // Import element components
 import { VariableBox } from './elements/VariableBox';
-
 import { ArrayPanel } from './elements/ArrayPanel';
 import { ArrayReference } from './elements/ArrayReference';
-import arrayUtils from '../../utils/arrayUtils';
 import { StackFrame } from './elements/StackFrame';
 import { StructView } from './elements/StructView';
 import { ClassView } from './elements/ClassView';
@@ -20,9 +18,7 @@ import { InputElement } from './elements/InputElement';
 import { LayoutEngine, LayoutElement } from './layout/LayoutEngine';
 import { InputDialog } from './InputDialog';
 import { socketService } from '../../api/socket.service';
-
 import { getFocusPosition } from '../../utils/camera';
-// Import optimized components
 import { SmoothUpdateArrow } from './elements/SmoothUpdateArrow';
 
 const COLORS = {
@@ -41,21 +37,21 @@ const SPACING = {
 };
 
 const VAR_COLORS: Record<string, string> = {
-  int: '#3B82F6', // Blue
-  float: '#14B8A6', // Teal
-  double: '#0891B2', // Cyan
-  string: '#8B5CF6', // Purple
-  char: '#D946EF', // Magenta
-  boolean: '#F59E0B', // Amber
-  long: '#6366F1', // Indigo
-  short: '#0EA5E9', // Sky
-  byte: '#0284C7', // Light Blue
-  default: '#64748B', // Slate
+  int: '#3B82F6',
+  float: '#14B8A6',
+  double: '#0891B2',
+  string: '#8B5CF6',
+  char: '#D946EF',
+  boolean: '#F59E0B',
+  long: '#6366F1',
+  short: '#0EA5E9',
+  byte: '#0284C7',
+  default: '#64748B',
 };
 
 const getVarColor = (type: string) => {
   const normalized = type?.toLowerCase() || 'default';
-  if (normalized.includes('[]') || normalized.includes('array')) return '#10B981'; // Emerald
+  if (normalized.includes('[]') || normalized.includes('array')) return '#10B981';
   return VAR_COLORS[normalized] || VAR_COLORS.default;
 };
 
@@ -76,7 +72,6 @@ export default function VisualizationCanvas() {
   const [dragMode, setDragMode] = useState(false);
   const [inputDialogOpen, setInputDialogOpen] = useState(false);
   const [inputDialogProps, setInputDialogProps] = useState<any>(null);
-  // Track active update arrows for the current step
   const [activeArrows, setActiveArrows] = useState<Map<string, any>>(new Map());
   const prevStepRef = useRef<number>(-1);
   const prevElementsRef = useRef<Map<string, any>>(new Map());
@@ -98,13 +93,10 @@ export default function VisualizationCanvas() {
     return layout;
   }, [state, currentStep, executionTrace, dimensions.width, dimensions.height]);
 
-  // ...existing code...
-
   // Filter elements to only show those that should be visible at current step
   const visibleLayout = useMemo(() => {
     if (!fullLayout) return null;
 
-    // Helper to filter children recursively
     const filterChildren = (children: LayoutElement[] | undefined): LayoutElement[] => {
       if (!children) return [];
       return children
@@ -118,15 +110,11 @@ export default function VisualizationCanvas() {
         }));
     };
 
-    // Filter main function children
     const filteredMainChildren = filterChildren(fullLayout.mainFunction.children);
-    // Filter global panel children
     const filteredGlobalChildren = filterChildren(fullLayout.globalPanel.children);
-    // Filter all elements (exclude array entries — arrays are rendered via arrayPanel)
     const filteredElements = fullLayout.elements.filter(el => {
       const stepId = el.data?.birthStep ?? el.stepId;
       if (stepId === undefined || stepId > currentStep) return false;
-      // Exclude only the array panel element; keep array variable entries so they can be rendered as lightweight reference boxes
       if (el.type === 'array_panel') return false;
       return true;
     });
@@ -144,15 +132,10 @@ export default function VisualizationCanvas() {
       elements: filteredElements
     };
 
-    // ...existing code...
-
     return filtered;
   }, [fullLayout, currentStep]);
 
-  // Debug: log visible layout when it changes
-  // ...existing code...
-
-  // Track which elements are NEW in the current step (just appeared)
+  // Track which elements are NEW in the current step
   const elementAnimationStates = useMemo(() => {
     if (!visibleLayout) return new Map();
 
@@ -161,37 +144,24 @@ export default function VisualizationCanvas() {
     const prevElements = prevElementsRef.current;
 
     visibleLayout.elements.forEach(element => {
-      // Element is NEW if it's created in this step and we moved forward
       const didExistBefore = prevElements.has(element.id);
       const isNew = element.stepId === currentStep && prevStep < currentStep && !didExistBefore;
 
-      // Element is UPDATED if it existed before and its data changed
       const prev = prevElements.get(element.id);
       const dataChanged = prev ? JSON.stringify(prev.data) !== JSON.stringify(element.data) : false;
       const isUpdated = !isNew && !!prev && dataChanged;
 
       states.set(element.id, { isNew, isUpdated });
-
-      // Debug logging for each element's animation state
-      console.log('[VisualizationCanvas] Element animation state', {
-        id: element.id,
-        stepId: element.stepId,
-        isNew,
-        isUpdated,
-        type: element.type,
-        name: element.data?.name,
-      });
     });
 
     return states;
   }, [visibleLayout, currentStep]);
 
-  // Compute staggered enter delays for new elements in the current step
+  // Compute staggered enter delays for new elements
   const enterDelayMap = useMemo(() => {
     const map = new Map<string, number>();
     if (!visibleLayout) return map;
 
-    // Collect all visible elements including children to ensure we catch variables inside stack frames
     const visitedIds = new Set<string>();
     const allVisibleElements: LayoutElement[] = [];
     const traverse = (el: LayoutElement) => {
@@ -205,19 +175,17 @@ export default function VisualizationCanvas() {
     if (visibleLayout.globalPanel) traverse(visibleLayout.globalPanel);
     visibleLayout.elements.forEach(traverse);
 
-    // Filter for new ones
     const newElements = allVisibleElements.filter(el => elementAnimationStates.get(el.id)?.isNew);
     newElements.sort((a, b) => (a.y || 0) - (b.y || 0));
 
     newElements.forEach((el, idx) => {
-      // 300ms stagger per element for clearer step-by-step
       map.set(el.id, idx * 300);
     });
 
     return map;
   }, [visibleLayout, elementAnimationStates]);
 
-  // Keep a snapshot of visible elements for change detection on next step
+  // Keep snapshot of visible elements for change detection
   useEffect(() => {
     if (!visibleLayout) return;
     const map = new Map<string, any>();
@@ -255,20 +223,18 @@ export default function VisualizationCanvas() {
     };
   }, [setCanvasSize]);
 
-  // Smoothly auto‑focus the camera on the most recent element (new **or** updated)
+  // Auto-focus camera on most recent element
   useEffect(() => {
     if (!visibleLayout || !stageRef.current) return;
 
-    // Determine whether we are moving forward in the trace; if we are stepping backward we keep the current view.
     const movingForward = prevStepRef.current < currentStep;
 
-    // Gather elements that are either newly created this step or have been updated.
     const focusCandidates = visibleLayout.elements.filter(el => {
       const animState = elementAnimationStates.get(el.id);
       return (animState?.isNew && movingForward) || animState?.isUpdated;
     });
 
-    // ALSO check if array panel is new (focus it when it first appears)
+    // Check if array panel is new
     if (visibleLayout.arrayPanel && movingForward) {
       const arrayPanelStepId = visibleLayout.arrayPanel.stepId || visibleLayout.arrayPanel.data?.stepId || 0;
       if (arrayPanelStepId === currentStep) {
@@ -291,7 +257,6 @@ export default function VisualizationCanvas() {
 
     if (focusCandidates.length === 0) return;
 
-    // Choose the element that appears lowest on the canvas (largest y) – this mimics the natural flow.
     const focusTarget = focusCandidates.reduce((prev, curr) => {
       if (!prev) return curr;
       return (prev.y ?? 0) > (curr.y ?? 0) ? prev : curr;
@@ -302,7 +267,6 @@ export default function VisualizationCanvas() {
     const targetPos = getFocusPosition(focusTarget, dimensions, zoom);
     const stage = stageRef.current;
 
-    // Animate the stage to the new position.
     new Konva.Tween({
       node: stage,
       x: targetPos.x,
@@ -315,9 +279,7 @@ export default function VisualizationCanvas() {
     }).play();
   }, [currentStep, elementAnimationStates, dimensions, zoom, setPosition, visibleLayout]);
 
-  // ============================================
-  // TRACK UPDATE ARROWS
-  // ============================================
+  // Track update arrows
   useEffect(() => {
     if (!visibleLayout || !visibleLayout.updateArrows) return;
 
@@ -330,7 +292,6 @@ export default function VisualizationCanvas() {
 
     setActiveArrows(newArrows);
 
-    // Auto‑remove arrows after animation completes (duration + fade out)
     const timeout = setTimeout(() => {
       setActiveArrows(new Map());
     }, 1800);
@@ -467,15 +428,12 @@ export default function VisualizationCanvas() {
     
     varGroups.forEach((vars) => {
       if (vars.length > 1) {
-        // Sort by stepId to handle sequence
         vars.sort((a, b) => (a.stepId || 0) - (b.stepId || 0));
         
-        // Check for declaration + initialization in the SAME step
         for (let i = 0; i < vars.length; i++) {
           const current = vars[i];
           const next = vars[i+1];
           
-          // If current has no value and next has value AND they are in the same step, hide current (merge)
           if (next && current.stepId === next.stepId && current.data?.value === undefined && next.data?.value !== undefined) {
              idsToExclude.add(current.id);
           }
@@ -486,12 +444,14 @@ export default function VisualizationCanvas() {
     return children.filter(c => !idsToExclude.has(c.id));
   };
 
-  // Render element based on type with proper positioning
+  // ============================================
+  // RENDER ELEMENT - FIXED WITH ARRAY SUPPORT
+  // ============================================
   const renderElement = (element: LayoutElement, parentX: number = 0, parentY: number = 0) => {
     const { type, data, id, x, y, width, height, children, stepId } = element;
     const animState = elementAnimationStates.get(id) || { isNew: false, isUpdated: false };
     const { isNew, isUpdated } = animState;
-    // ...existing code...
+
     switch (type) {
       case 'main':
         return (
@@ -503,7 +463,7 @@ export default function VisualizationCanvas() {
             y={y}
             width={width}
             height={height}
-            isNew={false} // Main is always there
+            isNew={false}
           >
             {filterChildren(children).map((child, idx) => {
               const relativeX = child.x - x;
@@ -519,7 +479,6 @@ export default function VisualizationCanvas() {
         );
 
       case 'variable': {
-        // Determine variable state: prefer explicit data.state, fall back to subtype/isUpdated
         let varState: 'declared' | 'initialized' | 'multiple-init' | 'updated' = 'initialized';
         if (data?.state === 'declared') {
           varState = 'declared';
@@ -535,21 +494,20 @@ export default function VisualizationCanvas() {
           varState = 'updated';
         }
 
-        // For flow view: treat updates as "new" to trigger appearance animation
         const effectiveIsNew = isNew || isUpdated;
 
-        // If this variable represents an array, render a lightweight reference instead of skipping.
+        // ✅ ARRAY REFERENCE DETECTION
         const normalizedType = (data?.type || data?.primitive || '').toString().toLowerCase();
-        if (normalizedType.includes('[]') || normalizedType.includes('array')) {
-          // Show a simple reference box indicating an array is present.
+        const isArrayRef = data?.isArrayReference || normalizedType.includes('[]') || normalizedType.includes('array');
+        
+        if (isArrayRef) {
           return (
             <VariableBox
               key={`${id}-${stepId}`}
               id={id}
               name={data?.name || ''}
-              type={data?.type || data?.primitive || 'int'}
-              // Display a hint that this is an array with its length if known.
-              value={`→ array${data?.dimensions?.length ? ` (${data?.dimensions?.join('×')})` : ''}`}
+              type={data?.type || data?.primitive || 'int[]'}
+              value={data?.value || `→ array`}
               address={data?.address || ''}
               x={x}
               y={y}
@@ -561,15 +519,14 @@ export default function VisualizationCanvas() {
               state="initialized"
               stepNumber={stepId}
               enterDelay={enterDelayMap.get(id) || 0}
-              // Use a distinct color for array references to differentiate from scalars.
-              color="#60A5FA"
+              color="#10B981"
             />
           );
         }
 
         return (
           <VariableBox
-            key={`${id}-${stepId}`} // Force new box on update/step change
+            key={`${id}-${stepId}`}
             id={id}
             name={data?.name || ''}
             type={data?.type || data?.primitive || 'int'}
@@ -590,10 +547,8 @@ export default function VisualizationCanvas() {
         );
       }
 
-      case 'array_panel': {
-        // Array panel is rendered separately in the Layer, not via renderElement
+      case 'array_panel':
         return null;
-      }
 
       case 'output':
         return (
@@ -629,7 +584,6 @@ export default function VisualizationCanvas() {
         );
 
       case 'global':
-        // Prefer explicit data.state for globals as well
         let globalState: 'declared' | 'initialized' | 'multiple-init' | 'updated' = 'initialized';
         if (data?.state === 'declared') globalState = 'declared';
         else if (data?.state === 'updated') globalState = 'updated';
@@ -798,6 +752,9 @@ export default function VisualizationCanvas() {
     }
   };
 
+  // ============================================
+  // MAIN RENDER
+  // ============================================
   if (!state || !visibleLayout) {
     return (
       <div
@@ -814,7 +771,7 @@ export default function VisualizationCanvas() {
         }}
       >
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '64px', marginBottom: '20px', opacity: 0.5 }}>ðŸŽ¨</div>
+          <div style={{ fontSize: '64px', marginBottom: '20px', opacity: 0.5 }}>🎨</div>
           <div style={{ fontSize: '20px', fontWeight: 600, marginBottom: '12px', color: '#F1F5F9' }}>
             Responsive Canvas Ready
           </div>
@@ -1044,7 +1001,7 @@ export default function VisualizationCanvas() {
                 </Group>
               )}
 
-              {/* Update Arrows - NEW */}
+              {/* Update Arrows */}
               {activeArrows.size > 0 && (
                 <Group>
                   {Array.from(activeArrows.entries()).map(([arrowId, arrowData]) => (
@@ -1070,13 +1027,13 @@ export default function VisualizationCanvas() {
                 </Group>
               )}
 
-              {/* Array References (Arrows) - NEW */}
+              {/* Array References (Arrows from stack to array panel) */}
               {visibleLayout.arrayReferences && visibleLayout.arrayReferences.length > 0 && (
                 <Group>
                   {visibleLayout.arrayReferences.map(ref => {
                     const fromElement = visibleLayout.elements.find(el => el.id === ref.data.fromElement);
                     const toArray = visibleLayout.arrayPanel?.data?.arrays?.find(
-                      (arr: any) => arr.id === ref.data.toArray
+                      (arr: any) => arr.name === ref.data.arrayName
                     );
                     
                     if (!fromElement || !toArray || !visibleLayout.arrayPanel) return null;
