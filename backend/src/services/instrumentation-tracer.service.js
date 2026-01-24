@@ -1,5 +1,6 @@
-// src/services/instrumentation-tracer.service.js
-// Complete implementation with strict one-line-one-step rule
+// ============================================================================
+// FILE 1: backend/src/services/instrumentation-tracer.service.js
+// ============================================================================
 import { spawn } from 'child_process';
 import { writeFile, readFile, unlink, mkdir, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -19,6 +20,8 @@ class InstrumentationTracer {
         this.ensureTempDir();
         
         this.arrayRegistry = new Map();
+        this.functionRegistry = new Map();
+        this.callStack = [];
     }
 
     async ensureTempDir() {
@@ -29,17 +32,9 @@ class InstrumentationTracer {
 
     async getLineInfo(executable, address) {
         return new Promise((resolve) => {
-            const proc = spawn('addr2line', [
-                '-e', executable,
-                '-f',
-                '-C',
-                '-i',
-                address
-            ]);
-
+            const proc = spawn('addr2line', ['-e', executable, '-f', '-C', '-i', address]);
             let output = '';
             proc.stdout.on('data', d => output += d.toString());
-
             proc.on('close', () => {
                 const lines = output.trim().split('\n');
                 if (lines.length >= 2) {
@@ -64,50 +59,28 @@ class InstrumentationTracer {
     shouldFilterEvent(info, event, userSourceFile) {
         const { file, function: fn, line } = info;
         
-        if (!file || line === 0 || file === 'unknown' || file === '??') {
-            return true;
-        }
+        if (!file || line === 0 || file === 'unknown' || file === '??') return true;
         
         if (process.platform !== 'win32') {
-            if (file.startsWith('/usr/') || 
-                file.startsWith('/lib/') ||
-                file.includes('include/c++/') ||
-                file.includes('include/bits/')) {
-                return true;
-            }
+            if (file.startsWith('/usr/') || file.startsWith('/lib/') ||
+                file.includes('include/c++/') || file.includes('include/bits/')) return true;
         } else {
-            if (file.includes('mingw') || 
-                file.includes('include\\c++') ||
-                file.includes('lib\\gcc')) {
-                return true;
-            }
+            if (file.includes('mingw') || file.includes('include\\c++') ||
+                file.includes('lib\\gcc')) return true;
         }
         
         const userBasename = path.basename(userSourceFile);
         const eventBasename = path.basename(file);
-        if (eventBasename === userBasename) {
-            return false;
-        }
+        if (eventBasename === userBasename) return false;
         
-        if (file.includes('stl_') || 
-            file.includes('bits/') ||
-            file.includes('iostream') ||
-            file.includes('ostream') ||
-            file.includes('streambuf')) {
-            return true;
-        }
+        if (file.includes('stl_') || file.includes('bits/') ||
+            file.includes('iostream') || file.includes('ostream') ||
+            file.includes('streambuf')) return true;
         
-        const internalPrefixes = [
-            '__', '_IO_', '_M_', 'std::__', 
-            'std::basic_', 'std::char_traits',
-            '__gnu_cxx::', '__cxxabi'
-        ];
+        const internalPrefixes = ['__', '_IO_', '_M_', 'std::__', 
+            'std::basic_', 'std::char_traits', '__gnu_cxx::', '__cxxabi'];
         
-        if (internalPrefixes.some(prefix => fn.startsWith(prefix))) {
-            return true;
-        }
-        
-        return false;
+        return internalPrefixes.some(prefix => fn.startsWith(prefix));
     }
 
     parseEscapeSequences(text) {
@@ -128,14 +101,11 @@ class InstrumentationTracer {
                 rendered = rendered.replace(new RegExp(seq.replace(/\\/g, '\\\\'), 'g'), info.rendered);
             }
         }
-
         return { rendered, escapes };
     }
 
     createOutputSteps(stdout, baseStepIndex) {
-        if (!stdout || stdout.trim().length === 0) {
-            return [];
-        }
+        if (!stdout || stdout.trim().length === 0) return [];
 
         const lines = stdout.split('\n');
         const steps = [];
@@ -143,36 +113,29 @@ class InstrumentationTracer {
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
-            
-            if (line.trim().length === 0 && i === lines.length - 1) {
-                continue;
-            }
+            if (line.trim().length === 0 && i === lines.length - 1) continue;
 
             const { rendered, escapes } = this.parseEscapeSequences(line);
-
             steps.push({
                 stepIndex: stepIndex++,
                 eventType: 'output',
                 line: 0,
                 function: 'output',
+                scope: 'global',
                 file: 'stdout',
                 timestamp: Date.now() + i,
                 text: rendered,
                 rawText: line,
                 escapeInfo: escapes,
-                explanation: escapes.length > 0 
-                    ? `📤 Output: "${rendered}"`
-                    : `📤 Output: "${rendered}"`,
+                explanation: `📤 Output: "${rendered}"`,
                 internalEvents: []
             });
         }
-
         return steps;
     }
 
     async compile(code, language = 'cpp') {
         const sessionId = uuid();
-
         const ext = language === 'c' ? 'c' : 'cpp';
         const compiler = 'g++';
         const stdFlag = language === 'c' ? '-std=c11' : '-std=c++17';
@@ -181,8 +144,7 @@ class InstrumentationTracer {
         const sourceFile = path.join(this.tempDir, `src_${sessionId}.${ext}`);
         const userObj = path.join(this.tempDir, `src_${sessionId}.o`);
         const tracerObj = path.join(this.tempDir, `tracer_${sessionId}.o`);
-        const executable = path.join(this.tempDir,
-            `exec_${sessionId}${process.platform === 'win32' ? '.exe' : ''}`);
+        const executable = path.join(this.tempDir, `exec_${sessionId}${process.platform === 'win32' ? '.exe' : ''}`);
         const traceOutput = path.join(this.tempDir, `trace_${sessionId}.json`);
         const headerCopy = path.join(this.tempDir, 'trace.h');
 
@@ -190,48 +152,29 @@ class InstrumentationTracer {
         await copyFile(this.traceHeader, headerCopy);
 
         const compileUser = new Promise((resolve, reject) => {
-            const args = [
-                '-c', '-g', '-O0',
-                stdFlag,
-                '-fno-omit-frame-pointer',
-                '-finstrument-functions',
-                sourceFile,
-                '-o', userObj
-            ];
+            const args = ['-c', '-g', '-O0', stdFlag, '-fno-omit-frame-pointer',
+                '-finstrument-functions', sourceFile, '-o', userObj];
             const p = spawn(compiler, args);
             let err = '';
             p.stderr.on('data', d => err += d.toString());
-            p.on('close', code => code === 0 ? resolve()
-                : reject(new Error(`User compile failed:\n${err}`)));
+            p.on('close', code => code === 0 ? resolve() : reject(new Error(`User compile failed:\n${err}`)));
             p.on('error', e => reject(e));
         });
 
         const compileTracer = new Promise((resolve, reject) => {
-            const args = [
-                '-c', '-g', '-O0',
-                stdFlag,
-                '-fno-omit-frame-pointer',
-                this.tracerCpp,
-                '-o', tracerObj
-            ];
+            const args = ['-c', '-g', '-O0', stdFlag, '-fno-omit-frame-pointer',
+                this.tracerCpp, '-o', tracerObj];
             const p = spawn(compiler, args);
             let err = '';
             p.stderr.on('data', d => err += d.toString());
-            p.on('close', code => code === 0 ? resolve()
-                : reject(new Error(`Tracer compile failed:\n${err}`)));
+            p.on('close', code => code === 0 ? resolve() : reject(new Error(`Tracer compile failed:\n${err}`)));
             p.on('error', e => reject(e));
         });
 
         await Promise.all([compileUser, compileTracer]);
 
-        const linkArgs = [
-            userObj,
-            tracerObj,
-            '-o', executable
-        ];
-        if (process.platform !== 'win32') {
-            linkArgs.unshift('-pthread', '-ldl');
-        }
+        const linkArgs = [userObj, tracerObj, '-o', executable];
+        if (process.platform !== 'win32') linkArgs.unshift('-pthread', '-ldl');
 
         return new Promise((resolve, reject) => {
             const link = spawn(compiler, linkArgs);
@@ -239,12 +182,7 @@ class InstrumentationTracer {
             link.stderr.on('data', d => err += d.toString());
             link.on('close', code => {
                 if (code === 0) {
-                    resolve({
-                        executable,
-                        sourceFile,
-                        traceOutput,
-                        headerCopy
-                    });
+                    resolve({ executable, sourceFile, traceOutput, headerCopy });
                 } else {
                     reject(new Error(`Linking failed:\n${err}`));
                 }
@@ -255,10 +193,8 @@ class InstrumentationTracer {
 
     async executeInstrumented(executable, traceOutput) {
         return new Promise((resolve, reject) => {
-            const cmd = process.platform === 'win32' ? executable
-                : `./${path.basename(executable)}`;
-            const cwd = process.platform === 'win32'
-                ? path.dirname(executable) : process.cwd();
+            const cmd = process.platform === 'win32' ? executable : `./${path.basename(executable)}`;
+            const cwd = process.platform === 'win32' ? path.dirname(executable) : process.cwd();
 
             const proc = spawn(cmd, [], {
                 cwd,
@@ -295,26 +231,75 @@ class InstrumentationTracer {
         try {
             const txt = await readFile(tracePath, 'utf-8');
             const parsed = JSON.parse(txt);
-            return {
-                events: parsed.events || [],
-                functions: parsed.tracked_functions || []
-            };
+            return { events: parsed.events || [], functions: parsed.tracked_functions || [] };
         } catch (e) {
             console.error('Failed to read/parse trace file:', e.message);
             return { events: [], functions: [] };
         }
     }
 
-    // STRICT ONE-LINE-ONE-STEP RULE
-    async convertToSteps(events, executable, sourceFile, programOutput, trackedFunctions) {
-        console.log(`📊 Converting ${events.length} events to steps (strict filtering)...`);
+    // LOOP CONTROL VARIABLES - internal only, never emit steps
+    isLoopControlVariable(name) {
+        // Common loop counters and single-letter variables
+        return name && (name.length === 1 || ['idx', 'index', 'count', 'counter'].includes(name));
+    }
 
-        const codeSteps = [];
+    // Detect scope based on context
+    detectScope(name, inLoop) {
+        if (inLoop && this.isLoopControlVariable(name)) return 'loop';
+        return 'block';
+    }
+
+    // Semantic step collapsing - AFTER capture, BEFORE emission
+    collapseSteps(rawSteps) {
+        const collapsed = [];
+        const seen = new Map(); // key = "function:scope:symbol:index"
+
+        for (const step of rawSteps) {
+            // Never collapse program_start, program_end, output
+            if (['program_start', 'program_end', 'output'].includes(step.eventType)) {
+                collapsed.push(step);
+                continue;
+            }
+
+            // Build collapse key: <symbol + index>
+            let key = `${step.function}:${step.scope}:${step.symbol || step.name}`;
+            
+            if (step.eventType === 'array_index_assign' && step.indices) {
+                key += `:${JSON.stringify(step.indices)}`;
+            }
+
+            const existing = seen.get(key);
+            
+            if (existing && 
+                existing.eventType === step.eventType &&
+                existing.line === step.line) {
+                // Same location, same symbol, same index → update value only
+                existing.value = step.value;
+                existing.timestamp = step.timestamp;
+            } else {
+                // Different index or different location → new step
+                collapsed.push(step);
+                seen.set(key, step);
+            }
+        }
+
+        // Renumber steps
+        collapsed.forEach((step, idx) => {
+            step.stepIndex = idx;
+        });
+
+        return collapsed;
+    }
+
+    async convertToSteps(events, executable, sourceFile, programOutput, trackedFunctions) {
+        console.log(`📊 Converting ${events.length} events to semantic steps...`);
+
+        const rawSteps = [];
         let stepIndex = 0;
-        
-        // Track last event per source line to enforce one-step-per-line
-        const lineSteps = new Map(); // Map<"file:line", step>
         let mainStarted = false;
+        let currentFunction = 'main';
+        let inLoop = false;
 
         const normalizeFunctionName = (name) => {
             if (!name) return 'unknown';
@@ -336,86 +321,77 @@ class InstrumentationTracer {
                 info.function = normalizeFunctionName(info.function);
             }
 
-            // Create main start step
+            // Program start
             if (!mainStarted && info.function === 'main' && ev.type === 'func_enter') {
-                const step = {
+                rawSteps.push({
                     stepIndex: stepIndex++,
                     eventType: 'program_start',
                     line: info.line,
                     function: 'main',
+                    scope: 'global',
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     explanation: '🚀 Program started',
                     internalEvents: []
-                };
-                codeSteps.push(step);
+                });
                 mainStarted = true;
+                currentFunction = 'main';
                 continue;
             }
 
-            // Filter system/internal events
-            if (this.shouldFilterEvent(info, ev, sourceFile)) {
+            // Filter system events
+            if (this.shouldFilterEvent(info, ev, sourceFile)) continue;
+            if (!info.file || info.line === 0) continue;
+
+            // Function tracking
+            if (ev.type === 'func_enter' && info.function !== 'main') {
+                currentFunction = info.function;
+                this.callStack.push({ function: info.function, depth: this.callStack.length + 1 });
                 continue;
             }
 
-            if (!info.file || info.line === 0) {
+            if (ev.type === 'func_exit') {
+                if (this.callStack.length > 0) this.callStack.pop();
+                currentFunction = this.callStack.length > 0 
+                    ? this.callStack[this.callStack.length - 1].function 
+                    : 'main';
+                if (!currentFunction) currentFunction = 'main';
                 continue;
             }
 
-            const locationKey = `${info.file}:${info.line}`;
-            
-            // ONE-LINE-ONE-STEP ENFORCEMENT
-            // Only allow multiple steps for function enter/exit
-            const isFuncEnter = ev.type === 'func_enter';
-            const isFuncExit = ev.type === 'func_exit';
+            // Skip heap events that aren't real allocations
             const isHeapEvent = ev.type === 'heap_alloc' || ev.type === 'heap_free';
-            
-            // Skip heap events that aren't from real allocators
-            if (isHeapEvent && !ev.isHeap) {
-                continue;
-            }
-            
-            // Skip function exits (not meaningful to beginners)
-            if (isFuncExit) {
-                continue;
-            }
-            
-            // Skip redundant function enters (only main start shown)
-            if (isFuncEnter && info.function !== 'main') {
-                continue;
-            }
-            
-            // Check if this line already has a step
-            if (lineSteps.has(locationKey) && !isFuncEnter && !isFuncExit) {
-                // Merge into existing step - update to latest value
-                const existingStep = lineSteps.get(locationKey);
-                
-                // Update with latest value/state
-                if (ev.type === 'assign' || ev.type === 'array_index_assign') {
-                    if (ev.name) existingStep.name = ev.name;
-                    if (ev.value !== undefined) existingStep.value = ev.value;
-                    if (ev.indices) existingStep.indices = ev.indices;
-                    existingStep.explanation = this.getEventExplanation(ev, info);
-                }
-                
-                continue; // Don't create new step
+            if (isHeapEvent && !ev.isHeap) continue;
+
+            // Detect if we're in a loop context
+            if (ev.name && this.isLoopControlVariable(ev.name)) {
+                inLoop = true;
             }
 
-            // Create step based on event type
+            const scope = this.detectScope(ev.name, inLoop);
+
+            // CRITICAL: Skip loop control variable assignments
+            if (ev.type === 'assign' && this.isLoopControlVariable(ev.name)) {
+                continue; // Internal only - never emit
+            }
+
             let step = null;
-            
+
             if (ev.type === 'array_create') {
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'array_create',
                     line: info.line,
-                    function: info.function,
+                    function: currentFunction,
+                    scope: 'block',
+                    symbol: ev.name,
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     name: ev.name,
                     baseType: ev.baseType,
                     dimensions: ev.dimensions,
                     isStack: ev.isStack !== false,
+                    memoryRegion: 'stack',
                     explanation: `Array declared: ${ev.name}${JSON.stringify(ev.dimensions)}`,
                     internalEvents: []
                 };
@@ -424,62 +400,70 @@ class InstrumentationTracer {
                     name: ev.name,
                     baseType: ev.baseType,
                     dimensions: ev.dimensions,
-                    values: [],
                     isStack: ev.isStack !== false
                 });
-            } else if (ev.type === 'array_init') {
-                step = {
-                    stepIndex: stepIndex++,
-                    eventType: 'array_init',
-                    line: info.line,
-                    function: info.function,
-                    file: path.basename(info.file),
-                    timestamp: ev.ts || null,
-                    name: ev.name,
-                    values: ev.values,
-                    explanation: `Array initialized: ${ev.name}`,
-                    internalEvents: []
-                };
                 
-                const arr = this.arrayRegistry.get(ev.name);
-                if (arr) arr.values = ev.values;
+            } else if (ev.type === 'array_init') {
+                // Attach to previous array_create as metadata
+                const lastStep = rawSteps[rawSteps.length - 1];
+                if (lastStep && lastStep.eventType === 'array_create' && lastStep.name === ev.name) {
+                    lastStep.isInitializer = true;
+                    lastStep.initializerValues = ev.values;
+                }
+                continue; // No new step
+                
             } else if (ev.type === 'array_index_assign') {
+                // ALWAYS emit - even in loops (one per index)
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'array_index_assign',
                     line: info.line,
-                    function: info.function,
+                    function: currentFunction,
+                    scope: scope,
+                    symbol: ev.name,
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     name: ev.name,
                     indices: ev.indices,
                     value: ev.value,
+                    memoryRegion: 'stack',
                     explanation: `${ev.name}${JSON.stringify(ev.indices)} = ${ev.value}`,
                     internalEvents: []
                 };
+                
             } else if (ev.type === 'pointer_alias') {
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'pointer_alias',
                     line: info.line,
-                    function: info.function,
+                    function: currentFunction,
+                    scope: 'block',
+                    symbol: ev.name,
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     name: ev.name,
                     aliasOf: ev.aliasOf,
                     decayedFromArray: ev.decayedFromArray || false,
+                    pointsTo: {
+                        region: 'stack',
+                        target: ev.aliasOf,
+                        address: null
+                    },
                     explanation: `${ev.name} → ${ev.aliasOf}${ev.decayedFromArray ? ' (array decay)' : ''}`,
                     internalEvents: []
                 };
+                
             } else if (ev.type === 'declare') {
-                // Skip bare declares, wait for assign
-                continue;
+                continue; // Skip bare declares
+                
             } else if (ev.type === 'assign') {
                 step = {
                     stepIndex: stepIndex++,
-                    eventType: 'assign',
+                    eventType: 'var_assign',
                     line: info.line,
-                    function: info.function,
+                    function: currentFunction,
+                    scope: scope,
+                    symbol: ev.name,
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     name: ev.name,
@@ -487,77 +471,91 @@ class InstrumentationTracer {
                     explanation: `${ev.name} = ${ev.value}`,
                     internalEvents: []
                 };
+                
             } else if (isHeapEvent && ev.isHeap) {
                 step = {
                     stepIndex: stepIndex++,
                     eventType: ev.type,
                     line: info.line,
-                    function: info.function,
+                    function: currentFunction,
+                    scope: 'block',
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     size: ev.size,
-                    addr: ev.addr,
-                    explanation: this.getEventExplanation(ev, info),
+                    address: ev.addr,
+                    memoryRegion: 'heap',
+                    baseType: 'int',
+                    explanation: ev.type === 'heap_alloc' 
+                        ? `Allocated ${ev.size} bytes on heap`
+                        : `Freed heap memory`,
                     internalEvents: []
                 };
             }
-            
+
             if (step) {
-                codeSteps.push(step);
-                lineSteps.set(locationKey, step);
+                rawSteps.push(step);
             }
         }
 
-        // Add output steps
-        const outputSteps = this.createOutputSteps(programOutput.stdout, stepIndex);
-        const allSteps = [...codeSteps, ...outputSteps];
+        // CRITICAL: Collapse steps AFTER capture
+        const collapsedSteps = this.collapseSteps(rawSteps);
 
-        // Add program end
+        // Output steps
+        const outputSteps = this.createOutputSteps(programOutput.stdout, collapsedSteps.length);
+        const allSteps = [...collapsedSteps, ...outputSteps];
+
+        // Program end
+        const lastStepIndex = allSteps.at(-1)?.stepIndex ?? 0;
         allSteps.push({
-            stepIndex: allSteps.length,
+            stepIndex: lastStepIndex + 1,
             eventType: 'program_end',
             line: 0,
             function: 'main',
+            scope: 'global',
             file: path.basename(sourceFile),
             timestamp: Date.now(),
             explanation: '✅ Program completed',
             internalEvents: []
         });
 
-        console.log(`✅ Generated ${allSteps.length} steps (${codeSteps.length} code)`);
+        console.log(`✅ Generated ${allSteps.length} semantic steps (${events.length} raw events → ${collapsedSteps.length} collapsed)`);
         
         return allSteps;
     }
 
-    getEventExplanation(ev, info) {
-        switch (ev.type) {
-            case 'heap_alloc': 
-                return `Allocated ${ev.size} bytes`;
-            case 'heap_free':  
-                return `Freed memory`;
-            default:           
-                return `${ev.type}`;
-        }
-    }
-
     extractGlobals(steps) {
-        return [];
+        return steps
+            .filter(s => s.scope === 'global' && (s.eventType === 'var_assign' || s.eventType === 'array_create'))
+            .map(s => ({
+                name: s.symbol || s.name,
+                type: s.baseType || 'int',
+                value: s.value,
+                scope: 'global'
+            }));
     }
 
     extractFunctions(steps, trackedFunctions) {
         const map = new Map();
         
-        // Add tracked functions from tracer
-        for (const fn of trackedFunctions) {
-            if (!map.has(fn)) {
-                map.set(fn, { name: fn, line: 0, returnType: 'auto' });
-            }
-        }
+        // Only real functions - never variables
+        const excludedNames = [
+            'i', 'j', 'k', 'l', 'm', 'n', 'x', 'y', 'z', 'a', 'b', 'c',
+            'temp', 'tmp', 'val', 'count', 'sum', 'max', 'min', 'arr',
+            'idx', 'index', 'counter'
+        ];
         
-        // Add from steps
-        for (const s of steps) {
-            if (s.function && !map.has(s.function)) {
-                map.set(s.function, { name: s.function, line: s.line, returnType: 'auto' });
+        for (const fn of trackedFunctions) {
+            if (fn && fn !== 'unknown' && 
+                !excludedNames.includes(fn) &&
+                fn.length > 1) {
+                if (!map.has(fn)) {
+                    map.set(fn, { 
+                        name: fn, 
+                        line: 0, 
+                        returnType: 'auto',
+                        type: 'function'
+                    });
+                }
             }
         }
         
@@ -565,17 +563,20 @@ class InstrumentationTracer {
     }
 
     async generateTrace(code, language = 'cpp') {
-        console.log('🚀 Starting trace generation...');
+        console.log('🚀 Starting semantic trace generation...');
 
         this.arrayRegistry.clear();
+        this.functionRegistry.clear();
+        this.callStack = [];
 
         let exe, src, traceOut, hdr;
         try {
-            ({ executable: exe, sourceFile: src, traceOutput: traceOut, headerCopy: hdr } = await this.compile(code, language));
+            ({ executable: exe, sourceFile: src, traceOutput: traceOut, headerCopy: hdr } = 
+                await this.compile(code, language));
 
             const { stdout, stderr } = await this.executeInstrumented(exe, traceOut);
-
             const { events, functions } = await this.parseTraceFile(traceOut);
+            
             console.log(`📋 Captured ${events.length} raw events, ${functions.length} functions`);
 
             const steps = await this.convertToSteps(events, exe, src, { stdout, stderr }, functions);
@@ -586,12 +587,14 @@ class InstrumentationTracer {
                 globals: this.extractGlobals(steps),
                 functions: this.extractFunctions(steps, functions),
                 metadata: {
-                    debugger: 'gcc-instrumentation',
-                    version: '4.0',
+                    debugger: 'gcc-instrumentation-semantic',
+                    version: '6.0',
                     hasRealMemory: true,
                     hasHeapTracking: true,
                     hasArraySupport: true,
                     hasPointerSupport: true,
+                    hasSemanticScopes: true,
+                    hasStepCollapsing: true,
                     capturedEvents: events.length,
                     filteredSteps: steps.length,
                     programOutput: stdout,
@@ -599,7 +602,7 @@ class InstrumentationTracer {
                 }
             };
             
-            console.log('✅ Trace complete', {
+            console.log('✅ Semantic trace complete', {
                 steps: result.totalSteps,
                 functions: result.functions.length,
                 arrays: this.arrayRegistry.size
