@@ -1,14 +1,12 @@
 // frontend/src/components/canvas/elements/ArrayPanel.tsx
+// FIXED VERSION - Stable keys and proper value propagation
+
 import React, { useRef, memo, useMemo } from 'react';
 import { Group, Rect, Text, Line } from 'react-konva';
 import { ArrayBox } from './ArrayBox';
 
-// ============================================
-// TYPE DEFINITIONS
-// ============================================
-
 export interface ArrayData {
-  id: string;
+  id?: string;
   name: string;
   baseType: string;
   dimensions: number[];
@@ -29,18 +27,10 @@ export interface ArrayPanelProps {
   isNew?: boolean;
 }
 
-// ============================================
-// CONSTANTS
-// ============================================
-
 const HEADER_HEIGHT = 50;
 const PADDING = 16;
 const ARRAY_SPACING = 20;
 const MIN_WIDTH = 300;
-
-// ============================================
-// OPTIMIZED ARRAY PANEL
-// ============================================
 
 export const ArrayPanel: React.FC<ArrayPanelProps> = memo(({
   id,
@@ -52,9 +42,6 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = memo(({
 }) => {
   const groupRef = useRef<any>(null);
 
-  // ============================================
-  // MEMOIZED SIZE CALCULATION
-  // ============================================
   const { panelWidth, panelHeight, arrayPositions } = useMemo(() => {
     if (arrays.length === 0) {
       return { 
@@ -90,33 +77,31 @@ export const ArrayPanel: React.FC<ArrayPanelProps> = memo(({
     };
   }, [arrays]);
 
-  // ============================================
-  // RENDER ARRAYS (MEMOIZED)
-  // ============================================
-const renderedArrays = useMemo(() => {
-  return arrayPositions.map(({ array, y }) => (
-    <ArrayBox
-      // FIXED: Remove currentStep from key - use only stable identifiers
-      key={`${array.id}-${array.dimensions.length}`}
-      id={array.id}
-      name={array.name}
-      baseType={array.baseType}
-      dimensions={array.dimensions}
-      values={array.values}
-      address={array.address}
-      x={PADDING}
-      y={y}
-      isNew={array.birthStep === currentStep}
-      updatedIndices={array.updatedIndices || []}
-      owner={array.owner}
-      currentStep={currentStep}
-    />
-  ));
-}, [arrayPositions, currentStep]);
+  // FIX: Use stable keys based on array name + dimensions only
+  const renderedArrays = useMemo(() => {
+    return arrayPositions.map(({ array, y }) => {
+      const stableKey = `${array.name}-${array.dimensions.join('x')}`;
+      
+      return (
+        <ArrayBox
+          key={stableKey}
+          id={array.id || array.name}
+          name={array.name}
+          baseType={array.baseType}
+          dimensions={array.dimensions}
+          values={array.values}
+          address={array.address}
+          x={PADDING}
+          y={y}
+          isNew={array.birthStep === currentStep}
+          updatedIndices={array.updatedIndices || []}
+          owner={array.owner}
+          currentStep={currentStep}
+        />
+      );
+    });
+  }, [arrayPositions, currentStep]);
 
-  // ============================================
-  // MAIN RENDER
-  // ============================================
   return (
     <Group ref={groupRef} id={id} x={x} y={y}>
       {/* Background */}
@@ -203,19 +188,15 @@ const renderedArrays = useMemo(() => {
     </Group>
   );
 }, (prevProps, nextProps) => {
-  // Custom comparison - only re-render if arrays or currentStep changed
-  return (
-    JSON.stringify(prevProps.arrays) === JSON.stringify(nextProps.arrays) &&
-    prevProps.currentStep === nextProps.currentStep &&
-    prevProps.isNew === nextProps.isNew
-  );
+  // Re-render if arrays data changed or currentStep changed
+  const arraysChanged = JSON.stringify(prevProps.arrays) !== JSON.stringify(nextProps.arrays);
+  const stepChanged = prevProps.currentStep !== nextProps.currentStep;
+  
+  return !arraysChanged && !stepChanged;
 });
 
 ArrayPanel.displayName = 'ArrayPanel';
 
-// ============================================
-// HELPER: CALCULATE ARRAY BOX SIZE
-// ============================================
 function calculateArrayBoxSize(dimensions: number[]) {
   const CELL_WIDTH = 60;
   const CELL_HEIGHT = 50;

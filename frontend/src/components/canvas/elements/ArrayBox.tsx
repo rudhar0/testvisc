@@ -1,12 +1,10 @@
 // frontend/src/components/canvas/elements/ArrayBox.tsx
-import React, { useRef, useEffect, useState, memo, useMemo } from 'react';
+// FIXED VERSION - Proper value display for all initialization types
+
+import React, { useRef, useEffect, useState, memo, useMemo, useCallback } from 'react';
 import { Group, Rect, Text, Line } from 'react-konva';
 import Konva from 'konva';
 import { ArrayCell } from './ArrayCell';
-
-// ============================================
-// TYPE DEFINITIONS
-// ============================================
 
 export interface ArrayBoxProps {
   id: string;
@@ -23,20 +21,12 @@ export interface ArrayBoxProps {
   currentStep?: number;
 }
 
-// ============================================
-// CONSTANTS
-// ============================================
-
 const CELL_WIDTH = 60;
 const CELL_HEIGHT = 50;
 const CELL_SPACING = 4;
 const HEADER_HEIGHT = 50;
 const PADDING = 12;
 const TAB_HEIGHT = 30;
-
-// ============================================
-// OPTIMIZED ARRAY BOX - MULTI-DIMENSIONAL
-// ============================================
 
 export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
   id,
@@ -54,14 +44,27 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
 }) => {
   const groupRef = useRef<Konva.Group>(null);
   const [activeTab, setActiveTab] = useState(0);
+
+  console.log(`[ArrayBox ${name}] Rendering with ${values.length} values:`, values);
   
   const is1D = dimensions.length === 1;
   const is2D = dimensions.length === 2;
   const is3D = dimensions.length === 3;
 
-  // ============================================
-  // MEMOIZED BOX DIMENSIONS
-  // ============================================
+  // Calculate total size
+  const totalSize = useMemo(() => {
+    return dimensions.reduce((a, b) => a * b, 1);
+  }, [dimensions]);
+
+  // FIX: Ensure values array matches total size
+  const normalizedValues = useMemo(() => {
+    const normalized = new Array(totalSize).fill(null);
+    for (let i = 0; i < Math.min(values.length, totalSize); i++) {
+      normalized[i] = values[i];
+    }
+    return normalized;
+  }, [values, totalSize]);
+
   const { width: boxWidth, height: boxHeight } = useMemo(() => {
     if (is1D) {
       const cols = dimensions[0];
@@ -89,42 +92,33 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
     return { width: 200, height: 100 };
   }, [dimensions, is1D, is2D, is3D]);
 
-  // ============================================
-  // VALUE ACCESSOR - PROGRESSIVE
-  // ============================================
-  const getValueAt = useMemo(() => {
-    return (indices: number[]): any => {
-      if (is1D) {
-        const idx = indices[0];
-        return values[idx] !== undefined ? values[idx] : null;
-      }
-      if (is2D) {
-        const [i, j] = indices;
-        const flatIdx = i * dimensions[1] + j;
-        return values[flatIdx] !== undefined ? values[flatIdx] : null;
-      }
-      if (is3D) {
-        const [i, j, k] = indices;
-        const flatIdx = i * dimensions[1] * dimensions[2] + j * dimensions[2] + k;
-        return values[flatIdx] !== undefined ? values[flatIdx] : null;
-      }
-      return null;
-    };
-  }, [values, dimensions, is1D, is2D, is3D]);
+  // FIX: Proper value accessor using flat array
+  const getValueAt = useCallback((indices: number[]): any => {
+    if (is1D) {
+      const idx = indices[0];
+      return idx < normalizedValues.length ? normalizedValues[idx] : null;
+    }
+    if (is2D) {
+      const [i, j] = indices;
+      const flatIdx = i * dimensions[1] + j;
+      return flatIdx < normalizedValues.length ? normalizedValues[flatIdx] : null;
+    }
+    if (is3D) {
+      const [i, j, k] = indices;
+      const flatIdx = i * dimensions[1] * dimensions[2] + j * dimensions[2] + k;
+      return flatIdx < normalizedValues.length ? normalizedValues[flatIdx] : null;
+    }
+    return null;
+  }, [normalizedValues, dimensions, is1D, is2D, is3D]);
 
-  // ============================================
-  // CHECK IF CELL WAS UPDATED
-  // ============================================
-  const isCellUpdated = (indices: number[]): boolean => {
+  const isCellUpdated = useCallback((indices: number[]): boolean => {
     return updatedIndices.some(updated => 
       updated.length === indices.length &&
       updated.every((val, idx) => val === indices[idx])
     );
-  };
+  }, [updatedIndices]);
 
-  // ============================================
   // RENDER: 1D ARRAY
-  // ============================================
   const render1DGrid = useMemo(() => {
     const cells: JSX.Element[] = [];
     
@@ -133,29 +127,26 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
       const cellY = HEADER_HEIGHT + PADDING;
       const value = getValueAt([i]);
       
-      // Render all cells (empty or filled)
-     cells.push(
-  <ArrayCell
-    key={`cell-${i}`}  // FIXED: Remove id prefix, just use index
-    id={`${id}-cell-${i}`}
-    index={[i]}
-    value={value}
-    baseType={baseType}
-    x={cellX}
-    y={cellY}
-    width={CELL_WIDTH}
-    height={CELL_HEIGHT}
-    isUpdated={isCellUpdated([i])}
-  />
-);
+      cells.push(
+        <ArrayCell
+          key={`cell-${i}`}
+          id={`${id}-cell-${i}`}
+          index={[i]}
+          value={value}
+          baseType={baseType}
+          x={cellX}
+          y={cellY}
+          width={CELL_WIDTH}
+          height={CELL_HEIGHT}
+          isUpdated={isCellUpdated([i])}
+        />
+      );
     }
     
     return cells;
-  }, [dimensions, baseType, id, getValueAt, updatedIndices]);
+  }, [dimensions, baseType, id, getValueAt, isCellUpdated]);
 
-  // ============================================
   // RENDER: 2D ARRAY
-  // ============================================
   const render2DGrid = useMemo(() => {
     const cells: JSX.Element[] = [];
     const [rows, cols] = dimensions;
@@ -166,30 +157,27 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
         const cellY = HEADER_HEIGHT + PADDING + i * (CELL_HEIGHT + CELL_SPACING);
         const value = getValueAt([i, j]);
         
-        // Render all cells
-      cells.push(
-  <ArrayCell
-    key={`${id}-cell-${i}-${j}`}  // ✅ FIXED: Full coordinates
-    id={`${id}-cell-${i}-${j}`}
-    index={[i, j]}
-    value={value}
-    baseType={baseType}
-    x={cellX}
-    y={cellY}
-    width={CELL_WIDTH}
-    height={CELL_HEIGHT}
-    isUpdated={isCellUpdated([i, j])}
-  />
-);
+        cells.push(
+          <ArrayCell
+            key={`cell-${i}-${j}`}
+            id={`${id}-cell-${i}-${j}`}
+            index={[i, j]}
+            value={value}
+            baseType={baseType}
+            x={cellX}
+            y={cellY}
+            width={CELL_WIDTH}
+            height={CELL_HEIGHT}
+            isUpdated={isCellUpdated([i, j])}
+          />
+        );
       }
     }
     
     return cells;
-  }, [dimensions, baseType, id, getValueAt, updatedIndices]);
+  }, [dimensions, baseType, id, getValueAt, isCellUpdated]);
 
-  // ============================================
   // RENDER: 3D ARRAY (TABBED PLANES)
-  // ============================================
   const render3DGrid = useMemo(() => {
     const elements: JSX.Element[] = [];
     const [planes, rows, cols] = dimensions;
@@ -238,7 +226,7 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
         
         elements.push(
           <ArrayCell
-            key={`${id}-cell-${activeTab}-${i}-${j}`}
+            key={`cell-${activeTab}-${i}-${j}`}
             id={`${id}-cell-${activeTab}-${i}-${j}`}
             index={[activeTab, i, j]}
             value={value}
@@ -254,15 +242,8 @@ export const ArrayBox: React.FC<ArrayBoxProps> = memo(({
     }
     
     return elements;
-  }, [dimensions, activeTab, baseType, id, getValueAt, updatedIndices]);
+  }, [dimensions, activeTab, baseType, id, getValueAt, isCellUpdated]);
 
-  // ============================================
-  // NO ENTRANCE ANIMATION - PERFORMANCE
-  // ============================================
-
-  // ============================================
-  // MAIN RENDER
-  // ============================================
   return (
     <Group ref={groupRef} id={id} x={x} y={y}>
       {/* Background */}

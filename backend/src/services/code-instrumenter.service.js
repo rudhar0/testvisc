@@ -5,11 +5,12 @@ import path from 'path';
 import { v4 as uuid } from 'uuid';
 
 /**
- * Complete code instrumenter with:
- * - Proper array initialization (zero-padding)
- * - Array-to-pointer decay detection
- * - Minimal step generation (one line → one step max)
- * - No spurious heap events
+ * BEGINNER-CORRECT code instrumenter:
+ * - Proper pointer dereference write semantics
+ * - Heap write tracking
+ * - Character array initialization with null terminator
+ * - Multi-declaration handling
+ * - NO step collapsing in beginner mode
  */
 class CodeInstrumenter {
   constructor() {
@@ -17,7 +18,7 @@ class CodeInstrumenter {
   }
 
   async instrumentCode(code, language = 'cpp') {
-    console.log('🔧 Instrumenting code...');
+    console.log('🔧 Instrumenting code (beginner-correct mode)...');
 
     try {
       const withHeader = this.addTraceHeader(code);
@@ -62,15 +63,23 @@ class CodeInstrumenter {
 
     const hasInitializer = varDecl.includes('=');
     let initValues = null;
+    let isStringLiteral = false;
 
     if (hasInitializer) {
-      const initMatch = varDecl.match(/=\s*\{([^}]*)\}/);
-      if (initMatch) {
-        initValues = initMatch[1];
+      // Check for string literal
+      const strMatch = varDecl.match(/=\s*"([^"]*)"/);
+      if (strMatch) {
+        initValues = strMatch[1];
+        isStringLiteral = true;
+      } else {
+        const initMatch = varDecl.match(/=\s*\{([^}]*)\}/);
+        if (initMatch) {
+          initValues = initMatch[1];
+        }
       }
     }
 
-    return { name, type, dimensions, hasInitializer, initValues };
+    return { name, type, dimensions, hasInitializer, initValues, isStringLiteral };
   }
 
   parseMultiDeclaration(rest) {
@@ -122,8 +131,7 @@ class CodeInstrumenter {
   // Detect if pointer is assigned from array (decay)
   isArrayDecay(value) {
     const trimmed = value.trim();
-    // Cases: arr, &arr[0], (arr), etc.
-    if (/^\w+$/.test(trimmed)) return trimmed; // Plain identifier
+    if (/^\w+$/.test(trimmed)) return trimmed;
     if (/^&\w+\[0\]$/.test(trimmed)) {
       const match = trimmed.match(/^&(\w+)\[0\]$/);
       return match ? match[1] : null;
@@ -133,6 +141,11 @@ class CodeInstrumenter {
       return match ? match[1] : null;
     }
     return null;
+  }
+
+  // Detect malloc/calloc heap allocation
+  isHeapAllocation(value) {
+    return /\b(malloc|calloc)\s*\(/.test(value);
   }
 
   async injectBeginnerModeTracing(code, language) {
@@ -180,7 +193,16 @@ class CodeInstrumenter {
         continue;
       }
 
-      // Multi-declaration
+      // CRITICAL: Pointer dereference write - must come BEFORE regular assignment
+      const ptrDeref = trimmed.match(/^\s*\*\s*(\w+)\s*=\s*([^;]+);/);
+      if (ptrDeref) {
+        const [, ptrName, value] = ptrDeref;
+        out.push(line);
+        out.push(`${indent}__trace_pointer_deref_write(${ptrName}, ${value}, ${i + 1});`);
+        continue;
+      }
+
+      // Multi-declaration with PROPER handling
       const multiDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(.+);$/);
       if (multiDecl && multiDecl[2].includes(',')) {
         const [, type, rest] = multiDecl;
@@ -193,7 +215,7 @@ class CodeInstrumenter {
             const arrayInfo = this.parseArrayDeclaration(type, varDecl);
             if (!arrayInfo) continue;
 
-            const { name, dimensions, hasInitializer, initValues } = arrayInfo;
+            const { name, dimensions, hasInitializer, initValues, isStringLiteral } = arrayInfo;
             
             const dimArgs = dimensions.slice(0, 3).join(',');
             const paddedDims = dimensions.length === 1 ? `${dimArgs},0,0` :
@@ -202,16 +224,21 @@ class CodeInstrumenter {
             out.push(`${indent}${type} ${varDecl};`);
             out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
             
-            if (hasInitializer && initValues) {
-              const totalSize = dimensions.reduce((a, b) => a * (parseInt(b) || 1), 1);
-              const initList = initValues.split(',').map(v => v.trim()).filter(Boolean);
-              // Zero-pad partial initialization
-              const paddedInit = [...initList, ...Array(totalSize - initList.length).fill('0')].join(',');
-              
-              out.push(`${indent}{`);
-              out.push(`${indent}  int __temp_${name}[] = {${paddedInit}};`);
-              out.push(`${indent}  __trace_array_init(${name}, __temp_${name}, ${totalSize}, ${i + 1});`);
-              out.push(`${indent}}`);
+            if (hasInitializer) {
+              if (isStringLiteral) {
+                // Character array with string literal - includes null terminator
+                out.push(`${indent}__trace_array_init_string(${name}, "${initValues}", ${i + 1});`);
+              } else if (initValues) {
+                // Numeric array initialization - emit individual elements
+                const totalSize = dimensions.reduce((a, b) => a * (parseInt(b) || 1), 1);
+                const initList = initValues.split(',').map(v => v.trim()).filter(Boolean);
+                const paddedInit = [...initList, ...Array(totalSize - initList.length).fill('0')].join(',');
+                
+                out.push(`${indent}{`);
+                out.push(`${indent}  int __temp_${name}[] = {${paddedInit}};`);
+                out.push(`${indent}  __trace_array_init(${name}, __temp_${name}, ${totalSize}, ${i + 1});`);
+                out.push(`${indent}}`);
+              }
             }
           } else {
             const varName = this.extractVariableName(varDecl);
@@ -234,6 +261,18 @@ class CodeInstrumenter {
         continue;
       }
 
+      // Character array with string literal
+      const charArrStr = trimmed.match(/^\s*char\s+(\w+)\s*\[\s*([^\]]*)\s*\]\s*=\s*"([^"]*)"\s*;/);
+      if (charArrStr) {
+        const [, name, size, strValue] = charArrStr;
+        const actualSize = size || (strValue.length + 1);
+        
+        out.push(line);
+        out.push(`${indent}__trace_array_create(${name}, char, ${actualSize},0,0, ${i + 1});`);
+        out.push(`${indent}__trace_array_init_string(${name}, "${strValue}", ${i + 1});`);
+        continue;
+      }
+
       // Single array declaration
       const arrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\](\s*\[([^\]]+)\])?(\s*\[([^\]]+)\])?\s*;/);
       if (arrDecl) {
@@ -248,7 +287,7 @@ class CodeInstrumenter {
         continue;
       }
 
-      // Array with initializer - zero-pad partial init
+      // Numeric array with initializer - emit individual elements
       const arrDeclInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\](\s*\[([^\]]+)\])?(\s*\[([^\]]+)\])?\s*=\s*\{([^}]*)\}\s*;/);
       if (arrDeclInit) {
         const [, type, name, dim1, , dim2, , dim3, initValues] = arrDeclInit;
@@ -259,7 +298,6 @@ class CodeInstrumenter {
         
         const totalSize = dims.reduce((a, b) => a * (parseInt(b) || 1), 1);
         const initList = initValues.split(',').map(v => v.trim()).filter(Boolean);
-        // Zero-pad
         const paddedInit = [...initList, ...Array(totalSize - initList.length).fill('0')].join(',');
         
         out.push(line);
@@ -271,7 +309,7 @@ class CodeInstrumenter {
         continue;
       }
 
-      // Array element assignment
+      // Array element assignment - ALWAYS emit for beginners
       const arrAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
       if (arrAssign) {
         const [, varName, index, value] = arrAssign;
@@ -308,8 +346,9 @@ class CodeInstrumenter {
       const declInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*=\s*([^;]+);/);
       if (declInit) {
         const [, type, varName, value] = declInit;
+        out.push(`${indent}${type} ${varName};`);
         out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-        out.push(line);
+        out.push(`${indent}${varName} = ${value};`);
         out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         continue;
       }
@@ -317,80 +356,79 @@ class CodeInstrumenter {
       const constDecl = trimmed.match(/^\s*const\s+(int|long|float|double|char|bool)\s+(\w+)\s*=\s*([^;]+);/);
       if (constDecl) {
         const [, type, varName, value] = constDecl;
+        out.push(`${indent}const ${type} ${varName};`);
         out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-        out.push(line);
+        out.push(`${indent}${varName} = ${value};`);
         out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         continue;
       }
 
-      // Pointer declaration - detect array decay
+      // Pointer declaration with heap or stack target
       const ptrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s*\*\s*(\w+)\s*=\s*([^;]+);/);
       if (ptrDecl) {
         const [, type, varName, value] = ptrDecl;
         
         const arrayName = this.isArrayDecay(value);
+        const isHeap = this.isHeapAllocation(value);
         
+        out.push(`${indent}${type} *${varName};`);
         out.push(`${indent}__trace_declare(${varName}, ${type}*, ${i + 1});`);
-        out.push(line);
+        out.push(`${indent}${varName} = ${value};`);
+        out.push(`${indent}__trace_assign(${varName}, (long long)${varName}, ${i + 1});`);
         
         if (arrayName) {
-          // Array decay detected
+          // Array decay
           out.push(`${indent}__trace_pointer_alias(${varName}, ${arrayName}, true, ${i + 1});`);
+        } else if (isHeap) {
+          // Heap allocation
+          out.push(`${indent}__trace_pointer_heap_init(${varName}, ${varName}, ${i + 1});`);
         } else {
-          // Regular pointer
-          out.push(`${indent}__trace_assign(${varName}, (long long)${varName}, ${i + 1});`);
+          // Regular pointer (address-of)
+          const addrMatch = value.match(/&(\w+)/);
+          if (addrMatch) {
+            out.push(`${indent}__trace_pointer_alias(${varName}, ${addrMatch[1]}, false, ${i + 1});`);
+          }
         }
         continue;
       }
 
-      const ptrDeref = trimmed.match(/^\s*\*\s*(\w+)\s*=\s*([^;]+);/);
-      if (ptrDeref) {
-        const [, varName, value] = ptrDeref;
-        out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
-        out.push(line);
-        continue;
-      }
-
+      // Member assignment
       const memberAssign = trimmed.match(/^\s*(\w+)\.(\w+)\s*=\s*([^;]+);/);
       if (memberAssign) {
         const [, structName, memberName, value] = memberAssign;
-        out.push(`${indent}__trace_assign(${structName}_${memberName}, ${value}, ${i + 1});`);
         out.push(line);
+        out.push(`${indent}__trace_assign(${structName}_${memberName}, ${value}, ${i + 1});`);
         continue;
       }
 
+      // Regular assignment - ALWAYS emit for beginners
       const assign = trimmed.match(/^\s*(\w+)\s*=\s*([^;]+);/);
       if (assign && !trimmed.includes('(') && !trimmed.includes('[') && !trimmed.includes('.')) {
         const [, varName, value] = assign;
-        out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
         out.push(line);
+        out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
         continue;
       }
 
+      // Compound assignment
       const compound = trimmed.match(/^\s*(\w+)\s*([+\-*/%]|<<|>>)=\s*([^;]+);/);
       if (compound) {
         const [, varName, op, value] = compound;
-        out.push(`${indent}__trace_assign(${varName}, ${varName} ${op} ${value}, ${i + 1});`);
         out.push(line);
+        out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         continue;
       }
 
+      // Increment/decrement - ALWAYS emit for beginners (including loop counters)
       const inc = trimmed.match(/^\s*(\+\+|--)?(\w+)(\+\+|--)?;/);
       if (inc) {
         const varName = inc[2];
-        const isPre = inc[1];
-        const isPost = inc[3];
-        
-        if (isPre) {
-          out.push(`${indent}__trace_assign(${varName}, ${varName} ${isPre === '++' ? '+' : '-'} 1, ${i + 1});`);
-        }
         out.push(line);
-        if (isPost) {
-          out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
-        }
+        out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         continue;
       }
 
+      // For loop - emit declaration AND all increments
       const forLoop = trimmed.match(/^\s*for\s*\(\s*(int|long)\s+(\w+)\s*=\s*([^;]+);/);
       if (forLoop) {
         const [, type, varName, initValue] = forLoop;

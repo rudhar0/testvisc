@@ -1,4 +1,6 @@
 // frontend/src/components/canvas/VisualizationCanvas.tsx
+// ✅ UPDATED: Adds heap_pointer rendering
+
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { Stage, Layer, Group, Rect, Line, Text, Arrow } from "react-konva";
 import Konva from "konva";
@@ -15,6 +17,7 @@ import { StructView } from "./elements/StructView";
 import { ClassView } from "./elements/ClassView";
 import { OutputElement } from "./elements/OutputElement";
 import { InputElement } from "./elements/InputElement";
+import { HeapPointerElement } from "./elements/HeapPointerElement"; // ✅ NEW IMPORT
 import { LayoutEngine, LayoutElement } from "./layout/LayoutEngine";
 import { InputDialog } from "./InputDialog";
 import { socketService } from "../../api/socket.service";
@@ -28,7 +31,6 @@ const COLORS = {
   globalBorder: "#2DD4BF",
 };
 
-// Spacing constants
 const SPACING = {
   VERTICAL: 16,
   HORIZONTAL: 20,
@@ -53,6 +55,8 @@ const getVarColor = (type: string) => {
   const normalized = type?.toLowerCase() || "default";
   if (normalized.includes("[]") || normalized.includes("array"))
     return "#10B981";
+  if (normalized.includes("*") || normalized.includes("ptr"))
+    return "#F59E0B";
   return VAR_COLORS[normalized] || VAR_COLORS.default;
 };
 
@@ -60,7 +64,6 @@ export default function VisualizationCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
 
-  // Store selectors
   const executionTrace = useExecutionStore((state) => state.executionTrace);
   const currentStep = useExecutionStore((state) => state.currentStep);
   const getCurrentStep = useExecutionStore((state) => state.getCurrentStep);
@@ -69,7 +72,6 @@ export default function VisualizationCanvas() {
   const { setCanvasSize, zoom, setZoom, position, setPosition } =
     useCanvasStore();
 
-  // Local state
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
   const [dragMode, setDragMode] = useState(false);
   const [inputDialogOpen, setInputDialogOpen] = useState(false);
@@ -81,7 +83,6 @@ export default function VisualizationCanvas() {
   const currentStepData = getCurrentStep();
   const state = currentStepData?.state;
 
-  // Calculate full layout (all elements up to current step)
   const fullLayout = useMemo(() => {
     if (!state || !executionTrace || executionTrace.steps.length === 0)
       return null;
@@ -96,7 +97,6 @@ export default function VisualizationCanvas() {
     return layout;
   }, [state, currentStep, executionTrace, dimensions.width, dimensions.height]);
 
-  // Filter elements to only show those that should be visible at current step
   const visibleLayout = useMemo(() => {
     if (!fullLayout) return null;
 
@@ -144,7 +144,6 @@ export default function VisualizationCanvas() {
     return filtered;
   }, [fullLayout, currentStep]);
 
-  // Track which elements are NEW in the current step
   const elementAnimationStates = useMemo(() => {
     if (!visibleLayout) return new Map();
 
@@ -171,7 +170,6 @@ export default function VisualizationCanvas() {
     return states;
   }, [visibleLayout, currentStep]);
 
-  // Compute staggered enter delays for new elements
   const enterDelayMap = useMemo(() => {
     const map = new Map<string, number>();
     if (!visibleLayout) return map;
@@ -201,7 +199,6 @@ export default function VisualizationCanvas() {
     return map;
   }, [visibleLayout, elementAnimationStates]);
 
-  // Keep snapshot of visible elements for change detection
   useEffect(() => {
     if (!visibleLayout) return;
     const map = new Map<string, any>();
@@ -214,12 +211,10 @@ export default function VisualizationCanvas() {
     prevElementsRef.current = map;
   }, [visibleLayout]);
 
-  // Update previous step ref
   useEffect(() => {
     prevStepRef.current = currentStep;
   }, [currentStep]);
 
-  // Responsive sizing
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
@@ -242,7 +237,6 @@ export default function VisualizationCanvas() {
     };
   }, [setCanvasSize]);
 
-  // Auto-focus camera on most recent element
   useEffect(() => {
     if (!visibleLayout || !stageRef.current) return;
 
@@ -253,7 +247,6 @@ export default function VisualizationCanvas() {
       return (animState?.isNew && movingForward) || animState?.isUpdated;
     });
 
-    // Check if array panel is new
     if (visibleLayout.arrayPanel && movingForward) {
       const arrayPanelStepId =
         visibleLayout.arrayPanel.stepId ||
@@ -315,7 +308,6 @@ export default function VisualizationCanvas() {
     visibleLayout,
   ]);
 
-  // Track update arrows
   useEffect(() => {
     if (!visibleLayout || !visibleLayout.updateArrows) return;
 
@@ -335,7 +327,6 @@ export default function VisualizationCanvas() {
     return () => clearTimeout(timeout);
   }, [currentStep, visibleLayout]);
 
-  // Zoom & Pan controls
   const handleZoomIn = useCallback(() => {
     setZoom(Math.min(zoom + 0.1, 3));
   }, [zoom, setZoom]);
@@ -376,7 +367,6 @@ export default function VisualizationCanvas() {
     [setZoom, setPosition],
   );
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === " ") {
@@ -395,7 +385,6 @@ export default function VisualizationCanvas() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [dragMode, handleZoomIn, handleZoomOut, handleFitToScreen]);
 
-  // Listen for input required
   useEffect(() => {
     const handleInputRequired = (data: any) => {
       console.log(
@@ -421,7 +410,6 @@ export default function VisualizationCanvas() {
     };
   }, [isAnalyzing]);
 
-  // Handle input submission
   const handleInputSubmit = (value: string | number) => {
     console.log("[VisualizationCanvas] Submitting input:", value);
     socketService.provideInput(value);
@@ -455,7 +443,6 @@ export default function VisualizationCanvas() {
     setInputDialogProps(null);
   };
 
-  // Helper to filter redundant declaration/initialization pairs
   const filterChildren = (children: LayoutElement[] | undefined) => {
     if (!children) return [];
 
@@ -494,7 +481,7 @@ export default function VisualizationCanvas() {
   };
 
   // ============================================
-  // RENDER ELEMENT - FIXED WITH ARRAY SUPPORT
+  // ✅ UPDATED RENDER ELEMENT - HEAP/POINTER SUPPORT
   // ============================================
   const renderElement = (
     element: LayoutElement,
@@ -534,8 +521,32 @@ export default function VisualizationCanvas() {
           </StackFrame>
         );
 
+      // ✅ NEW CASE: heap_pointer
+      case "heap_pointer": {
+        return (
+          <HeapPointerElement
+            key={`${id}-${stepId}`}
+            id={id}
+            name={data?.name || "ptr"}
+            type={data?.type || "void*"}
+            value={data?.value}
+            address={data?.address}
+            x={x}
+            y={y}
+            isNew={isNew}
+            isUpdated={isUpdated}
+            stepNumber={stepId}
+            enterDelay={enterDelayMap.get(id) || 0}
+            pointsTo={data?.pointsTo}
+            isHeapBacked={data?.memoryRegion === "heap"}
+            memoryRegion={data?.memoryRegion || "stack"}
+            decayedFromArray={data?.decayedFromArray}
+            aliasOf={data?.aliasOf}
+          />
+        );
+      }
+
       case "variable": {
-        // Determine variable state
         let varState: "declared" | "initialized" | "multiple-init" | "updated" =
           "initialized";
         if (data?.state === "declared") {
@@ -554,7 +565,6 @@ export default function VisualizationCanvas() {
 
         const effectiveIsNew = isNew || isUpdated;
 
-        // CRITICAL FIX: Detect arrays via eventType or dimensions
         const normalizedType = (data?.type || data?.primitive || "")
           .toString()
           .toLowerCase();
@@ -564,12 +574,10 @@ export default function VisualizationCanvas() {
           data?.dimensions?.length > 0;
 
         if (isArrayVar) {
-          // Format dimensions for display
           let dimensionText = "";
           if (data?.dimensions && data.dimensions.length > 0) {
             dimensionText = ` [${data.dimensions.join("][")}]`;
           } else if (normalizedType.includes("[")) {
-            // Extract from type string if available
             const match = normalizedType.match(/\[(\d+)\]/);
             dimensionText = match ? ` [${match[1]}]` : "";
           }
@@ -597,7 +605,6 @@ export default function VisualizationCanvas() {
           );
         }
 
-        // Regular variable rendering
         return (
           <VariableBox
             key={`${id}-${stepId}`}
@@ -882,7 +889,6 @@ export default function VisualizationCanvas() {
           overflow: "hidden",
         }}
       >
-        {/* Controls */}
         <div
           style={{
             position: "absolute",
@@ -967,7 +973,6 @@ export default function VisualizationCanvas() {
           </button>
         </div>
 
-        {/* Step Info */}
         <div
           style={{
             position: "absolute",
@@ -987,7 +992,6 @@ export default function VisualizationCanvas() {
           Step {currentStep + 1} / {executionTrace.totalSteps}
         </div>
 
-        {/* Canvas */}
         {dimensions.width > 0 && dimensions.height > 0 && (
           <Stage
             ref={stageRef}
@@ -1013,7 +1017,6 @@ export default function VisualizationCanvas() {
             }}
           >
             <Layer>
-              {/* Grid */}
               <Group>
                 {Array.from({ length: Math.floor(dimensions.width / 20) }).map(
                   (_, i) => (
@@ -1037,14 +1040,12 @@ export default function VisualizationCanvas() {
                 )}
               </Group>
 
-              {/* Main Function Container */}
               {visibleLayout.mainFunction && (
                 <Group x={0} y={0}>
                   {renderElement(visibleLayout.mainFunction)}
                 </Group>
               )}
 
-              {/* Array Panel */}
               {visibleLayout.arrayPanel &&
                 visibleLayout.arrayPanel.data?.arrays &&
                 visibleLayout.arrayPanel.data.arrays.length > 0 && (
@@ -1060,12 +1061,10 @@ export default function VisualizationCanvas() {
                   </Group>
                 )}
 
-              {/* Global Panel with Arrow */}
               {visibleLayout.globalPanel &&
                 visibleLayout.globalPanel.children &&
                 visibleLayout.globalPanel.children.length > 0 && (
                   <Group x={0} y={0}>
-                    {/* Arrow from main to globals */}
                     <Arrow
                       points={[
                         visibleLayout.mainFunction.x +
@@ -1116,7 +1115,6 @@ export default function VisualizationCanvas() {
                   </Group>
                 )}
 
-              {/* Update Arrows */}
               {activeArrows.size > 0 && (
                 <Group>
                   {Array.from(activeArrows.entries()).map(
@@ -1144,35 +1142,18 @@ export default function VisualizationCanvas() {
                 </Group>
               )}
 
-              {/* Array References (Arrows from stack to array panel) */}
               {visibleLayout.arrayReferences &&
                 visibleLayout.arrayReferences.length > 0 && (
                   <Group>
                     {visibleLayout.arrayReferences.map((ref) => {
-                      const fromElement = visibleLayout.elements.find(
-                        (el) => el.id === ref.data.fromElement,
-                      );
-                      const toArray =
-                        visibleLayout.arrayPanel?.data?.arrays?.find(
-                          (arr: any) => arr.name === ref.data.arrayName,
-                        );
-
-                      if (!fromElement || !toArray || !visibleLayout.arrayPanel)
-                        return null;
-
-                      const fromX = fromElement.x + fromElement.width;
-                      const fromY = fromElement.y + fromElement.height / 2;
-                      const toX = visibleLayout.arrayPanel.x;
-                      const toY = visibleLayout.arrayPanel.y + 100;
-
                       return (
                         <ArrayReference
                           key={ref.id}
                           id={ref.id}
-                          fromX={fromX}
-                          fromY={fromY}
-                          toX={toX}
-                          toY={toY}
+                          fromX={ref.data.fromX}
+                          fromY={ref.data.fromY}
+                          toX={ref.data.toX}
+                          toY={ref.data.toY}
                           variableName={ref.data.variableName}
                           arrayName={ref.data.arrayName}
                           isNew={ref.stepId === currentStep}
@@ -1186,7 +1167,6 @@ export default function VisualizationCanvas() {
         )}
       </div>
 
-      {/* Input Dialog */}
       {inputDialogOpen && inputDialogProps && (
         <InputDialog
           isOpen={inputDialogOpen}
