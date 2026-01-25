@@ -1,3 +1,6 @@
+// frontend/src/components/canvas/types.ts
+// COMPLETE - All existing types + function types
+
 export interface CanvasTransform {
   scale: number;
   position: { x: number; y: number };
@@ -34,7 +37,7 @@ export interface StackFrameData {
   width: number;
   height: number;
   locals: VariableData[];
-  output: OutputData[]; // Added output directly to StackFrameData
+  output: OutputData[];
 }
 
 export interface ArrayData {
@@ -96,6 +99,48 @@ export interface LoopIndicatorData {
   y: number;
 }
 
+// ============================================
+// FUNCTION-RELATED TYPES
+// ============================================
+
+export interface FunctionParameter {
+  name: string;
+  type: string;
+  value?: any;
+}
+
+export interface FunctionData {
+  id: string;
+  functionName: string;
+  returnType: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  isRecursive: boolean;
+  depth: number;
+  calledFrom?: string;
+  parameters: FunctionParameter[];
+  localVarCount: number;
+  isActive: boolean;
+  isReturning: boolean;
+  birthStep: number;
+  lastActiveStep?: number;
+}
+
+export interface FunctionCallArrowData {
+  id: string;
+  fromFunctionId: string;
+  toFunctionId: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  label?: string;
+  isRecursive: boolean;
+  stepId: number;
+}
+
 export interface LayoutResult {
   globals: VariableData[];
   arrays: ArrayData[];
@@ -103,5 +148,7 @@ export interface LayoutResult {
   heap: HeapBlockData[];
   pointers: PointerArrowData[];
   loopIndicators: LoopIndicatorData[];
+  functions?: FunctionData[];
+  functionArrows?: FunctionCallArrowData[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
 }

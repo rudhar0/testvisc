@@ -1,5 +1,5 @@
 // frontend/src/components/canvas/VisualizationCanvas.tsx
-// ✅ UPDATED: Adds heap_pointer rendering
+// ✅ UPDATED: Adds function element rendering + heap_pointer support
 
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { Stage, Layer, Group, Rect, Line, Text, Arrow } from "react-konva";
@@ -17,7 +17,9 @@ import { StructView } from "./elements/StructView";
 import { ClassView } from "./elements/ClassView";
 import { OutputElement } from "./elements/OutputElement";
 import { InputElement } from "./elements/InputElement";
-import { HeapPointerElement } from "./elements/HeapPointerElement"; // ✅ NEW IMPORT
+import { HeapPointerElement } from "./elements/HeapPointerElement";
+import { FunctionElement } from "./elements/FunctionElement";
+import { FunctionCallArrow } from "./elements/FunctionCallArrow";
 import { LayoutEngine, LayoutElement } from "./layout/LayoutEngine";
 import { InputDialog } from "./InputDialog";
 import { socketService } from "../../api/socket.service";
@@ -29,6 +31,7 @@ const COLORS = {
   grid: "#1E293B",
   mainBorder: "#A855F7",
   globalBorder: "#2DD4BF",
+  functionBorder: "#8B5CF6",
 };
 
 const SPACING = {
@@ -128,6 +131,11 @@ export default function VisualizationCanvas() {
       return true;
     });
 
+    // ✅ Filter function arrows
+    const filteredFunctionArrows = (fullLayout.functionArrows || []).filter(
+      (arrow) => arrow.stepId !== undefined && arrow.stepId <= currentStep
+    );
+
     const filtered = {
       ...fullLayout,
       mainFunction: {
@@ -139,6 +147,7 @@ export default function VisualizationCanvas() {
         children: filteredGlobalChildren,
       },
       elements: filteredElements,
+      functionArrows: filteredFunctionArrows,
     };
 
     return filtered;
@@ -481,7 +490,7 @@ export default function VisualizationCanvas() {
   };
 
   // ============================================
-  // ✅ UPDATED RENDER ELEMENT - HEAP/POINTER SUPPORT
+  // ✅ UPDATED RENDER ELEMENT - FUNCTION + HEAP/POINTER SUPPORT
   // ============================================
   const renderElement = (
     element: LayoutElement,
@@ -521,7 +530,41 @@ export default function VisualizationCanvas() {
           </StackFrame>
         );
 
-      // ✅ NEW CASE: heap_pointer
+      // ✅ NEW CASE: function_call
+      case "function_call": {
+        return (
+          <FunctionElement
+            key={`${id}-${stepId}`}
+            id={id}
+            functionName={data?.functionName || "function"}
+            returnType={data?.returnType || "void"}
+            x={x}
+            y={y}
+            isRecursive={data?.isRecursive || false}
+            depth={data?.depth || 0}
+            calledFrom={data?.calledFrom}
+            parameters={data?.parameters || []}
+            localVarCount={data?.localVarCount || 0}
+            isNew={isNew}
+            isActive={data?.isActive || false}
+            isReturning={data?.isReturning || false}
+            stepNumber={stepId}
+            enterDelay={enterDelayMap.get(id) || 0}
+          >
+            {filterChildren(children).map((child) => {
+              const relativeX = child.x - x;
+              const relativeY = child.y - y - 55; // Header height
+              return (
+                <Group key={child.id} x={relativeX} y={relativeY}>
+                  {renderElement(child, x, y)}
+                </Group>
+              );
+            })}
+          </FunctionElement>
+        );
+      }
+
+      // ✅ CASE: heap_pointer
       case "heap_pointer": {
         return (
           <HeapPointerElement
@@ -1045,6 +1088,36 @@ export default function VisualizationCanvas() {
                   {renderElement(visibleLayout.mainFunction)}
                 </Group>
               )}
+
+              {/* ✅ RENDER FUNCTION ELEMENTS */}
+              {visibleLayout.elements
+                .filter((el) => el.type === "function_call")
+                .map((funcEl) => (
+                  <Group key={funcEl.id} x={0} y={0}>
+                    {renderElement(funcEl)}
+                  </Group>
+                ))}
+
+              {/* ✅ RENDER FUNCTION CALL ARROWS */}
+              {visibleLayout.functionArrows &&
+                visibleLayout.functionArrows.length > 0 && (
+                  <Group>
+                    {visibleLayout.functionArrows.map((arrow) => (
+                      <FunctionCallArrow
+                        key={arrow.id}
+                        id={arrow.id}
+                        fromX={arrow.data.fromX}
+                        fromY={arrow.data.fromY}
+                        toX={arrow.data.toX}
+                        toY={arrow.data.toY}
+                        label={arrow.data.label}
+                        isActive={arrow.stepId === currentStep}
+                        isRecursive={arrow.data.isRecursive || false}
+                        isNew={arrow.stepId === currentStep}
+                      />
+                    ))}
+                  </Group>
+                )}
 
               {visibleLayout.arrayPanel &&
                 visibleLayout.arrayPanel.data?.arrays &&

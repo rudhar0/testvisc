@@ -1,5 +1,5 @@
 // frontend/src/components/canvas/layout/LayoutEngine.ts
-// ✅ COMPLETE FIX - All issues resolved
+// ✅ COMPLETE FIX - Corrected Map syntax
 
 import type {
   MemoryState,
@@ -22,6 +22,7 @@ export interface LayoutElement {
     | "input"
     | "global"
     | "function"
+    | "function_call"
     | "struct"
     | "class"
     | "array_panel"
@@ -52,11 +53,11 @@ export interface Layout {
   elements: LayoutElement[];
   arrayReferences: LayoutElement[];
   updateArrows: LayoutElement[];
+  functionArrows: LayoutElement[];
   width: number;
   height: number;
 }
 
-// ✅ FIX: Reduced spacing
 const ELEMENT_SPACING = 8;
 const INDENT_SIZE = 10;
 const HEADER_HEIGHT = 50;
@@ -65,23 +66,23 @@ const MAIN_FUNCTION_Y = 40;
 const MAIN_FUNCTION_WIDTH = 400;
 const GLOBAL_PANEL_WIDTH = 400;
 const PANEL_GAP = 40;
-const VARIABLE_HEIGHT = 70; // ✅ Reduced from 140
+const VARIABLE_HEIGHT = 70;
+const FUNCTION_BOX_WIDTH = 400;
+const FUNCTION_VERTICAL_SPACING = 100;
+
+interface ArrayTrackerData {
+  name: string;
+  baseType: string;
+  dimensions: number[];
+  address: string;
+  owner: string;
+  birthStep: number;
+  values: Map<string, any>;
+  lastUpdateStep: number;
+}
 
 class ProgressiveArrayTracker {
-  private arrays: Map<
-    string,
-    {
-      name: string;
-      baseType: string;
-      dimensions: number[];
-      address: string;
-      owner: string;
-      birthStep: number;
-      values: Map<string, any>;
-      lastUpdateStep: number;
-    }
-  > = new Map();
-
+  private arrays: Map<string, ArrayTrackerData> = new Map();
   private stateCache: Map<string, any> = new Map();
 
   createArray(
@@ -141,9 +142,7 @@ class ProgressiveArrayTracker {
   ) {
     const arr = this.arrays.get(name);
     if (!arr) {
-      // ✅ FIX: Create array if it doesn't exist (for 2D arrays)
       console.warn(`Array ${name} not found, creating it...`);
-      // Try to infer dimensions from indices
       const dimensions = indices.map((idx) => idx + 1);
       this.createArray(name, 'int', dimensions, '0x0', 'main', stepIndex);
       const newArr = this.arrays.get(name);
@@ -235,12 +234,19 @@ class ProgressiveArrayTracker {
   }
 }
 
+interface FunctionCallStackEntry {
+  element: LayoutElement;
+  depth: number;
+}
+
 export class LayoutEngine {
   private static elementHistory: Map<string, LayoutElement> = new Map();
   private static arrayTracker = new ProgressiveArrayTracker();
   private static parentStack: LayoutElement[] = [];
   private static createdInStep: Map<string, number> = new Map();
   private static updateArrows: Map<number, LayoutElement[]> = new Map();
+  private static functionCallStack: Map<string, FunctionCallStackEntry[]> = new Map();
+  private static functionArrows: LayoutElement[] = [];
 
   public static calculateLayout(
     executionTrace: ExecutionTrace,
@@ -273,6 +279,7 @@ export class LayoutEngine {
       elements: [],
       arrayReferences: [],
       updateArrows: [],
+      functionArrows: [],
       width: canvasWidth,
       height: canvasHeight,
     };
@@ -281,6 +288,8 @@ export class LayoutEngine {
     this.arrayTracker = new ProgressiveArrayTracker();
     this.createdInStep.clear();
     this.updateArrows.clear();
+    this.functionCallStack.clear();
+    this.functionArrows = [];
     this.parentStack = [layout.mainFunction];
 
     for (
@@ -297,6 +306,7 @@ export class LayoutEngine {
     this.createArrayReferences(layout, currentStepIndex);
     this.createUpdateArrows(layout, currentStepIndex);
     this.updateContainerHeights(layout);
+    layout.functionArrows = this.functionArrows;
 
     return layout;
   }
@@ -309,6 +319,77 @@ export class LayoutEngine {
   ): void {
     const stepType: string = (step as any).eventType || (step as any).type;
     const currentParent = this.parentStack[this.parentStack.length - 1];
+
+    // ✅ HANDLE function_call (detect by function change)
+    if (stepType === "var_declare" && (step as any).function !== "main") {
+      const functionName = (step as any).function;
+      
+      // Check if this is a new function call
+      if (!this.functionCallStack.has(functionName) || 
+          this.functionCallStack.get(functionName)!.length === 0) {
+        
+        const depth = this.functionCallStack.get(functionName)?.length || 0;
+        const isRecursive = depth > 0;
+        
+        // Calculate position
+        const funcX = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP;
+        const existingFunctions = Array.from(this.functionCallStack.values()).flat();
+        const funcY = MAIN_FUNCTION_Y + existingFunctions.length * FUNCTION_VERTICAL_SPACING;
+        
+        const functionElement: LayoutElement = {
+          id: `function-${functionName}-${stepIndex}`,
+          type: "function_call",
+          x: funcX,
+          y: funcY,
+          width: FUNCTION_BOX_WIDTH,
+          height: 150,
+          children: [],
+          stepId: stepIndex,
+          data: {
+            functionName: functionName,
+            returnType: "int",
+            isRecursive: isRecursive,
+            depth: depth,
+            calledFrom: "main",
+            parameters: [],
+            localVarCount: 0,
+            isActive: true,
+            isReturning: false,
+          },
+        };
+
+        layout.elements.push(functionElement);
+        this.elementHistory.set(functionElement.id, functionElement);
+        
+        if (!this.functionCallStack.has(functionName)) {
+          this.functionCallStack.set(functionName, []);
+        }
+        this.functionCallStack.get(functionName)!.push({ element: functionElement, depth });
+        
+        // Create arrow from main to function
+        const arrow: LayoutElement = {
+          id: `arrow-main-to-${functionName}-${stepIndex}`,
+          type: "array_reference",
+          subtype: "function_arrow",
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 0,
+          stepId: stepIndex,
+          data: {
+            fromX: MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH,
+            fromY: MAIN_FUNCTION_Y + 60,
+            toX: funcX,
+            toY: funcY + 75,
+            label: `call ${functionName}()`,
+            isRecursive: isRecursive,
+          },
+        };
+        
+        this.functionArrows.push(arrow);
+        this.parentStack.push(functionElement);
+      }
+    }
 
     // ✅ HANDLE var_assign
     if (stepType === "var_assign") {
