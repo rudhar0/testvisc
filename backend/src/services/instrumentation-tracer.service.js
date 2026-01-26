@@ -1,4 +1,5 @@
 // backend/src/services/instrumentation-tracer.service.js
+// ENHANCED VERSION with call frame tracking metadata
 import { spawn } from 'child_process';
 import { writeFile, readFile, unlink, mkdir, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -21,12 +22,70 @@ class InstrumentationTracer {
         this.pointerRegistry = new Map();
         this.functionRegistry = new Map();
         this.callStack = [];
+        
+        // NEW: Call frame tracking
+        this.frameStack = [];
+        this.globalCallIndex = 0;
+        this.frameCounts = new Map(); // Track call count per function name
     }
 
     async ensureTempDir() {
         if (!existsSync(this.tempDir)) {
             await mkdir(this.tempDir, { recursive: true });
         }
+    }
+
+    // NEW: Generate unique frame ID
+    generateFrameId(functionName) {
+        const count = this.frameCounts.get(functionName) || 0;
+        this.frameCounts.set(functionName, count + 1);
+        return `${functionName}-${count}`;
+    }
+
+    // NEW: Get current frame metadata
+    getCurrentFrameMetadata() {
+        if (this.frameStack.length === 0) {
+            return {
+                frameId: 'main-0',
+                callDepth: 0,
+                callIndex: this.globalCallIndex++,
+                parentFrameId: undefined
+            };
+        }
+        
+        const current = this.frameStack[this.frameStack.length - 1];
+        return {
+            frameId: current.frameId,
+            callDepth: current.callDepth,
+            callIndex: this.globalCallIndex++,
+            parentFrameId: current.parentFrameId
+        };
+    }
+
+    // NEW: Push a new call frame
+    pushCallFrame(functionName) {
+        const parentFrame = this.frameStack.length > 0 
+            ? this.frameStack[this.frameStack.length - 1] 
+            : null;
+        
+        const frameId = this.generateFrameId(functionName);
+        const callDepth = this.frameStack.length;
+        
+        const frame = {
+            frameId,
+            functionName,
+            callDepth,
+            parentFrameId: parentFrame ? parentFrame.frameId : undefined,
+            entryCallIndex: this.globalCallIndex++
+        };
+        
+        this.frameStack.push(frame);
+        return frame;
+    }
+
+    // NEW: Pop call frame on function exit
+    popCallFrame() {
+        return this.frameStack.pop();
     }
 
     async getLineInfo(executable, address) {
@@ -121,6 +180,10 @@ class InstrumentationTracer {
             if (line.trim().length === 0 && i === lines.length - 1) continue;
 
             const { rendered, escapes } = this.parseEscapeSequences(line);
+            
+            // NEW: Add frame metadata to output steps
+            const frameMetadata = this.getCurrentFrameMetadata();
+            
             steps.push({
                 stepIndex: stepIndex++,
                 eventType: 'output',
@@ -133,7 +196,9 @@ class InstrumentationTracer {
                 rawText: line,
                 escapeInfo: escapes,
                 explanation: `📤 Output: "${rendered}"`,
-                internalEvents: []
+                internalEvents: [],
+                // NEW: Frame tracking
+                ...frameMetadata
             });
         }
         return steps;
@@ -251,6 +316,11 @@ class InstrumentationTracer {
         let mainStarted = false;
         let currentFunction = 'main';
 
+        // NEW: Reset frame tracking for this trace
+        this.frameStack = [];
+        this.globalCallIndex = 0;
+        this.frameCounts = new Map();
+
         const normalizeFunctionName = (name) => {
             if (!name) return 'unknown';
             return name.replace(/[\r\n]/g, '');
@@ -271,8 +341,11 @@ class InstrumentationTracer {
                 info.function = normalizeFunctionName(info.function);
             }
 
-            // Program start
+            // Program start - Initialize main frame
             if (!mainStarted && info.function === 'main' && ev.type === 'func_enter') {
+                // NEW: Push main frame
+                const mainFrame = this.pushCallFrame('main');
+                
                 steps.push({
                     stepIndex: stepIndex++,
                     eventType: 'program_start',
@@ -282,7 +355,13 @@ class InstrumentationTracer {
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     explanation: '🚀 Program started',
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    frameId: mainFrame.frameId,
+                    callDepth: mainFrame.callDepth,
+                    callIndex: mainFrame.entryCallIndex,
+                    parentFrameId: mainFrame.parentFrameId,
+                    isFunctionEntry: true
                 });
                 mainStarted = true;
                 currentFunction = 'main';
@@ -293,21 +372,65 @@ class InstrumentationTracer {
             if (this.shouldFilterEvent(info, ev, sourceFile)) continue;
             if (!info.file || info.line === 0) continue;
 
-            // Function tracking
+            // NEW: Function entry - push frame
             if (ev.type === 'func_enter' && info.function !== 'main') {
+                const newFrame = this.pushCallFrame(info.function);
                 currentFunction = info.function;
-                this.callStack.push({ function: info.function, depth: this.callStack.length + 1 });
+                
+                // Add function entry step
+                steps.push({
+                    stepIndex: stepIndex++,
+                    eventType: 'func_enter',
+                    line: info.line,
+                    function: info.function,
+                    scope: 'function',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    explanation: `➡️ Entering ${info.function}`,
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    frameId: newFrame.frameId,
+                    callDepth: newFrame.callDepth,
+                    callIndex: newFrame.entryCallIndex,
+                    parentFrameId: newFrame.parentFrameId,
+                    isFunctionEntry: true
+                });
                 continue;
             }
 
+            // NEW: Function exit - pop frame
             if (ev.type === 'func_exit') {
-                if (this.callStack.length > 0) this.callStack.pop();
-                currentFunction = this.callStack.length > 0 
-                    ? this.callStack[this.callStack.length - 1].function 
+                const exitingFrame = this.popCallFrame();
+                
+                if (exitingFrame) {
+                    steps.push({
+                        stepIndex: stepIndex++,
+                        eventType: 'func_exit',
+                        line: info.line,
+                        function: info.function,
+                        scope: 'function',
+                        file: path.basename(info.file),
+                        timestamp: ev.ts || null,
+                        explanation: `⬅️ Exiting ${info.function}`,
+                        internalEvents: [],
+                        // NEW: Frame metadata (use exiting frame)
+                        frameId: exitingFrame.frameId,
+                        callDepth: exitingFrame.callDepth,
+                        callIndex: this.globalCallIndex++,
+                        parentFrameId: exitingFrame.parentFrameId,
+                        isFunctionExit: true
+                    });
+                }
+                
+                currentFunction = this.frameStack.length > 0 
+                    ? this.frameStack[this.frameStack.length - 1].functionName 
                     : 'main';
                 if (!currentFunction) currentFunction = 'main';
                 continue;
             }
+
+            // NEW: Get current frame metadata for all other events
+            const frameMetadata = this.getCurrentFrameMetadata();
 
             let step = null;
 
@@ -328,7 +451,9 @@ class InstrumentationTracer {
                     isStack: ev.isStack !== false,
                     memoryRegion: 'stack',
                     explanation: `📦 Array ${ev.name}${JSON.stringify(ev.dimensions)} declared`,
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    ...frameMetadata
                 };
                 
                 this.arrayRegistry.set(ev.name, {
@@ -355,7 +480,9 @@ class InstrumentationTracer {
                     value: ev.value,
                     memoryRegion: 'stack',
                     explanation: `${ev.name}${JSON.stringify(ev.indices)} = ${ev.value}${charInfo}`,
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    ...frameMetadata
                 };
                 
             // Pointer alias (array decay or address-of)
@@ -380,7 +507,9 @@ class InstrumentationTracer {
                     explanation: ev.decayedFromArray 
                         ? `${ev.name} → ${ev.aliasOf} (array decay)`
                         : `${ev.name} → &${ev.aliasOf}`,
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    ...frameMetadata
                 };
                 
                 this.pointerRegistry.set(ev.name, {
@@ -406,7 +535,9 @@ class InstrumentationTracer {
                     explanation: ev.isHeap
                         ? `*${ev.pointerName} = ${ev.value} (heap write)`
                         : `*${ev.pointerName} = ${ev.value} (writes to ${ev.targetName})`,
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    ...frameMetadata
                 };
                 
             // Heap write (following pointer deref)
@@ -423,7 +554,9 @@ class InstrumentationTracer {
                     value: ev.value,
                     memoryRegion: 'heap',
                     explanation: `Heap cell = ${ev.value}`,
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    ...frameMetadata
                 };
                 
             // Variable declaration
@@ -440,7 +573,9 @@ class InstrumentationTracer {
                     name: ev.name,
                     varType: ev.varType,
                     explanation: `${ev.varType} ${ev.name} declared`,
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    ...frameMetadata
                 };
                 
             // Variable assignment - ALWAYS emit (no dedup in beginner mode)
@@ -457,7 +592,9 @@ class InstrumentationTracer {
                     name: ev.name,
                     value: ev.value,
                     explanation: `${ev.name} = ${ev.value}`,
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    ...frameMetadata
                 };
                 
             // Heap allocation
@@ -475,7 +612,9 @@ class InstrumentationTracer {
                     memoryRegion: 'heap',
                     baseType: 'int',
                     explanation: `Allocated ${ev.size} bytes on heap`,
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    ...frameMetadata
                 };
                 
             // Heap free
@@ -491,7 +630,9 @@ class InstrumentationTracer {
                     address: ev.addr,
                     memoryRegion: 'heap',
                     explanation: `Freed heap memory`,
-                    internalEvents: []
+                    internalEvents: [],
+                    // NEW: Frame metadata
+                    ...frameMetadata
                 };
             }
 
@@ -506,6 +647,8 @@ class InstrumentationTracer {
 
         // Program end
         const lastStepIndex = allSteps.at(-1)?.stepIndex ?? 0;
+        const finalFrameMetadata = this.getCurrentFrameMetadata();
+        
         allSteps.push({
             stepIndex: lastStepIndex + 1,
             eventType: 'program_end',
@@ -515,10 +658,12 @@ class InstrumentationTracer {
             file: path.basename(sourceFile),
             timestamp: Date.now(),
             explanation: '✅ Program completed',
-            internalEvents: []
+            internalEvents: [],
+            // NEW: Frame metadata
+            ...finalFrameMetadata
         });
 
-        console.log(`✅ Generated ${allSteps.length} beginner-correct steps`);
+        console.log(`✅ Generated ${allSteps.length} beginner-correct steps with frame tracking`);
         
         return allSteps;
     }
@@ -554,12 +699,17 @@ class InstrumentationTracer {
     }
 
     async generateTrace(code, language = 'cpp') {
-        console.log('🚀 Starting beginner-correct trace generation...');
+        console.log('🚀 Starting beginner-correct trace generation with frame tracking...');
 
         this.arrayRegistry.clear();
         this.pointerRegistry.clear();
         this.functionRegistry.clear();
         this.callStack = [];
+        
+        // NEW: Reset frame tracking
+        this.frameStack = [];
+        this.globalCallIndex = 0;
+        this.frameCounts = new Map();
 
         let exe, src, traceOut, hdr;
         try {
@@ -580,7 +730,7 @@ class InstrumentationTracer {
                 functions: this.extractFunctions(steps, functions),
                 metadata: {
                     debugger: 'gcc-instrumentation-beginner-correct',
-                    version: '7.0',
+                    version: '7.1',  // Increment version for frame tracking
                     hasRealMemory: true,
                     hasHeapTracking: true,
                     hasArraySupport: true,
@@ -588,6 +738,7 @@ class InstrumentationTracer {
                     hasPointerDerefWriteSemantics: true,
                     hasCharArrayStringInit: true,
                     noStepCollapsing: true,
+                    hasCallFrameTracking: true,  // NEW: Feature flag
                     capturedEvents: events.length,
                     emittedSteps: steps.length,
                     programOutput: stdout,
@@ -595,11 +746,12 @@ class InstrumentationTracer {
                 }
             };
             
-            console.log('✅ Beginner-correct trace complete', {
+            console.log('✅ Beginner-correct trace complete with frame tracking', {
                 steps: result.totalSteps,
                 functions: result.functions.length,
                 arrays: this.arrayRegistry.size,
-                pointers: this.pointerRegistry.size
+                pointers: this.pointerRegistry.size,
+                maxCallDepth: Math.max(...steps.map(s => s.callDepth || 0))
             });
             
             return result;

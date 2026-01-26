@@ -1,5 +1,4 @@
 // frontend/src/components/canvas/layout/LayoutEngine.ts
-// ✅ COMPLETE FIX - Corrected Map syntax
 
 import type {
   MemoryState,
@@ -68,7 +67,7 @@ const GLOBAL_PANEL_WIDTH = 400;
 const PANEL_GAP = 40;
 const VARIABLE_HEIGHT = 70;
 const FUNCTION_BOX_WIDTH = 400;
-const FUNCTION_VERTICAL_SPACING = 100;
+const FUNCTION_VERTICAL_SPACING = 200;
 
 interface ArrayTrackerData {
   name: string;
@@ -234,19 +233,16 @@ class ProgressiveArrayTracker {
   }
 }
 
-interface FunctionCallStackEntry {
-  element: LayoutElement;
-  depth: number;
-}
-
 export class LayoutEngine {
   private static elementHistory: Map<string, LayoutElement> = new Map();
   private static arrayTracker = new ProgressiveArrayTracker();
-  private static parentStack: LayoutElement[] = [];
   private static createdInStep: Map<string, number> = new Map();
   private static updateArrows: Map<number, LayoutElement[]> = new Map();
-  private static functionCallStack: Map<string, FunctionCallStackEntry[]> = new Map();
+  private static functionFrames: Map<string, LayoutElement> = new Map();
   private static functionArrows: LayoutElement[] = [];
+  private static frameDepthMap: Map<string, number> = new Map();
+  private static frameOrderMap: Map<string, number> = new Map();
+  private static frameOrder: number = 0;
 
   public static calculateLayout(
     executionTrace: ExecutionTrace,
@@ -264,6 +260,7 @@ export class LayoutEngine {
         height: 80,
         children: [],
         stepId: 0,
+        data: { frameId: "main-0" },
       },
       globalPanel: {
         id: "global-panel",
@@ -288,9 +285,15 @@ export class LayoutEngine {
     this.arrayTracker = new ProgressiveArrayTracker();
     this.createdInStep.clear();
     this.updateArrows.clear();
-    this.functionCallStack.clear();
+    this.functionFrames.clear();
     this.functionArrows = [];
-    this.parentStack = [layout.mainFunction];
+    this.frameDepthMap.clear();
+    this.frameOrderMap.clear();
+    this.frameOrder = 0;
+
+    this.functionFrames.set("main-0", layout.mainFunction);
+    this.frameDepthMap.set("main-0", 0);
+    this.frameOrderMap.set("main-0", this.frameOrder++);
 
     for (
       let i = 0;
@@ -318,26 +321,29 @@ export class LayoutEngine {
     currentStep: number,
   ): void {
     const stepType: string = (step as any).eventType || (step as any).type;
-    const currentParent = this.parentStack[this.parentStack.length - 1];
+    const frameId = (step as any).frameId;
+    const callDepth = (step as any).callDepth || 0;
+    const parentFrameId = (step as any).parentFrameId;
+    const isFunctionEntry = (step as any).isFunctionEntry;
+    const isFunctionExit = (step as any).isFunctionExit;
 
-    // ✅ HANDLE function_call (detect by function change)
-    if (stepType === "var_declare" && (step as any).function !== "main") {
+    if (stepType === "func_enter" && isFunctionEntry) {
       const functionName = (step as any).function;
       
-      // Check if this is a new function call
-      if (!this.functionCallStack.has(functionName) || 
-          this.functionCallStack.get(functionName)!.length === 0) {
-        
-        const depth = this.functionCallStack.get(functionName)?.length || 0;
-        const isRecursive = depth > 0;
-        
-        // Calculate position
-        const funcX = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP;
-        const existingFunctions = Array.from(this.functionCallStack.values()).flat();
-        const funcY = MAIN_FUNCTION_Y + existingFunctions.length * FUNCTION_VERTICAL_SPACING;
-        
+      if (!this.functionFrames.has(frameId)) {
+        this.frameDepthMap.set(frameId, callDepth);
+        this.frameOrderMap.set(frameId, this.frameOrder++);
+
+        const parentFrame = parentFrameId ? this.functionFrames.get(parentFrameId) : null;
+        const isRecursive = functionName === (parentFrame?.data?.functionName);
+
+        const funcX = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP + (callDepth - 1) * 80;
+        const baseY = MAIN_FUNCTION_Y;
+        const orderIndex = this.frameOrderMap.get(frameId) || 0;
+        const funcY = baseY + (orderIndex - 1) * FUNCTION_VERTICAL_SPACING;
+
         const functionElement: LayoutElement = {
-          id: `function-${functionName}-${stepIndex}`,
+          id: `function-${frameId}`,
           type: "function_call",
           x: funcX,
           y: funcY,
@@ -346,11 +352,12 @@ export class LayoutEngine {
           children: [],
           stepId: stepIndex,
           data: {
+            frameId: frameId,
             functionName: functionName,
             returnType: "int",
             isRecursive: isRecursive,
-            depth: depth,
-            calledFrom: "main",
+            depth: callDepth,
+            calledFrom: parentFrameId || "main",
             parameters: [],
             localVarCount: 0,
             isActive: true,
@@ -360,45 +367,97 @@ export class LayoutEngine {
 
         layout.elements.push(functionElement);
         this.elementHistory.set(functionElement.id, functionElement);
-        
-        if (!this.functionCallStack.has(functionName)) {
-          this.functionCallStack.set(functionName, []);
+        this.functionFrames.set(frameId, functionElement);
+
+        if (parentFrame) {
+          const arrow: LayoutElement = {
+            id: `arrow-${parentFrameId}-to-${frameId}`,
+            type: "array_reference",
+            subtype: "function_arrow",
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            stepId: stepIndex,
+            data: {
+              fromX: parentFrame.x + parentFrame.width,
+              fromY: parentFrame.y + 75,
+              toX: funcX,
+              toY: funcY + 75,
+              label: `call ${functionName}()`,
+              isRecursive: isRecursive,
+            },
+          };
+          this.functionArrows.push(arrow);
         }
-        this.functionCallStack.get(functionName)!.push({ element: functionElement, depth });
-        
-        // Create arrow from main to function
-        const arrow: LayoutElement = {
-          id: `arrow-main-to-${functionName}-${stepIndex}`,
-          type: "array_reference",
-          subtype: "function_arrow",
-          x: 0,
-          y: 0,
-          width: 0,
-          height: 0,
-          stepId: stepIndex,
-          data: {
-            fromX: MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH,
-            fromY: MAIN_FUNCTION_Y + 60,
-            toX: funcX,
-            toY: funcY + 75,
-            label: `call ${functionName}()`,
-            isRecursive: isRecursive,
-          },
-        };
-        
-        this.functionArrows.push(arrow);
-        this.parentStack.push(functionElement);
       }
+      return;
     }
 
-    // ✅ HANDLE var_assign
+    if (stepType === "func_exit" && isFunctionExit) {
+      const funcFrame = this.functionFrames.get(frameId);
+      if (funcFrame && funcFrame.data) {
+        funcFrame.data.isActive = false;
+        funcFrame.data.isReturning = true;
+      }
+      return;
+    }
+
+    const ownerFrame = this.functionFrames.get(frameId);
+    if (!ownerFrame) {
+      return;
+    }
+
+    if (stepType === "var_declare") {
+      const { name, symbol, varType } = step as any;
+      const varName = name || symbol;
+
+      if (!varName) return;
+
+      const varId = `var-${frameId}-${varName}`;
+
+      if (!this.elementHistory.has(varId)) {
+        const variable: any = {
+          name: varName,
+          value: undefined,
+          type: varType || "int",
+          primitive: varType || "int",
+          address: "0x0",
+          scope: "local",
+          isInitialized: false,
+          isAlive: true,
+          birthStep: stepIndex,
+          frameId: frameId,
+        };
+
+        const varElement: LayoutElement = {
+          id: varId,
+          type: "variable",
+          subtype: "variable_declaration_only",
+          x: ownerFrame.x + INDENT_SIZE,
+          y: this.getNextCursorY(ownerFrame),
+          width: ownerFrame.width - INDENT_SIZE * 2,
+          height: VARIABLE_HEIGHT,
+          parentId: ownerFrame.id,
+          stepId: stepIndex,
+          data: variable,
+        };
+
+        ownerFrame.children!.push(varElement);
+        layout.elements.push(varElement);
+        this.elementHistory.set(varId, varElement);
+        this.createdInStep.set(varId, stepIndex);
+      }
+      return;
+    }
+
     if (stepType === "var_assign") {
       const { name, value, symbol } = step as any;
       const varName = name || symbol;
 
       if (!varName) return;
 
-      const varId = `var-${currentParent.id}-${varName}`;
+      const varId = `var-${frameId}-${varName}`;
 
       if (!this.elementHistory.has(varId)) {
         const variable: any = {
@@ -411,22 +470,23 @@ export class LayoutEngine {
           isInitialized: true,
           isAlive: true,
           birthStep: stepIndex,
+          frameId: frameId,
         };
 
         const varElement: LayoutElement = {
           id: varId,
           type: "variable",
           subtype: "variable_initialization",
-          x: currentParent.x + INDENT_SIZE,
-          y: this.getNextCursorY(currentParent),
-          width: currentParent.width - INDENT_SIZE * 2,
+          x: ownerFrame.x + INDENT_SIZE,
+          y: this.getNextCursorY(ownerFrame),
+          width: ownerFrame.width - INDENT_SIZE * 2,
           height: VARIABLE_HEIGHT,
-          parentId: currentParent.id,
+          parentId: ownerFrame.id,
           stepId: stepIndex,
           data: variable,
         };
 
-        currentParent.children!.push(varElement);
+        ownerFrame.children!.push(varElement);
         layout.elements.push(varElement);
         this.elementHistory.set(varId, varElement);
         this.createdInStep.set(varId, stepIndex);
@@ -435,19 +495,19 @@ export class LayoutEngine {
         existingElement.data = {
           ...existingElement.data,
           value: value,
+          isInitialized: true,
         };
       }
       return;
     }
 
-    // ✅ HANDLE pointer_alias
     if (stepType === "pointer_alias") {
       const { name, symbol, aliasOf, decayedFromArray, pointsTo } = step as any;
       const ptrName = name || symbol;
 
       if (!ptrName) return;
 
-      const ptrId = `ptr-${currentParent.id}-${ptrName}`;
+      const ptrId = `ptr-${frameId}-${ptrName}`;
 
       if (!this.elementHistory.has(ptrId)) {
         const pointerData: any = {
@@ -464,17 +524,18 @@ export class LayoutEngine {
           pointsTo: pointsTo,
           decayedFromArray: decayedFromArray,
           aliasOf: aliasOf,
+          frameId: frameId,
         };
 
         const ptrElement: LayoutElement = {
           id: ptrId,
           type: "heap_pointer",
           subtype: decayedFromArray ? "array_alias" : "pointer",
-          x: currentParent.x + INDENT_SIZE,
-          y: this.getNextCursorY(currentParent),
-          width: currentParent.width - INDENT_SIZE * 2,
+          x: ownerFrame.x + INDENT_SIZE,
+          y: this.getNextCursorY(ownerFrame),
+          width: ownerFrame.width - INDENT_SIZE * 2,
           height: VARIABLE_HEIGHT,
-          parentId: currentParent.id,
+          parentId: ownerFrame.id,
           stepId: stepIndex,
           data: pointerData,
           metadata: {
@@ -482,7 +543,7 @@ export class LayoutEngine {
           },
         };
 
-        currentParent.children!.push(ptrElement);
+        ownerFrame.children!.push(ptrElement);
         layout.elements.push(ptrElement);
         this.elementHistory.set(ptrId, ptrElement);
         this.createdInStep.set(ptrId, stepIndex);
@@ -490,7 +551,6 @@ export class LayoutEngine {
       return;
     }
 
-    // ✅ HANDLE array_create
     if (stepType === "array_create" || stepType === "array_declaration") {
       const { 
         name, 
@@ -514,7 +574,7 @@ export class LayoutEngine {
         isInitializer ? initializerValues : undefined
       );
 
-      const varId = `var-${currentParent.id}-${arrayName}`;
+      const varId = `var-${frameId}-${arrayName}`;
       if (!this.elementHistory.has(varId)) {
         const arrayRefVar: any = {
           name: arrayName,
@@ -529,17 +589,18 @@ export class LayoutEngine {
           isArrayReference: true,
           arrayName: arrayName,
           dimensions: dimensions,
+          frameId: frameId,
         };
 
         const varElement: LayoutElement = {
           id: varId,
           type: "variable",
           subtype: "array_reference",
-          x: currentParent.x + INDENT_SIZE,
-          y: this.getNextCursorY(currentParent),
-          width: currentParent.width - INDENT_SIZE * 2,
+          x: ownerFrame.x + INDENT_SIZE,
+          y: this.getNextCursorY(ownerFrame),
+          width: ownerFrame.width - INDENT_SIZE * 2,
           height: VARIABLE_HEIGHT,
-          parentId: currentParent.id,
+          parentId: ownerFrame.id,
           stepId: stepIndex,
           data: arrayRefVar,
           metadata: {
@@ -547,7 +608,7 @@ export class LayoutEngine {
           },
         };
 
-        currentParent.children!.push(varElement);
+        ownerFrame.children!.push(varElement);
         layout.elements.push(varElement);
         this.elementHistory.set(varId, varElement);
         this.createdInStep.set(varId, stepIndex);
@@ -562,40 +623,35 @@ export class LayoutEngine {
       this.arrayTracker.updateArrayElement(arrayName, indices, value, stepIndex);
 
       if (stepIndex === currentStep) {
-        this.createArrayUpdateArrow(layout, arrayName, indices, stepIndex);
+        this.createArrayUpdateArrow(layout, arrayName, indices, stepIndex, frameId);
       }
       return;
     }
 
-    switch (stepType) {
-      case "output": {
-        const outputId = `output-${stepIndex}`;
-        if (this.elementHistory.has(outputId)) break;
+    if (stepType === "output") {
+      const outputId = `output-${stepIndex}`;
+      if (this.elementHistory.has(outputId)) return;
 
-        const outputElement: LayoutElement = {
-          id: outputId,
-          type: "output",
-          x: currentParent.x + INDENT_SIZE,
-          y: this.getNextCursorY(currentParent),
-          width: currentParent.width - INDENT_SIZE * 2,
-          height: 60,
-          parentId: currentParent.id,
-          stepId: stepIndex,
-          data: {
-            text: step.text || (step as any).rawText,
-            rawText: (step as any).rawText,
-          },
-        };
+      const outputElement: LayoutElement = {
+        id: outputId,
+        type: "output",
+        x: ownerFrame.x + INDENT_SIZE,
+        y: this.getNextCursorY(ownerFrame),
+        width: ownerFrame.width - INDENT_SIZE * 2,
+        height: 60,
+        parentId: ownerFrame.id,
+        stepId: stepIndex,
+        data: {
+          text: step.text || (step as any).rawText,
+          rawText: (step as any).rawText,
+          frameId: frameId,
+        },
+      };
 
-        currentParent.children!.push(outputElement);
-        layout.elements.push(outputElement);
-        this.elementHistory.set(outputId, outputElement);
-        break;
-      }
-
-      case "program_start":
-      case "program_end":
-        break;
+      ownerFrame.children!.push(outputElement);
+      layout.elements.push(outputElement);
+      this.elementHistory.set(outputId, outputElement);
+      return;
     }
   }
 
@@ -607,7 +663,7 @@ export class LayoutEngine {
       return;
     }
 
-    const arrayPanelX = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP;
+    const arrayPanelX = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP * 2 + FUNCTION_BOX_WIDTH * 2;
     const arrayPanelY = MAIN_FUNCTION_Y;
 
     layout.arrayPanel = {
@@ -628,35 +684,31 @@ export class LayoutEngine {
     arrayName: string,
     indices: number[],
     stepIndex: number,
+    frameId: string,
   ): void {
     if (!layout.arrayPanel) return;
 
     let varElement: LayoutElement | undefined;
 
-    const searchForVariable = (children: LayoutElement[] | undefined): void => {
-      if (!children) return;
-      for (const child of children) {
+    const ownerFrame = this.functionFrames.get(frameId);
+    if (ownerFrame && ownerFrame.children) {
+      for (const child of ownerFrame.children) {
         if (
           (child.type === "variable" || child.type === "heap_pointer") &&
           (child.data?.name === arrayName || child.data?.aliasOf === arrayName)
         ) {
           varElement = child;
-          return;
-        }
-        if (child.children) {
-          searchForVariable(child.children);
+          break;
         }
       }
-    };
-
-    searchForVariable(layout.mainFunction.children);
+    }
 
     const fromX = varElement
       ? varElement.x + varElement.width
-      : MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH;
+      : (ownerFrame ? ownerFrame.x + ownerFrame.width : MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH);
     const fromY = varElement
       ? varElement.y + varElement.height / 2
-      : MAIN_FUNCTION_Y + 100;
+      : (ownerFrame ? ownerFrame.y + 100 : MAIN_FUNCTION_Y + 100);
 
     const ARRAY_PANEL_HEADER = 50;
     const ARRAY_BOX_HEADER = 50;
@@ -796,5 +848,11 @@ export class LayoutEngine {
     if (layout.arrayPanel) {
       updateHeight(layout.arrayPanel);
     }
+
+    this.functionFrames.forEach((funcFrame) => {
+      if (funcFrame.type === "function_call") {
+        updateHeight(funcFrame);
+      }
+    });
   }
 }
