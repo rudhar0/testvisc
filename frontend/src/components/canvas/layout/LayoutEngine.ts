@@ -1,11 +1,9 @@
 // frontend/src/components/canvas/layout/LayoutEngine.ts
 
 import type {
-  MemoryState,
   ExecutionStep,
-  Variable,
   ExecutionTrace,
-} from "@types/index";
+} from "../../../types";
 
 export interface LayoutElement {
   id: string;
@@ -22,6 +20,7 @@ export interface LayoutElement {
     | "global"
     | "function"
     | "function_call"
+    | "function_return"
     | "struct"
     | "class"
     | "array_panel"
@@ -201,7 +200,8 @@ class ProgressiveArrayTracker {
 
   getAllArrays(upToStep: number) {
     const result: any[] = [];
-    this.arrays.forEach((arr, name) => {
+    // Iterate over stored arrays; we only need the name (key) to retrieve state
+    this.arrays.forEach((_, name) => {
       const state = this.getArrayState(name, upToStep);
       if (state) {
         result.push(state);
@@ -400,6 +400,30 @@ export class LayoutEngine {
         funcFrame.data.isActive = false;
         funcFrame.data.isReturning = true;
       }
+
+      // Create return element
+      const returnValue = (step as any).returnValue;
+      const functionName = (step as any).function;
+      
+      if (funcFrame) {
+        const returnElement: LayoutElement = {
+          id: `return-${frameId}-${stepIndex}`,
+          type: "function_return",
+          x: funcFrame.x + funcFrame.width + 20,
+          y: funcFrame.y + funcFrame.height / 2 - 30,
+          width: 200,
+          height: 60,
+          stepId: stepIndex,
+          data: {
+            frameId: frameId,
+            functionName: functionName,
+            returnValue: returnValue,
+          },
+        };
+
+        layout.elements.push(returnElement);
+        this.elementHistory.set(returnElement.id, returnElement);
+      }
       return;
     }
 
@@ -414,90 +438,88 @@ export class LayoutEngine {
 
       if (!varName) return;
 
-      const varId = `var-${frameId}-${varName}`;
+      const varId = `var-${frameId}-${varName}-${stepIndex}`;
 
-      if (!this.elementHistory.has(varId)) {
-        const variable: any = {
-          name: varName,
-          value: undefined,
-          type: varType || "int",
-          primitive: varType || "int",
-          address: "0x0",
-          scope: "local",
-          isInitialized: false,
-          isAlive: true,
-          birthStep: stepIndex,
-          frameId: frameId,
-        };
+      const variable: any = {
+        name: varName,
+        // Use empty string as placeholder to avoid showing undefined/null in UI
+        value: "",
+        type: varType || "int",
+        primitive: varType || "int",
+        address: "0x0",
+        scope: "local",
+        isInitialized: false,
+        isAlive: true,
+        birthStep: stepIndex,
+        frameId: frameId,
+      };
 
-        const varElement: LayoutElement = {
-          id: varId,
-          type: "variable",
-          subtype: "variable_declaration_only",
-          x: ownerFrame.x + INDENT_SIZE,
-          y: this.getNextCursorY(ownerFrame),
-          width: ownerFrame.width - INDENT_SIZE * 2,
-          height: VARIABLE_HEIGHT,
-          parentId: ownerFrame.id,
-          stepId: stepIndex,
-          data: variable,
-        };
+      const varElement: LayoutElement = {
+        id: varId,
+        type: "variable",
+        subtype: "variable_load",
+        x: ownerFrame.x + INDENT_SIZE,
+        y: this.getNextCursorY(ownerFrame),
+        width: ownerFrame.width - INDENT_SIZE * 2,
+        height: VARIABLE_HEIGHT,
+        parentId: ownerFrame.id,
+        stepId: stepIndex,
+        data: variable,
+      };
 
-        ownerFrame.children!.push(varElement);
-        layout.elements.push(varElement);
-        this.elementHistory.set(varId, varElement);
-        this.createdInStep.set(varId, stepIndex);
-      }
+      ownerFrame.children!.push(varElement);
+      layout.elements.push(varElement);
+      this.elementHistory.set(varId, varElement);
+      this.createdInStep.set(varId, stepIndex);
       return;
     }
 
-    if (stepType === "var_assign") {
+    // Handle variable assignment. The first assignment after a declaration is now treated as a "load"
+    // (visualised as a normal variable update). Subsequent assignments update the existing element.
+    if (stepType === "var_assign" || stepType === "var_load") {
       const { name, value, symbol } = step as any;
       const varName = name || symbol;
 
       if (!varName) return;
 
-      const varId = `var-${frameId}-${varName}`;
+      const varId = `var-${frameId}-${varName}-${stepIndex}`;
 
-      if (!this.elementHistory.has(varId)) {
-        const variable: any = {
-          name: varName,
-          value: value,
-          type: "int",
-          primitive: "int",
-          address: "0x0",
-          scope: "local",
-          isInitialized: true,
-          isAlive: true,
-          birthStep: stepIndex,
-          frameId: frameId,
-        };
+      // If the variable element does not exist yet, create it. Use the "variable_load" subtype to indicate
+      // that this is the initial value being loaded onto the canvas.
+      const variable: any = {
+        name: varName,
+        value: value,
+        type: "int",
+        primitive: "int",
+        address: "0x0",
+        scope: "local",
+        isInitialized: true,
+        isAlive: true,
+        birthStep: stepIndex,
+        frameId: frameId,
+      };
 
-        const varElement: LayoutElement = {
-          id: varId,
-          type: "variable",
-          subtype: "variable_initialization",
-          x: ownerFrame.x + INDENT_SIZE,
-          y: this.getNextCursorY(ownerFrame),
-          width: ownerFrame.width - INDENT_SIZE * 2,
-          height: VARIABLE_HEIGHT,
-          parentId: ownerFrame.id,
-          stepId: stepIndex,
-          data: variable,
-        };
+      const varElement: LayoutElement = {
+        id: varId,
+        type: "variable",
+        subtype: "variable_load",
+        x: ownerFrame.x + INDENT_SIZE,
+        y: this.getNextCursorY(ownerFrame),
+        width: ownerFrame.width - INDENT_SIZE * 2,
+        height: VARIABLE_HEIGHT,
+        parentId: ownerFrame.id,
+        stepId: stepIndex,
+        data: {
+          ...variable,
+          // Ensure value is a string for consistent UI rendering
+          value: value !== undefined ? String(value) : undefined,
+        },
+      };
 
-        ownerFrame.children!.push(varElement);
-        layout.elements.push(varElement);
-        this.elementHistory.set(varId, varElement);
-        this.createdInStep.set(varId, stepIndex);
-      } else {
-        const existingElement = this.elementHistory.get(varId)!;
-        existingElement.data = {
-          ...existingElement.data,
-          value: value,
-          isInitialized: true,
-        };
-      }
+      ownerFrame.children!.push(varElement);
+      layout.elements.push(varElement);
+      this.elementHistory.set(varId, varElement);
+      this.createdInStep.set(varId, stepIndex);
       return;
     }
 
@@ -547,6 +569,24 @@ export class LayoutEngine {
         layout.elements.push(ptrElement);
         this.elementHistory.set(ptrId, ptrElement);
         this.createdInStep.set(ptrId, stepIndex);
+      }
+      return;
+    }
+
+    // Handle pointer dereference write events to update pointer value display
+    if (stepType === "pointer_deref_write") {
+      const { name, symbol, value } = step as any;
+      const ptrName = name || symbol;
+      if (!ptrName) return;
+
+      const ptrId = `ptr-${frameId}-${ptrName}`;
+      if (this.elementHistory.has(ptrId)) {
+        const existingElement = this.elementHistory.get(ptrId)!;
+        existingElement.data = {
+          ...existingElement.data,
+          // Store written value as string for UI consistency
+          value: value !== undefined ? String(value) : undefined,
+        };
       }
       return;
     }
@@ -642,7 +682,8 @@ export class LayoutEngine {
         parentId: ownerFrame.id,
         stepId: stepIndex,
         data: {
-          text: step.text || (step as any).rawText,
+          // Cast to any to access custom 'text' field from backend
+          text: (step as any).text || (step as any).rawText,
           rawText: (step as any).rawText,
           frameId: frameId,
         },

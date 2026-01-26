@@ -16,6 +16,7 @@ import { InputElement } from "./elements/InputElement";
 import { HeapPointerElement } from "./elements/HeapPointerElement";
 import { FunctionElement } from "./elements/FunctionElement";
 import { FunctionCallArrow } from "./elements/FunctionCallArrow";
+import { ReturnElement } from "./elements/ReturnElement";
 import { LayoutEngine, LayoutElement } from "./layout/LayoutEngine";
 import { InputDialog } from "./InputDialog";
 import { socketService } from "../../api/socket.service";
@@ -518,6 +519,23 @@ switch (type) {
     );
   }
 
+  case "function_return": {
+    return (
+      <ReturnElement
+        key={`${id}-${stepId}`}
+        id={id}
+        x={x}
+        y={y}
+        returnValue={data?.returnValue}
+        functionName={data?.functionName || "function"}
+        frameId={data?.frameId || ""}
+        isNew={isNew}
+        stepNumber={stepId}
+        enterDelay={enterDelayMap.get(id) || 0}
+      />
+    );
+  }
+
   case "heap_pointer": {
     return (
       <HeapPointerElement
@@ -632,7 +650,7 @@ switch (type) {
       <OutputElement
         key={id}
         id={id}
-        value={data?.value || ""}
+        value={data?.text || ""}
         x={x}
         y={y}
         width={width}
