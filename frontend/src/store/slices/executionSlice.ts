@@ -76,24 +76,26 @@ export const useExecutionStore = create<ExecutionState>()(
         }
         state.executionTrace = trace;
         state.totalSteps = trace.totalSteps;
-        
-        const firstMeaningfulStep = trace.steps.findIndex(step => 
-          step.type !== 'program_start' || step.line > 0
-        );
-        
-        state.currentStep = Math.max(0, firstMeaningfulStep);
+        state.currentStep = 0;
+        state.isPlaying = false;
+        state.isPaused = false;
         state.isAnalyzing = false;
         state.analysisProgress = 100;
         state.analysisStage = 'complete';
-        state.needsCanvasRebuild = true; 
+        state.needsCanvasRebuild = true;
+        
+        if (state.playbackInterval) {
+          clearInterval(state.playbackInterval);
+          state.playbackInterval = null;
+        }
         
         if (trace.steps.length > 0) {
-          state.currentState = trace.steps[state.currentStep].state;
+          state.currentState = trace.steps[0].state;
         }
         
         console.log('✅ Trace loaded:', {
           totalSteps: trace.totalSteps,
-          startingAtStep: state.currentStep,
+          startingAtStep: 0,
         });
       }),
 
@@ -196,6 +198,10 @@ export const useExecutionStore = create<ExecutionState>()(
 
     play: () =>
       set((state) => {
+        if (!state.executionTrace || state.currentStep >= state.totalSteps - 1) {
+          return;
+        }
+        
         state.isPlaying = true;
         state.isPaused = false;
         

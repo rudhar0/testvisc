@@ -15,9 +15,10 @@ import { OutputElement } from "./elements/OutputElement";
 import { InputElement } from "./elements/InputElement";
 import { HeapPointerElement } from "./elements/HeapPointerElement";
 import { FunctionElement } from "./elements/FunctionElement";
+import { CallElement } from "./elements/CallElement";
 import { FunctionCallArrow } from "./elements/FunctionCallArrow";
 import { ReturnElement } from "./elements/ReturnElement";
-import { LayoutEngine, LayoutElement } from "./layout/LayoutEngine";
+import { LayoutEngine, LayoutElement, BASE_FUNCTION_Z, STACK_Z_STEP } from "./layout/LayoutEngine";
 import { InputDialog } from "./InputDialog";
 import { socketService } from "../../api/socket.service";
 import { getFocusPosition } from "../../utils/camera";
@@ -60,6 +61,7 @@ const getVarColor = (type: string) => {
 export default function VisualizationCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
+  const layerRef = useRef<Konva.Layer>(null);
   const executionTrace = useExecutionStore((state) => state.executionTrace);
   const currentStep = useExecutionStore((state) => state.currentStep);
   const getCurrentStep = useExecutionStore((state) => state.getCurrentStep);
@@ -202,6 +204,22 @@ export default function VisualizationCanvas() {
   useEffect(() => {
     prevStepRef.current = currentStep;
   }, [currentStep]);
+
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer || !visibleLayout) return;
+
+    visibleLayout.elements.forEach((el) => {
+        if (el.type === 'function_call' && el.metadata?.stackIndex !== undefined) {
+            const node = layer.findOne(`#${el.id}`);
+            if (node) {
+                const zIndex = BASE_FUNCTION_Z + (el.metadata.stackIndex * STACK_Z_STEP);
+                node.zIndex(zIndex);
+            }
+        }
+    });
+    layer.batchDraw();
+  }, [visibleLayout, currentStep]);
   useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
@@ -225,6 +243,27 @@ export default function VisualizationCanvas() {
   useEffect(() => {
     if (!visibleLayout || !stageRef.current) return;
     const movingForward = prevStepRef.current < currentStep;
+
+    const isFinalStep = executionTrace && 
+                        executionTrace.steps.length > 0 && 
+                        currentStep === executionTrace.steps.length - 1;
+    
+    if (isFinalStep) {
+        const stage = stageRef.current;
+        const mainFrame = visibleLayout.mainFunction;
+        if (mainFrame) {
+             const targetPos = getFocusPosition(mainFrame, dimensions, zoom);
+             new Konva.Tween({
+                node: stage,
+                x: targetPos.x,
+                y: targetPos.y,
+                duration: 0.8,
+                easing: Konva.Easings.StrongEaseOut,
+                onFinish: () => setPosition({ x: stage.x(), y: stage.y() }),
+             }).play();
+        }
+        return;
+    }
 
     const focusCandidates = visibleLayout.elements.filter((el) => {
       const animState = elementAnimationStates.get(el.id);
@@ -478,11 +517,33 @@ export default function VisualizationCanvas() {
 
               return (
                 <Group key={child.id} x={relativeX} y={relativeY}>
-                  {renderElement(child, x, y)}
+                  {renderElement(
+                    { ...child, x: 0, y: 0 },
+                    x,
+                    y,
+                  )}
                 </Group>
               );
             })}
           </StackFrame>
+        );
+
+      case "call_site":
+        return (
+          <CallElement
+            key={id}
+            id={id}
+            functionName={data?.functionName || "call"}
+            args={data?.args || "()"}
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            isNew={isNew}
+            stepNumber={
+              element.stepId !== undefined ? element.stepId + 1 : undefined
+            }
+          />
         );
 
       case "function_call": {
@@ -510,28 +571,15 @@ export default function VisualizationCanvas() {
               const relativeY = child.y - y - 55;
               return (
                 <Group key={child.id} x={relativeX} y={relativeY}>
-                  {renderElement(child, x, y)}
+                  {renderElement(
+                    { ...child, x: 0, y: 0 },
+                    x,
+                    y,
+                  )}
                 </Group>
               );
             })}
           </FunctionElement>
-        );
-      }
-
-      case "function_return": {
-        return (
-          <ReturnElement
-            key={`${id}-${stepId}`}
-            id={id}
-            x={x}
-            y={y}
-            returnValue={data?.returnValue}
-            functionName={data?.functionName || "function"}
-            frameId={data?.frameId || ""}
-            isNew={isNew}
-            stepNumber={stepId}
-            enterDelay={enterDelayMap.get(id) || 0}
-          />
         );
       }
 
@@ -572,6 +620,7 @@ export default function VisualizationCanvas() {
             memoryRegion={data?.memoryRegion || "stack"}
             decayedFromArray={data?.decayedFromArray}
             aliasOf={data?.aliasOf}
+            explanation={data?.explanation}
           />
         );
       }
@@ -631,6 +680,7 @@ export default function VisualizationCanvas() {
               stepNumber={stepId}
               enterDelay={enterDelayMap.get(id) || 0}
               color="#60A5FA"
+              explanation={data?.explanation}
             />
           );
         }
@@ -654,6 +704,7 @@ export default function VisualizationCanvas() {
             stepNumber={stepId}
             enterDelay={enterDelayMap.get(id) || 0}
             color={getVarColor(data?.type || data?.primitive)}
+            explanation={data?.explanation}
           />
         );
       }
@@ -673,6 +724,7 @@ export default function VisualizationCanvas() {
             height={height}
             isNew={isNew}
             subtype={element.subtype as any}
+            explanation={data?.explanation}
           />
         );
 
@@ -724,6 +776,7 @@ export default function VisualizationCanvas() {
             state={globalState}
             stepNumber={stepId}
             color={getVarColor(data?.type || data?.primitive)}
+            explanation={data?.explanation}
           />
         );
 
@@ -744,7 +797,11 @@ export default function VisualizationCanvas() {
               const relativeY = child.y - y - SPACING.HEADER_HEIGHT;
               return (
                 <Group key={child.id} x={relativeX} y={relativeY}>
-                  {renderElement(child, x, y)}
+                  {renderElement(
+                    { ...child, x: 0, y: 0 },
+                    x,
+                    y,
+                  )}
                 </Group>
               );
             })}
@@ -768,7 +825,11 @@ export default function VisualizationCanvas() {
               const relativeY = child.y - y - SPACING.HEADER_HEIGHT;
               return (
                 <Group key={child.id} x={relativeX} y={relativeY}>
-                  {renderElement(child, x, y)}
+                  {renderElement(
+                    { ...child, x: 0, y: 0 },
+                    x,
+                    y,
+                  )}
                 </Group>
               );
             })}
@@ -793,7 +854,11 @@ export default function VisualizationCanvas() {
               const relativeY = child.y - y - SPACING.HEADER_HEIGHT;
               return (
                 <Group key={child.id} x={relativeX} y={relativeY}>
-                  {renderElement(child, x, y)}
+                  {renderElement(
+                    { ...child, x: 0, y: 0 },
+                    x,
+                    y,
+                  )}
                 </Group>
               );
             })}
@@ -1039,7 +1104,7 @@ export default function VisualizationCanvas() {
               });
             }}
           >
-            <Layer>
+            <Layer ref={layerRef}>
               <Group>
                 {Array.from({ length: Math.floor(dimensions.width / 20) }).map(
                   (_, i) => (
@@ -1072,8 +1137,7 @@ export default function VisualizationCanvas() {
               {visibleLayout.elements
                 .filter(
                   (el) =>
-                    el.type === "function_call" ||
-                    el.type === "function_return",
+                    el.type === "function_call",
                 )
                 .map((el) => (
                   <Group key={el.id} x={0} y={0}>

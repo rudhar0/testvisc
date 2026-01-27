@@ -1,11 +1,6 @@
-// frontend/src/components/canvas/elements/ArrayCell.tsx
 import React, { useRef, useEffect, memo } from 'react';
 import { Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
-
-// ============================================
-// TYPE DEFINITIONS
-// ============================================
 
 export interface ArrayCellProps {
   id: string;
@@ -20,11 +15,8 @@ export interface ArrayCellProps {
   isUpdated?: boolean;
   isHovered?: boolean;
   onClick?: () => void;
+  explanation?: string;
 }
-
-// ============================================
-// COLOR SYSTEM
-// ============================================
 
 const TYPE_COLORS: Record<string, string> = {
   int: '#3B82F6',
@@ -40,9 +32,7 @@ const getTypeColor = (type: string): string => {
   return TYPE_COLORS[normalized] || TYPE_COLORS.default;
 };
 
-// ============================================
-// MEMOIZED ARRAY CELL COMPONENT
-// ============================================
+const EXPLANATION_HEIGHT = 22;
 
 export const ArrayCell: React.FC<ArrayCellProps> = memo(({
   id,
@@ -56,14 +46,14 @@ export const ArrayCell: React.FC<ArrayCellProps> = memo(({
   isNew = false,
   isUpdated = false,
   isHovered = false,
-  onClick
+  onClick,
+  explanation
 }) => {
   const groupRef = useRef<Konva.Group>(null);
   const bgRef = useRef<Konva.Rect>(null);
   
   const color = getTypeColor(baseType);
   
-  // Format value for display
   const formatValue = (val: any): string => {
     if (val === null || val === undefined) return '—';
     if (typeof val === 'string') return `'${val}'`;
@@ -80,17 +70,15 @@ export const ArrayCell: React.FC<ArrayCellProps> = memo(({
     ? `[${index[0]},${index[1]}]`
     : `[${index.join(',')}]`;
 
-  // ============================================
-  // ANIMATION: UPDATE ONLY
-  // ============================================
+  const totalHeight = explanation ? height + EXPLANATION_HEIGHT + 2 : height;
+
   useEffect(() => {
     const bg = bgRef.current;
     if (!bg || !isUpdated) return;
 
-    // Flash animation
     const originalFill = bg.fill();
     
-    bg.fill('#FBBF24'); // Yellow flash
+    bg.fill('#FBBF24');
     bg.to({
       fill: originalFill,
       duration: 0.4,
@@ -98,9 +86,6 @@ export const ArrayCell: React.FC<ArrayCellProps> = memo(({
     });
   }, [isUpdated, value]);
 
-  // ============================================
-  // RENDER
-  // ============================================
   return (
     <Group
       ref={groupRef}
@@ -110,7 +95,6 @@ export const ArrayCell: React.FC<ArrayCellProps> = memo(({
       onClick={onClick}
       onTap={onClick}
     >
-      {/* Cell Background */}
       <Rect
         ref={bgRef}
         width={width}
@@ -125,7 +109,6 @@ export const ArrayCell: React.FC<ArrayCellProps> = memo(({
         listening={false}
       />
 
-      {/* Index Label (Top) */}
       <Text
         text={indexLabel}
         x={4}
@@ -138,7 +121,6 @@ export const ArrayCell: React.FC<ArrayCellProps> = memo(({
         listening={false}
       />
 
-      {/* Value (Center) */}
       <Text
         text={displayValue}
         x={4}
@@ -151,15 +133,38 @@ export const ArrayCell: React.FC<ArrayCellProps> = memo(({
         align="center"
         listening={false}
       />
+
+      {explanation && (
+        <Group y={height + 2}>
+          <Rect
+            width={width}
+            height={EXPLANATION_HEIGHT}
+            fill="rgba(30, 41, 59, 0.9)"
+            stroke="#64748B"
+            strokeWidth={1}
+            cornerRadius={4}
+          />
+          <Text
+            text={explanation}
+            x={4}
+            y={6}
+            width={width - 8}
+            fontSize={8}
+            fill="#E2E8F0"
+            fontFamily="'SF Mono', monospace"
+            align="center"
+          />
+        </Group>
+      )}
     </Group>
   );
 }, (prevProps, nextProps) => {
-  // Custom comparison for memo
   return (
     prevProps.value === nextProps.value &&
     prevProps.isUpdated === nextProps.isUpdated &&
     prevProps.isHovered === nextProps.isHovered &&
-    prevProps.isNew === nextProps.isNew
+    prevProps.isNew === nextProps.isNew &&
+    prevProps.explanation === nextProps.explanation
   );
 });
 

@@ -21,7 +21,8 @@ export interface LayoutElement {
     | "struct"
     | "class"
     | "array_panel"
-    | "array_reference";
+    | "array_reference"
+    | "call_site";
   subtype?: string;
   x: number;
   y: number;
@@ -37,8 +38,17 @@ export interface LayoutElement {
     referencesArray?: string;
     firstCellX?: number;
     firstCellY?: number;
+    // Lane support
+    lanes?: Record<string, LaneState>;
+    stackIndex?: number; // For Z-Index
     [key: string]: any;
   };
+}
+
+// Lane Definition
+export interface LaneState {
+  startY: number;
+  usedHeight: number;
 }
 
 export interface Layout {
@@ -54,16 +64,31 @@ export interface Layout {
 }
 
 const ELEMENT_SPACING = 8;
-const INDENT_SIZE = -10;
+const MAIN_INDENT_SIZE = -10;
+const FUNCTION_INDENT_SIZE = 20;
+
+// Z-Index Constants
+export const BASE_FUNCTION_Z = 10;
+export const STACK_Z_STEP = 10;
+
+// Helper to determine indent based on frame type
+const getIndentSize = (frame: LayoutElement) => {
+  return frame.type === 'main' ? MAIN_INDENT_SIZE : FUNCTION_INDENT_SIZE;
+};
+
 const HEADER_HEIGHT = 50;
 const MAIN_FUNCTION_X = 40;
 const MAIN_FUNCTION_Y = 40;
 const MAIN_FUNCTION_WIDTH = 400;
 const GLOBAL_PANEL_WIDTH = 400;
 const PANEL_GAP = 40;
-const VARIABLE_HEIGHT = 70;
+const VARIABLE_HEIGHT = 140;
+const EXPLANATION_HEIGHT = 40;
 const FUNCTION_BOX_WIDTH = 400;
 const FUNCTION_VERTICAL_SPACING = 200;
+const PARAMS_HEIGHT = 0;
+const LOCALS_HEIGHT = 0;
+
 
 interface ArrayTrackerData {
   name: string;
@@ -241,6 +266,36 @@ export class LayoutEngine {
   private static frameOrderMap: Map<string, number> = new Map();
   private static frameOrder: number = 0;
 
+  // ============================================
+  // LANE MANAGEMENT
+  // ============================================
+  private static getLane(frame: LayoutElement, laneName: string): LaneState {
+    if (!frame.metadata) frame.metadata = {};
+    if (!frame.metadata.lanes) {
+      // Initialize lanes if they don't exist
+      frame.metadata.lanes = {
+        HEADER: { startY: 0, usedHeight: HEADER_HEIGHT },
+        PARAMS: { startY: HEADER_HEIGHT, usedHeight: 0 },
+        LOCALS: { startY: HEADER_HEIGHT, usedHeight: 0 }, 
+        RETURN: { startY: HEADER_HEIGHT, usedHeight: 0 },
+        EXPLANATION: { startY: 0, usedHeight: 0, }
+      };
+    }
+    
+    // Auto-adjust startY based on previous lanes
+    const lanes = frame.metadata.lanes;
+    if (laneName === 'LOCALS') {
+        lanes.LOCALS.startY = lanes.HEADER.usedHeight + lanes.PARAMS.usedHeight;
+    } else if (laneName === 'RETURN') {
+        lanes.RETURN.startY = lanes.HEADER.usedHeight + lanes.PARAMS.usedHeight + lanes.LOCALS.usedHeight;
+    }
+
+    if (!lanes[laneName]) {
+        lanes[laneName] = { startY: 0, usedHeight: 0 };
+    }
+    return lanes[laneName];
+  }
+
   public static calculateLayout(
     executionTrace: ExecutionTrace,
     currentStepIndex: number,
@@ -323,6 +378,7 @@ export class LayoutEngine {
     const parentFrameId = (step as any).parentFrameId;
     const isFunctionEntry = (step as any).isFunctionEntry;
     const isFunctionExit = (step as any).isFunctionExit;
+    const explanation = (step as any).explanation; // Extract explanation
 
     if (stepType === "func_enter" && isFunctionEntry) {
       const functionName = (step as any).function;
@@ -341,6 +397,35 @@ export class LayoutEngine {
         const orderIndex = this.frameOrderMap.get(frameId) || 0;
         const funcY =
           MAIN_FUNCTION_Y + (orderIndex - 1) * FUNCTION_VERTICAL_SPACING;
+        
+        // 1. Create Call Site Element in Parent Frame (if exists)
+        let arrowFromX = parentFrame ? parentFrame.x + parentFrame.width : 0;
+        let arrowFromY = parentFrame ? parentFrame.y + 75 : 0;
+
+        if (parentFrame) {
+            const indent = getIndentSize(parentFrame);
+            const callElement: LayoutElement = {
+                id: `call-${parentFrameId}-to-${frameId}`,
+                type: "call_site", // New type
+                x: parentFrame.x + indent,
+                y: this.getNextCursorY(parentFrame),
+                width: parentFrame.width - indent * 2,
+                height: 50, // Compact height
+                parentId: parentFrame.id,
+                stepId: stepIndex,
+                data: {
+                    functionName: functionName,
+                    args: "()", // TODO: Extract args if available
+                }
+            };
+            parentFrame.children?.push(callElement);
+            layout.elements.push(callElement);
+            this.elementHistory.set(callElement.id, callElement);
+            
+            // Arrow starts from this element
+            arrowFromX = callElement.x + callElement.width;
+            arrowFromY = callElement.y + callElement.height / 2;
+        }
 
         const functionElement: LayoutElement = {
           id: `function-${frameId}`,
@@ -363,7 +448,13 @@ export class LayoutEngine {
             isActive: true,
             isReturning: false,
           },
+          metadata: {
+            stackIndex: callDepth, // For Z-Index
+          },
         };
+
+        // Initialize Lanes for new function
+        this.getLane(functionElement, 'HEADER');
 
         layout.elements.push(functionElement);
         this.elementHistory.set(functionElement.id, functionElement);
@@ -380,8 +471,8 @@ export class LayoutEngine {
             height: 0,
             stepId: stepIndex,
             data: {
-              fromX: parentFrame.x + parentFrame.width,
-              fromY: parentFrame.y + 75,
+              fromX: arrowFromX, // Updated source
+              fromY: arrowFromY, // Updated source
               toX: funcX,
               toY: funcY + 75,
               label: `call ${functionName}()`,
@@ -405,21 +496,33 @@ export class LayoutEngine {
       const functionName = (step as any).function;
 
       if (funcFrame) {
+        // Relocate Return Element INSIDE the function frame
+        // LANE: RETURN
+        const lane = this.getLane(funcFrame, 'RETURN');
+        const indent = getIndentSize(funcFrame);
+        
         const returnElement: LayoutElement = {
           id: `return-${frameId}-${stepIndex}`,
           type: "function_return",
-          x: funcFrame.x + funcFrame.width + 20,
-          y: funcFrame.y + funcFrame.height / 2 - 30,
-          width: 200,
+          // Position it inside the frame using Lane
+          x: funcFrame.x + indent,
+          y: funcFrame.y + lane.startY + lane.usedHeight,
+          width: funcFrame.width - indent * 2,
           height: 60,
           stepId: stepIndex,
+          parentId: funcFrame.id, // Mark parent
           data: {
             frameId: frameId,
             functionName: functionName,
             returnValue: returnValue,
+            explanation: `return ${returnValue}`, // Use as explanation
           },
         };
+        
+        // Update Lane Usage
+        lane.usedHeight += returnElement.height + ELEMENT_SPACING;
 
+        funcFrame.children?.push(returnElement); // Add to children
         layout.elements.push(returnElement);
         this.elementHistory.set(returnElement.id, returnElement);
       }
@@ -453,23 +556,39 @@ export class LayoutEngine {
         frameId: frameId,
       };
 
+      // LANE: LOCALS (or PARAMS if new)
+      const indent = getIndentSize(ownerFrame);
+      const laneName = 'LOCALS';
+      const lane = this.getLane(ownerFrame, laneName);
+      
+      const elementHeight = explanation ? VARIABLE_HEIGHT + EXPLANATION_HEIGHT : VARIABLE_HEIGHT;
+      
       const varElement: LayoutElement = {
         id: varId,
         type: "variable",
         subtype: "variable_load",
-        x: ownerFrame.x + INDENT_SIZE,
-        y: this.getNextCursorY(ownerFrame),
-        width: ownerFrame.width - INDENT_SIZE * 2,
-        height: VARIABLE_HEIGHT,
+        x: ownerFrame.x + indent,
+        y: ownerFrame.y + lane.startY + lane.usedHeight,
+        width: ownerFrame.width - indent * 2,
+        height: elementHeight,
         parentId: ownerFrame.id,
         stepId: stepIndex,
-        data: variable,
+        data: {
+            ...variable,
+            explanation: explanation,
+        },
       };
+
+      lane.usedHeight += varElement.height + ELEMENT_SPACING;
 
       ownerFrame.children!.push(varElement);
       layout.elements.push(varElement);
       this.elementHistory.set(varId, varElement);
       this.createdInStep.set(varId, stepIndex);
+      
+      if (ownerFrame.type === "function_call" && ownerFrame.data) {
+        ownerFrame.data.localVarCount++;
+      }
       return;
     }
 
@@ -498,20 +617,22 @@ export class LayoutEngine {
         frameId: frameId,
       };
 
+      const indent = getIndentSize(ownerFrame);
+      const elementHeight = explanation ? VARIABLE_HEIGHT + EXPLANATION_HEIGHT : VARIABLE_HEIGHT;
       const varElement: LayoutElement = {
         id: varId,
         type: "variable",
         subtype: "variable_load",
-        x: ownerFrame.x + INDENT_SIZE,
+        x: ownerFrame.x + indent,
         y: this.getNextCursorY(ownerFrame),
-        width: ownerFrame.width - INDENT_SIZE * 2,
-        height: VARIABLE_HEIGHT,
+        width: ownerFrame.width - indent * 2,
+        height: elementHeight,
         parentId: ownerFrame.id,
         stepId: stepIndex,
         data: {
           ...variable,
-          // Ensure value is a string for consistent UI rendering
           value: value !== undefined ? String(value) : undefined,
+          explanation: explanation,
         },
       };
 
@@ -548,17 +669,22 @@ export class LayoutEngine {
           frameId: frameId,
         };
 
+        const indent = getIndentSize(ownerFrame);
+        const elementHeight = explanation ? VARIABLE_HEIGHT + EXPLANATION_HEIGHT : VARIABLE_HEIGHT;
         const ptrElement: LayoutElement = {
           id: ptrId,
           type: "heap_pointer",
           subtype: decayedFromArray ? "array_alias" : "pointer",
-          x: ownerFrame.x + INDENT_SIZE,
+          x: ownerFrame.x + indent,
           y: this.getNextCursorY(ownerFrame),
-          width: ownerFrame.width - INDENT_SIZE * 2,
-          height: VARIABLE_HEIGHT,
+          width: ownerFrame.width - indent * 2,
+          height: elementHeight,
           parentId: ownerFrame.id,
           stepId: stepIndex,
-          data: pointerData,
+          data: {
+            ...pointerData,
+            explanation: explanation,
+          },
           metadata: {
             referencesArray: aliasOf,
           },
@@ -631,13 +757,14 @@ export class LayoutEngine {
           frameId: frameId,
         };
 
+        const indent = getIndentSize(ownerFrame);
         const varElement: LayoutElement = {
           id: varId,
           type: "variable",
           subtype: "array_reference",
-          x: ownerFrame.x + INDENT_SIZE,
+          x: ownerFrame.x + indent,
           y: this.getNextCursorY(ownerFrame),
-          width: ownerFrame.width - INDENT_SIZE * 2,
+          width: ownerFrame.width - indent * 2,
           height: VARIABLE_HEIGHT,
           parentId: ownerFrame.id,
           stepId: stepIndex,
@@ -682,20 +809,23 @@ export class LayoutEngine {
       const outputId = `output-${stepIndex}`;
       if (this.elementHistory.has(outputId)) return;
 
+      const indent = getIndentSize(ownerFrame);
+      const baseHeight = 60;
+      const elementHeight = explanation ? baseHeight + EXPLANATION_HEIGHT : baseHeight;
       const outputElement: LayoutElement = {
         id: outputId,
         type: "output",
-        x: ownerFrame.x + INDENT_SIZE,
+        x: ownerFrame.x + indent,
         y: this.getNextCursorY(ownerFrame),
-        width: ownerFrame.width - INDENT_SIZE * 2,
-        height: 60,
+        width: ownerFrame.width - indent * 2,
+        height: elementHeight,
         parentId: ownerFrame.id,
         stepId: stepIndex,
         data: {
-          // Cast to any to access custom 'text' field from backend
           text: (step as any).text || (step as any).rawText,
           rawText: (step as any).rawText,
           frameId: frameId,
+          explanation: explanation,
         },
       };
 
@@ -895,6 +1025,20 @@ export class LayoutEngine {
 
   private static updateContainerHeights(layout: Layout): void {
     const updateHeight = (element: LayoutElement): number => {
+      // If it has lanes, calculate height based on used lanes
+      if (element.metadata && element.metadata.lanes) {
+          const lanes = element.metadata.lanes;
+          const contentHeight = lanes.HEADER.usedHeight + 
+                              lanes.PARAMS.usedHeight + 
+                              lanes.LOCALS.usedHeight + 
+                              lanes.RETURN.usedHeight + 
+                              lanes.EXPLANATION.usedHeight;
+          // Add some padding
+          const newHeight = Math.max(element.height, contentHeight + 40);
+          element.height = newHeight;
+          return element.y + newHeight;
+      }
+      
       if (!element.children || element.children.length === 0) {
         return element.y + element.height;
       }
@@ -920,10 +1064,12 @@ export class LayoutEngine {
       updateHeight(layout.arrayPanel);
     }
 
-    this.functionFrames.forEach((funcFrame) => {
-      if (funcFrame.type === "function_call") {
-        updateHeight(funcFrame);
-      }
+    // Iterate through all elements to update heights for function frames
+    // This ensures that even deeply nested calls get their heights recalculated
+    layout.elements.forEach((element) => {
+        if (element.type === 'function_call' || element.type === 'struct' || element.type === 'class') {
+            updateHeight(element);
+        }
     });
   }
 }

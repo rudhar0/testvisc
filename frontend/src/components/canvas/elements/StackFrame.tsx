@@ -61,7 +61,7 @@ export const StackFrame: React.FC<StackFrameProps> = ({
       {/* Frame Background */}
       <Rect
         width={width}
-        height={height}
+        height={Math.max(height, 80)} // Ensure minimum height and respect passed height
         fill={COLORS.bg}
         stroke={COLORS.border}
         strokeWidth={2}

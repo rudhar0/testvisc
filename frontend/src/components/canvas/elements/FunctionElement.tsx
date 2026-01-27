@@ -21,6 +21,8 @@ export interface FunctionElementProps {
   returnType: string;
   x: number;
   y: number;
+  width?: number; // Added width
+  height?: number; // Added height
   
   // Metadata
   isRecursive?: boolean;
@@ -100,7 +102,8 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
   stepNumber,
   enterDelay = 0,
   children,
-  onConnectorClick
+  onConnectorClick,
+  ...props
 }) => {
   const groupRef = useRef<Konva.Group>(null);
   const glowRef = useRef<Konva.Rect>(null);
@@ -111,8 +114,10 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
   // Calculate body height
   const paramSectionHeight = parameters.length > 0 ? 25 + parameters.length * 28 : 0;
   const localVarSectionHeight = localVarCount > 0 ? 40 : 0;
-  const bodyHeight = Math.max(MIN_BODY_HEIGHT, paramSectionHeight + localVarSectionHeight + 20);
-  const totalHeight = HEADER_HEIGHT + bodyHeight;
+  const calculatedHeight = Math.max(MIN_BODY_HEIGHT, paramSectionHeight + localVarSectionHeight + 20);
+  
+  // Use passed height if available, otherwise use calculated fallback
+  const totalHeight = props.height ? Math.max(props.height, HEADER_HEIGHT + calculatedHeight) : HEADER_HEIGHT + calculatedHeight;
 
   const colorScheme = isReturning 
     ? COLORS.returning 

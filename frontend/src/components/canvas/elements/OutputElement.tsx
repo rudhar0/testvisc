@@ -11,6 +11,7 @@ interface OutputElementProps {
   height: number;
   isNew?: boolean;
   subtype?: 'output_printf' | 'output_cout' | 'output_endl';
+  explanation?: string;
 }
 
 const COLORS = {
@@ -20,6 +21,8 @@ const COLORS = {
   text: { primary: '#F1F5F9', secondary: '#94A3B8' },
 };
 
+const EXPLANATION_HEIGHT = 30;
+
 export const OutputElement: React.FC<OutputElementProps> = ({
   id,
   value,
@@ -28,32 +31,23 @@ export const OutputElement: React.FC<OutputElementProps> = ({
   width,
   height,
   isNew = false,
-  subtype = 'output_printf'
+  subtype = 'output_printf',
+  explanation
 }) => {
   const groupRef = useRef<any>(null);
 
-  // Synchronous render-time log to confirm React is rendering this component
   console.log('[OutputElement] render attempt:', { id, x, y, width, height, value, isNew, subtype });
 
   useEffect(() => {
     const node = groupRef.current as any;
     console.debug('[OutputElement] render props:', { id, x, y, width, height, value, isNew, subtype });
-    if (!node) return;
-
-    // Defensive: clear previous tweens on this node
-    try {
-      Konva.Tween.getAll().forEach(t => t && typeof t.kill === 'function' && t.kill());
-    } catch (e) {
-      // ignore
-    }
+    if (!node || !node.getLayer()) return;
 
     let tween: Konva.Tween | null = null;
 
     if (isNew) {
       console.log(`[OutputElement] Animating new output: ${value}`);
-      // Use setAttrs to avoid unexpected getters/setters
       node.setAttrs({ opacity: 0 });
-      // compute startX relative to current x
       const currentX = typeof node.x === 'function' ? node.x() : node.attrs?.x ?? 0;
       const startX = currentX - 20;
       node.setAttrs({ x: startX });
@@ -67,20 +61,18 @@ export const OutputElement: React.FC<OutputElementProps> = ({
       });
       tween.play();
     } else {
-      // Ensure visible and positioned
       node.setAttrs({ opacity: 1, x });
     }
 
     return () => {
       if (tween) {
-        try { tween.pause(); tween.destroy(); } catch (e) { /* ignore */ }
+        try { tween.pause(); tween.destroy(); } catch (e) { }
       }
     };
   }, [isNew, x, value, subtype, id]);
 
   const outputLabel = subtype === 'output_cout' ? 'cout <<' : subtype === 'output_endl' ? 'cout << endl' : 'printf';
 
-  // Fallbacks to prevent Konva from erroring if dimensions are invalid
   const safeWidth = typeof width === 'number' && isFinite(width) ? width : 200;
   const safeHeight = typeof height === 'number' && isFinite(height) ? height : 50;
 
@@ -113,6 +105,29 @@ export const OutputElement: React.FC<OutputElementProps> = ({
         fontFamily="monospace"
         fontStyle="bold"
       />
+
+      {explanation && (
+        <Group y={safeHeight + 5}>
+             <Rect
+                width={safeWidth}
+                height={EXPLANATION_HEIGHT}
+                fill="rgba(30, 41, 59, 0.9)"
+                stroke="#64748B"
+                strokeWidth={1}
+                cornerRadius={8}
+             />
+             <Text
+                text={explanation}
+                x={10}
+                y={8}
+                width={safeWidth - 20}
+                fontSize={10}
+                fill="#E2E8F0"
+                fontFamily="'SF Pro Display', system-ui"
+                align="center"
+             />
+        </Group>
+      )}
     </Group>
   );
 };

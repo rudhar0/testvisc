@@ -2,10 +2,6 @@ import React, { useRef, useEffect, useState } from 'react';
 import { Group, Rect, Text, Line, Circle } from 'react-konva';
 import Konva from 'konva';
 
-// ============================================
-// TYPE DEFINITIONS
-// ============================================
-
 export interface HeapPointerElementProps {
   id: string;
   name: string;
@@ -19,45 +15,35 @@ export interface HeapPointerElementProps {
   stepNumber?: number;
   enterDelay?: number;
   
-  // Pointer-specific
   pointsTo?: {
     target: string;
     region: 'stack' | 'heap';
     address?: string | null;
   };
   
-  // Heap-specific
   isHeapBacked?: boolean;
   memoryRegion?: 'stack' | 'heap';
   
-  // Array alias
   decayedFromArray?: boolean;
   aliasOf?: string;
+  explanation?: string;
 }
 
-// ============================================
-// CONSTANTS
-// ============================================
-
 const BOX_WIDTH = 360;
-const BOX_HEIGHT = 140;
+const BASE_HEIGHT = 140;
+const EXPLANATION_HEIGHT = 35;
 const PADDING = 16;
 const CORNER_RADIUS = 12;
 
-// Gradient colors for heap/pointer
 const HEAP_GRADIENT = {
-  start: '#8B5CF6', // Purple
-  end: '#06B6D4',   // Cyan
+  start: '#8B5CF6',
+  end: '#06B6D4',
 };
 
-const POINTER_ACCENT = '#F59E0B'; // Orange
-const ADDRESS_COLOR = '#64748B'; // Muted gray
-const VALUE_COLOR = '#10B981';   // Neon green
+const POINTER_ACCENT = '#F59E0B';
+const ADDRESS_COLOR = '#64748B';
+const VALUE_COLOR = '#10B981';
 const BG_COLOR = 'rgba(15, 23, 42, 0.95)';
-
-// ============================================
-// HEAP POINTER ELEMENT
-// ============================================
 
 export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
   id,
@@ -76,6 +62,7 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
   memoryRegion = 'stack',
   decayedFromArray = false,
   aliasOf,
+  explanation
 }) => {
   const groupRef = useRef<Konva.Group>(null);
   const glowRef = useRef<Konva.Rect>(null);
@@ -85,9 +72,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
   const isPointer = type.includes('*') || !!pointsTo || decayedFromArray;
   const displayRegion = memoryRegion === 'heap' ? 'HEAP' : 'STACK';
 
-  // ============================================
-  // FORMAT VALUE
-  // ============================================
   const formatValue = (val: any): string => {
     if (val === null || val === undefined) return '—';
     if (typeof val === 'string') {
@@ -104,9 +88,8 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
   const displayValue = formatValue(value);
   const displayAddress = address && address !== '0x0' ? address.slice(0, 12) : '—';
 
-  // ============================================
-  // ENTRANCE ANIMATION
-  // ============================================
+  const totalHeight = explanation ? BASE_HEIGHT + EXPLANATION_HEIGHT + 5 : BASE_HEIGHT;
+
   useEffect(() => {
     const group = groupRef.current;
     const glow = glowRef.current;
@@ -152,9 +135,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
     }
   }, [isNew, enterDelay]);
 
-  // ============================================
-  // UPDATE ANIMATION
-  // ============================================
   useEffect(() => {
     if (!isUpdated || !glowRef.current) return;
 
@@ -168,9 +148,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
     });
   }, [isUpdated, value]);
 
-  // ============================================
-  // HOVER
-  // ============================================
   const handleMouseEnter = () => {
     setIsHovered(true);
     glowRef.current?.to({ shadowBlur: 30, opacity: 0.8, duration: 0.15 });
@@ -181,9 +158,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
     glowRef.current?.to({ shadowBlur: 20, opacity: 0.6, duration: 0.15 });
   };
 
-  // ============================================
-  // RENDER
-  // ============================================
   return (
     <Group
       ref={groupRef}
@@ -193,13 +167,12 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {/* Glow Effect */}
       <Rect
         ref={glowRef}
         x={-4}
         y={-4}
         width={BOX_WIDTH + 8}
-        height={BOX_HEIGHT + 8}
+        height={totalHeight + 8}
         fill="transparent"
         cornerRadius={CORNER_RADIUS + 2}
         shadowColor={isHeapBacked ? HEAP_GRADIENT.start : POINTER_ACCENT}
@@ -208,12 +181,11 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         opacity={0}
       />
 
-      {/* Main Background - Gradient */}
       <Rect
         width={BOX_WIDTH}
-        height={BOX_HEIGHT}
+        height={BASE_HEIGHT}
         fillLinearGradientStartPoint={{ x: 0, y: 0 }}
-        fillLinearGradientEndPoint={{ x: BOX_WIDTH, y: BOX_HEIGHT }}
+        fillLinearGradientEndPoint={{ x: BOX_WIDTH, y: BASE_HEIGHT }}
         fillLinearGradientColorStops={
           isHeapBacked
             ? [0, HEAP_GRADIENT.start, 1, HEAP_GRADIENT.end]
@@ -228,25 +200,22 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         opacity={isHeapBacked ? 0.2 : 1}
       />
 
-      {/* Solid Overlay */}
       <Rect
         width={BOX_WIDTH}
-        height={BOX_HEIGHT}
+        height={BASE_HEIGHT}
         fill={BG_COLOR}
         cornerRadius={CORNER_RADIUS}
         opacity={0.9}
       />
 
-      {/* Accent Line (Left Edge) */}
       <Line
-        points={[0, 0, 0, BOX_HEIGHT]}
+        points={[0, 0, 0, BASE_HEIGHT]}
         stroke={isPointer ? POINTER_ACCENT : HEAP_GRADIENT.end}
         strokeWidth={4}
         lineCap="round"
         opacity={0.8}
       />
 
-      {/* Region Badge (Top Right) */}
       <Group x={BOX_WIDTH - 80} y={8}>
         <Rect
           width={70}
@@ -267,7 +236,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         />
       </Group>
 
-      {/* Header: Variable Name */}
       <Text
         text={name.toUpperCase()}
         x={PADDING}
@@ -278,7 +246,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         fontFamily="'SF Pro Display', system-ui"
       />
 
-      {/* Type Label */}
       <Text
         text={type}
         x={PADDING}
@@ -289,7 +256,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         fontStyle="italic"
       />
 
-      {/* Divider */}
       <Line
         points={[PADDING, 52, BOX_WIDTH - PADDING, 52]}
         stroke="#334155"
@@ -297,7 +263,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         opacity={0.5}
       />
 
-      {/* Address Section */}
       <Group y={58}>
         <Text
           text="ADDR:"
@@ -318,7 +283,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         />
       </Group>
 
-      {/* Value Section */}
       <Group y={76}>
         <Text
           text="VALUE:"
@@ -340,7 +304,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         />
       </Group>
 
-      {/* Pointer Target (Conditional) */}
       {isPointer && (
         <Group y={94}>
           <Circle x={PADDING + 4} y={4} radius={3} fill={POINTER_ACCENT} />
@@ -369,7 +332,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         </Group>
       )}
 
-      {/* Function Call Placeholder (Empty but Visible) */}
       {!isPointer && (
         <Group y={94}>
           <Rect
@@ -398,17 +360,39 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         </Group>
       )}
 
-      {/* Step Number (Bottom Right) */}
       {stepNumber !== undefined && (
         <Text
           text={`#${stepNumber}`}
           x={BOX_WIDTH - 50}
-          y={BOX_HEIGHT - 20}
+          y={BASE_HEIGHT - 20}
           fontSize={10}
           fontStyle="bold"
           fill="#475569"
           fontFamily="'SF Mono', monospace"
         />
+      )}
+
+      {explanation && (
+        <Group y={BASE_HEIGHT + 5}>
+             <Rect
+                width={BOX_WIDTH}
+                height={EXPLANATION_HEIGHT}
+                fill="rgba(30, 41, 59, 0.9)"
+                stroke="#64748B"
+                strokeWidth={1}
+                cornerRadius={8}
+             />
+             <Text
+                text={explanation}
+                x={10}
+                y={11}
+                width={BOX_WIDTH - 20}
+                fontSize={11}
+                fill="#E2E8F0"
+                fontFamily="'SF Pro Display', system-ui"
+                align="center"
+             />
+        </Group>
       )}
     </Group>
   );

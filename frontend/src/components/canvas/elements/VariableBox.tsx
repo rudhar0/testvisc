@@ -2,14 +2,10 @@ import React, { useRef, useEffect, useState } from 'react';
 import { Group, Rect, Text, Circle, Line } from 'react-konva';
 import Konva from 'konva';
 
-// ============================================
-// TYPE DEFINITIONS
-// ============================================
-
 type VariableState = 
-  | 'declared'           // int a;
-  | 'initialized'        // int a = 10;
-  | 'updated';           // a = 30;
+  | 'declared'
+  | 'initialized'
+  | 'updated';
 
 interface VariableBoxProps {
   id: string;
@@ -31,11 +27,8 @@ interface VariableBoxProps {
   stepNumber?: number;
   enterDelay?: number;
   color?: string;
+  explanation?: string;
 }
-
-// ============================================
-// HIGHLY DISTINCT COLOR SYSTEM
-// ============================================
 
 const TYPE_COLORS: Record<string, {
   primary: string;
@@ -46,7 +39,7 @@ const TYPE_COLORS: Record<string, {
   accent: string;
 }> = {
   int: {
-    primary: '#2563EB',      // Deep Blue
+    primary: '#2563EB',
     light: '#60A5FA',
     dark: '#1E40AF',
     glow: 'rgba(37, 99, 235, 0.6)',
@@ -54,7 +47,7 @@ const TYPE_COLORS: Record<string, {
     accent: '#3B82F6'
   },
   float: {
-    primary: '#0891B2',      // Cyan
+    primary: '#0891B2',
     light: '#22D3EE',
     dark: '#0E7490',
     glow: 'rgba(8, 145, 178, 0.6)',
@@ -62,7 +55,7 @@ const TYPE_COLORS: Record<string, {
     accent: '#06B6D4'
   },
   double: {
-    primary: '#7C3AED',      // Deep Violet
+    primary: '#7C3AED',
     light: '#A78BFA',
     dark: '#6D28D9',
     glow: 'rgba(124, 58, 237, 0.6)',
@@ -70,7 +63,7 @@ const TYPE_COLORS: Record<string, {
     accent: '#8B5CF6'
   },
   char: {
-    primary: '#EA580C',      // Deep Orange (NOT yellow/gray)
+    primary: '#EA580C',
     light: '#FB923C',
     dark: '#C2410C',
     glow: 'rgba(234, 88, 12, 0.6)',
@@ -78,7 +71,7 @@ const TYPE_COLORS: Record<string, {
     accent: '#F97316'
   },
   bool: {
-    primary: '#9333EA',      // Purple
+    primary: '#9333EA',
     light: '#C084FC',
     dark: '#7E22CE',
     glow: 'rgba(147, 51, 234, 0.6)',
@@ -86,7 +79,7 @@ const TYPE_COLORS: Record<string, {
     accent: '#A855F7'
   },
   string: {
-    primary: '#DB2777',      // Deep Pink
+    primary: '#DB2777',
     light: '#F472B6',
     dark: '#BE185D',
     glow: 'rgba(219, 39, 119, 0.6)',
@@ -94,20 +87,20 @@ const TYPE_COLORS: Record<string, {
     accent: '#EC4899'
   },
   pointer: {
-    primary: '#DC2626',      // Red
+    primary: '#DC2626',
     light: '#F87171',
     dark: '#B91C1C',
     glow: 'rgba(220, 38, 38, 0.6)',
     bg: 'rgba(220, 38, 38, 0.18)',
-    accent: '#EF4444'
+    accent: '#F87171'
   },
   array: {
-    primary: '#059669',      // Emerald Green
+    primary: '#10B981',
     light: '#34D399',
-    dark: '#047857',
-    glow: 'rgba(5, 150, 105, 0.6)',
-    bg: 'rgba(5, 150, 105, 0.18)',
-    accent: '#10B981'
+    dark: '#059669',
+    glow: 'rgba(16, 185, 129, 0.6)',
+    bg: 'rgba(16, 185, 129, 0.18)',
+    accent: '#34D399'
   },
   default: {
     primary: '#64748B',
@@ -119,40 +112,41 @@ const TYPE_COLORS: Record<string, {
   }
 };
 
-// State visual configuration - ENHANCED VISUAL DIFFERENCES
-const STATE_CONFIG = {
+const STATE_CONFIGS = {
   declared: {
-    label: '📝 DECLARED',
+    label: 'DECLARED',
     dotColor: '#94A3B8',
-    labelBg: 'rgba(71, 85, 105, 0.4)',
-    labelStroke: '#64748B',
-    borderDash: [10, 5],
-    bgOpacity: 0.4,
-    glowEnabled: false
+    labelBg: 'rgba(148, 163, 184, 0.25)',
+    labelStroke: '#94A3B8',
+    glowEnabled: false,
+    borderDash: [8, 4],
+    bgOpacity: 0.6
   },
   initialized: {
-    label: '✓ INITIALIZED',
+    label: 'INITIALIZED',
     dotColor: '#10B981',
     labelBg: 'rgba(16, 185, 129, 0.25)',
     labelStroke: '#10B981',
-    borderDash: undefined,
-    bgOpacity: 1,
-    glowEnabled: true
+    glowEnabled: true,
+    borderDash: [],
+    bgOpacity: 0.2
   },
   updated: {
-    label: '⚡ UPDATED',
+    label: 'UPDATED',
     dotColor: '#F59E0B',
     labelBg: 'rgba(245, 158, 11, 0.25)',
     labelStroke: '#F59E0B',
-    borderDash: undefined,
-    bgOpacity: 1,
-    glowEnabled: true
+    glowEnabled: true,
+    borderDash: [],
+    bgOpacity: 0.2
   }
 };
 
-// ============================================
-// LARGER VARIABLE BOX - 180x140
-// ============================================
+const BOX_WIDTH = 360;
+const BASE_HEIGHT = 140;
+const EXPLANATION_HEIGHT = 35;
+const PADDING = 16;
+const CORNER_RADIUS = 12;
 
 export const VariableBox: React.FC<VariableBoxProps> = ({
   id,
@@ -160,16 +154,21 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   type,
   value,
   address,
-  x = 0,
-  y = 0,
+  x,
+  y,
+  width,
+  height,
   section,
   isNew = false,
-  state,
+  isUpdated = false,
+  previousValue,
+  expression,
+  onClick,
+  state: varState = 'initialized',
   stepNumber,
   enterDelay = 0,
-  expression,
-  previousValue,
-  onClick
+  color,
+  explanation
 }) => {
   const groupRef = useRef<Konva.Group>(null);
   const glowRef = useRef<Konva.Rect>(null);
@@ -177,22 +176,11 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const isInitialMount = useRef(true);
 
-  // LARGER DIMENSIONS FOR MORE CONTENT
-  const BOX_WIDTH = 360;
-  const BOX_HEIGHT = 140;
-  const CORNER_RADIUS = 19;
-  const PADDING = 24;
-
-  // Determine state
-  const varState: VariableState = state || 
-    (value === undefined || value === null ? 'declared' : 'initialized');
+  const stateConfig = STATE_CONFIGS[varState];
   
-  const stateConfig = STATE_CONFIG[varState];
-
-  // Get type colors with better normalization
-  const normalizeType = (t: string): keyof typeof TYPE_COLORS => {
-    const lower = t.toLowerCase().trim();
-    if (lower.includes('int') && !lower.includes('point')) return 'int';
+  const normalizeType = (t: string): string => {
+    const lower = t.toLowerCase();
+    if (lower.includes('int')) return 'int';
     if (lower.includes('float')) return 'float';
     if (lower.includes('double')) return 'double';
     if (lower.includes('char')) return 'char';
@@ -206,7 +194,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   const typeKey = normalizeType(type);
   const colors = TYPE_COLORS[typeKey];
 
-  // Format value - MORE SPACE NOW
   const formatValue = (val: any): string => {
     if (val === null || val === undefined) return '—';
     if (typeof val === 'string') {
@@ -224,20 +211,18 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
 
   const displayValue = varState === 'declared' ? '—' : formatValue(value);
 
-  // Background colors - STATE-AWARE with strong visual distinction
   const bgColor = varState === 'declared' 
-    ? 'rgba(51, 65, 85, 0.5)'  // Gray for declared
-    : `${colors.bg.slice(0, -2)}${stateConfig.bgOpacity})`;  // Type color for init/updated
+    ? 'rgba(51, 65, 85, 0.5)'
+    : colors.bg;
   
   const borderColor = varState === 'declared' 
-    ? '#64748B'  // Gray border for declared
-    : colors.primary;  // Type color border for init/updated
+    ? '#64748B'
+    : colors.primary;
   
   const borderWidth = varState === 'declared' ? 2 : 3;
 
-  // ============================================
-  // ENTRANCE ANIMATION
-  // ============================================
+  const totalHeight = explanation ? BASE_HEIGHT + EXPLANATION_HEIGHT + 5 : BASE_HEIGHT;
+
   useEffect(() => {
     const group = groupRef.current;
     const glow = glowRef.current;
@@ -253,6 +238,7 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
       group.y(origY + 25);
 
       const playAnim = () => {
+        if (!group.getLayer()) return;
         new Konva.Tween({
           node: group,
           opacity: 1,
@@ -293,9 +279,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
     }
   }, [isNew, varState, enterDelay]);
 
-  // ============================================
-  // HOVER
-  // ============================================
   const handleMouseEnter = () => {
     setIsHovered(true);
     glowRef.current?.to({ shadowBlur: 28, opacity: 0.9, duration: 0.2 });
@@ -317,14 +300,13 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
       onClick={onClick}
       onTap={onClick}
     >
-      {/* Glow Effect - Only for INITIALIZED and UPDATED */}
       {stateConfig.glowEnabled && (
         <Rect
           ref={glowRef}
           x={-4}
           y={-4}
           width={BOX_WIDTH + 8}
-          height={BOX_HEIGHT + 8}
+          height={totalHeight + 8}
           fill="transparent"
           cornerRadius={CORNER_RADIUS + 3}
           shadowColor={colors.primary}
@@ -334,10 +316,9 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         />
       )}
 
-      {/* Main Background */}
       <Rect
         width={BOX_WIDTH}
-        height={BOX_HEIGHT}
+        height={BASE_HEIGHT}
         fill={bgColor}
         stroke={borderColor}
         strokeWidth={borderWidth}
@@ -349,10 +330,9 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         opacity={varState === 'declared' ? 0.8 : 1}
       />
 
-      {/* Accent Line on Left */}
       {varState !== 'declared' && (
         <Line
-          points={[0, 0, 0, BOX_HEIGHT]}
+          points={[0, 0, 0, BASE_HEIGHT]}
           stroke={colors.accent}
           strokeWidth={5}
           lineCap="round"
@@ -360,7 +340,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         />
       )}
 
-      {/* Status Dot (Top Right) - LARGER */}
       <Circle
         ref={dotRef}
         x={BOX_WIDTH - 12}
@@ -372,7 +351,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         shadowOpacity={1}
       />
 
-      {/* State Label Badge (Top Left) - ENHANCED */}
       <Group x={PADDING} y={8}>
         <Rect
           width={stateConfig.label.length * 6.5 + 14}
@@ -398,7 +376,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         />
       </Group>
 
-      {/* SECTION: Variable Name */}
       <Group y={32}>
         <Text
           text="VAR:"
@@ -423,7 +400,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         />
       </Group>
 
-      {/* SECTION: Value */}
       <Group y={74}>
         <Text
           text="VALUE:"
@@ -449,7 +425,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         />
       </Group>
 
-      {/* SECTION: Reason/Expression */}
       {expression && (varState === 'updated' || varState === 'initialized') && (
         <Group y={106}>
           <Text
@@ -476,9 +451,7 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         </Group>
       )}
 
-      {/* Footer: Type + Address + Step */}
-      <Group y={BOX_HEIGHT - 20}>
-        {/* Type Badge */}
+      <Group y={BASE_HEIGHT - 20}>
         <Rect
           x={PADDING}
           y={0}
@@ -499,7 +472,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
           letterSpacing={0.5}
         />
 
-        {/* Address - ALWAYS VISIBLE */}
         {address && address !== '0x0' && address !== '00000000' && (
           <Text
             text={address.slice(0, 10)}
@@ -511,7 +483,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
           />
         )}
 
-        {/* Step Number */}
         {stepNumber !== undefined && (
           <Text
             text={`#${stepNumber}`}
@@ -524,6 +495,29 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
           />
         )}
       </Group>
+
+      {explanation && (
+        <Group y={BASE_HEIGHT + 5}>
+             <Rect
+                width={BOX_WIDTH}
+                height={EXPLANATION_HEIGHT}
+                fill="rgba(30, 41, 59, 0.9)"
+                stroke="#64748B"
+                strokeWidth={1}
+                cornerRadius={8}
+             />
+             <Text
+                text={explanation}
+                x={10}
+                y={11}
+                width={BOX_WIDTH - 20}
+                fontSize={11}
+                fill="#E2E8F0"
+                fontFamily="'SF Pro Display', system-ui"
+                align="center"
+             />
+        </Group>
+      )}
     </Group>
   );
 };
