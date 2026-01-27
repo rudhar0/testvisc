@@ -68,6 +68,10 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
   const glowRef = useRef<Konva.Rect>(null);
   const [isHovered, setIsHovered] = useState(false);
   const isInitialMount = useRef(true);
+  
+  // NEW: Explanation color transition state
+  const hasExplanation = !!explanation;
+  const [showingExplanation, setShowingExplanation] = useState(hasExplanation);
 
   const isPointer = type.includes('*') || !!pointsTo || decayedFromArray;
   const displayRegion = memoryRegion === 'heap' ? 'HEAP' : 'STACK';
@@ -89,6 +93,49 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
   const displayAddress = address && address !== '0x0' ? address.slice(0, 12) : '—';
 
   const totalHeight = explanation ? BASE_HEIGHT + EXPLANATION_HEIGHT + 5 : BASE_HEIGHT;
+  
+  // NEW: Color scheme changes based on explanation presence
+  const bgColorStops = hasExplanation && showingExplanation
+    ? [0, 'rgba(139, 92, 246, 0.15)', 1, 'rgba(139, 92, 246, 0.15)']  // Light purple
+    : isHeapBacked
+      ? [0, HEAP_GRADIENT.start, 1, HEAP_GRADIENT.end]
+      : [0, BG_COLOR, 1, BG_COLOR];
+      
+  const borderColor = hasExplanation && showingExplanation
+    ? '#8B5CF6'  // Light purple
+    : isPointer ? POINTER_ACCENT : HEAP_GRADIENT.start;
+
+  // NEW: Explanation color transition effect
+  useEffect(() => {
+    if (hasExplanation && showingExplanation) {
+      const timer = setTimeout(() => {
+        setShowingExplanation(false);
+        // Same color transition logic
+        if (groupRef.current) {
+          const bgRect = groupRef.current.findOne('.main-bg');
+          bgRect?.to({
+            fill: 'rgba(124, 58, 237, 0.25)', // Dark purple
+            stroke: '#6D28D9',
+            duration: 0.5
+          });
+          
+          const explRect = groupRef.current.findOne('.explanation-bg');
+          explRect?.to({
+            fill: 'rgba(76, 29, 149, 0.9)',
+            duration: 0.5
+          });
+          
+          const explText = groupRef.current.findOne('.explanation-text');
+          explText?.to({
+            fill: '#E9D5FF',
+            duration: 0.5
+          });
+        }
+      }, 2000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [hasExplanation, showingExplanation]);
 
   useEffect(() => {
     const group = groupRef.current;
@@ -182,16 +229,13 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
       />
 
       <Rect
+        name="main-bg"
         width={BOX_WIDTH}
         height={BASE_HEIGHT}
         fillLinearGradientStartPoint={{ x: 0, y: 0 }}
         fillLinearGradientEndPoint={{ x: BOX_WIDTH, y: BASE_HEIGHT }}
-        fillLinearGradientColorStops={
-          isHeapBacked
-            ? [0, HEAP_GRADIENT.start, 1, HEAP_GRADIENT.end]
-            : [0, BG_COLOR, 1, BG_COLOR]
-        }
-        stroke={isPointer ? POINTER_ACCENT : HEAP_GRADIENT.start}
+        fillLinearGradientColorStops={bgColorStops}
+        stroke={borderColor}
         strokeWidth={isHovered ? 3 : 2}
         cornerRadius={CORNER_RADIUS}
         shadowColor="rgba(0, 0, 0, 0.4)"
@@ -372,26 +416,32 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         />
       )}
 
+      {/* Explanation INSIDE at bottom */}
       {explanation && (
-        <Group y={BASE_HEIGHT + 5}>
-             <Rect
-                width={BOX_WIDTH}
-                height={EXPLANATION_HEIGHT}
-                fill="rgba(30, 41, 59, 0.9)"
-                stroke="#64748B"
-                strokeWidth={1}
-                cornerRadius={8}
-             />
-             <Text
-                text={explanation}
-                x={10}
-                y={11}
-                width={BOX_WIDTH - 20}
-                fontSize={11}
-                fill="#E2E8F0"
-                fontFamily="'SF Pro Display', system-ui"
-                align="center"
-             />
+        <Group y={BASE_HEIGHT - EXPLANATION_HEIGHT - 8}>
+          <Rect
+            name="explanation-bg"
+            width={BOX_WIDTH}
+            height={EXPLANATION_HEIGHT}
+            fill={showingExplanation ? 
+                  'rgba(245, 158, 11, 0.3)' : 
+                  'rgba(76, 29, 149, 0.9)'}
+            stroke={showingExplanation ? POINTER_ACCENT : '#6D28D9'}
+            strokeWidth={1}
+            cornerRadius={8}
+          />
+          <Text
+            name="explanation-text"
+            text={`💡 ${explanation}`}
+            x={12}
+            y={12}
+            width={BOX_WIDTH - 24}
+            fontSize={10}
+            fill={showingExplanation ? '#78350F' : '#E9D5FF'}
+            fontFamily="'SF Pro Display', system-ui"
+            fontStyle="bold"
+            align="center"
+          />
         </Group>
       )}
     </Group>

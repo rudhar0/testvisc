@@ -91,6 +91,8 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
   returnType,
   x,
   y,
+  width,
+  height,
   isRecursive = false,
   depth = 0,
   calledFrom,
@@ -103,7 +105,6 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
   enterDelay = 0,
   children,
   onConnectorClick,
-  ...props
 }) => {
   const groupRef = useRef<Konva.Group>(null);
   const glowRef = useRef<Konva.Rect>(null);
@@ -111,13 +112,17 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
   const [isHovered, setIsHovered] = useState(false);
   const isInitialMount = useRef(true);
 
-  // Calculate body height
+  // Use props directly, with fallback calculation only if not provided
+  const totalWidth = width || BOX_WIDTH;
+  
+  // Calculate fallback height only if height prop is not provided
   const paramSectionHeight = parameters.length > 0 ? 25 + parameters.length * 28 : 0;
   const localVarSectionHeight = localVarCount > 0 ? 40 : 0;
   const calculatedHeight = Math.max(MIN_BODY_HEIGHT, paramSectionHeight + localVarSectionHeight + 20);
+  const fallbackHeight = HEADER_HEIGHT + calculatedHeight;
   
-  // Use passed height if available, otherwise use calculated fallback
-  const totalHeight = props.height ? Math.max(props.height, HEADER_HEIGHT + calculatedHeight) : HEADER_HEIGHT + calculatedHeight;
+  // Use prop height if available, otherwise use calculated fallback
+  const totalHeight = height || fallbackHeight;
 
   const colorScheme = isReturning 
     ? COLORS.returning 
@@ -224,7 +229,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
         ref={glowRef}
         x={-5}
         y={-5}
-        width={BOX_WIDTH + 10}
+        width={totalWidth + 10}
         height={totalHeight + 10}
         fill="transparent"
         cornerRadius={CORNER_RADIUS + 3}
@@ -236,7 +241,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
 
       {/* Main Background */}
       <Rect
-        width={BOX_WIDTH}
+        width={totalWidth}
         height={totalHeight}
         fill="rgba(15, 23, 42, 0.96)"
         stroke={borderColor}
@@ -249,7 +254,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
 
       {/* Header Background */}
       <Rect
-        width={BOX_WIDTH}
+        width={totalWidth}
         height={HEADER_HEIGHT}
         fill={colorScheme.bg}
         cornerRadius={[CORNER_RADIUS, CORNER_RADIUS, 0, 0]}
@@ -368,7 +373,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
               <Group key={idx} y={20 + idx * 28}>
                 <Rect
                   x={PADDING}
-                  width={BOX_WIDTH - PADDING * 2}
+                  width={totalWidth - PADDING * 2}
                   height={24}
                   fill="rgba(51, 65, 85, 0.5)"
                   stroke="#475569"
@@ -396,7 +401,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
                 {param.value !== undefined && (
                   <Text
                     text={`= ${param.value}`}
-                    x={BOX_WIDTH - PADDING - 70}
+                    x={totalWidth - PADDING - 70}
                     y={5}
                     fontSize={10}
                     fill="#10B981"
@@ -442,7 +447,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
 
       {/* Call Connector */}
       <Group
-        x={BOX_WIDTH}
+        x={totalWidth}
         y={totalHeight / 2}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
@@ -482,7 +487,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
       {stepNumber !== undefined && (
         <Text
           text={`#${stepNumber}`}
-          x={BOX_WIDTH - 45}
+          x={totalWidth - 45}
           y={totalHeight - 18}
           fontSize={9}
           fontStyle="bold"

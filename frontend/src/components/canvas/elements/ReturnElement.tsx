@@ -1,8 +1,8 @@
 // frontend/src/components/canvas/elements/ReturnElement.tsx
-// COMPLETE - Return visualization component
+// Return visualization component with prominent value display
 
-import React, { useRef, useEffect, memo } from 'react';
-import { Group, Rect, Text, Circle } from 'react-konva';
+import React, { useRef, useEffect, memo, useState } from 'react';
+import { Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
 
 export interface ReturnElementProps {
@@ -17,18 +17,6 @@ export interface ReturnElementProps {
   enterDelay?: number;
 }
 
-const BOX_WIDTH = 200;
-const BOX_HEIGHT = 60;
-const PADDING = 12;
-const CORNER_RADIUS = 8;
-
-const COLORS = {
-  primary: '#EF4444',
-  light: '#FCA5A5',
-  bg: 'rgba(239, 68, 68, 0.15)',
-  glow: 'rgba(239, 68, 68, 0.6)'
-};
-
 export const ReturnElement: React.FC<ReturnElementProps> = memo(({
   id,
   x,
@@ -41,11 +29,19 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
   enterDelay = 0
 }) => {
   const groupRef = useRef<Konva.Group>(null);
+  const glowRef = useRef<Konva.Rect>(null);
   const isInitialMount = useRef(true);
+  const [showingExplanation, setShowingExplanation] = useState(true);
 
+  const BOX_WIDTH = 360; // Match other elements
+  const BOX_HEIGHT = 70;
+  
+  const hasValue = returnValue !== undefined && returnValue !== null;
+  const displayValue = hasValue ? String(returnValue) : 'void';
+
+  // Animation
   useEffect(() => {
     const group = groupRef.current;
-
     if (!group) return;
 
     if (isNew && isInitialMount.current) {
@@ -62,8 +58,13 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
           scaleX: 1,
           scaleY: 1,
           y: origY,
-          duration: 0.4,
-          easing: Konva.Easings.BackEaseOut
+          duration: 0.5,
+          easing: Konva.Easings.BackEaseOut,
+          onFinish: () => {
+            if (glowRef.current) {
+              glowRef.current.to({ opacity: 0.7, duration: 0.3 });
+            }
+          }
         }).play();
       };
 
@@ -75,11 +76,38 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
       }
     } else if (isInitialMount.current) {
       group.opacity(1);
-      group.scaleX(1);
-      group.scaleY(1);
       isInitialMount.current = false;
     }
   }, [isNew, enterDelay]);
+
+  // Color transition for explanation
+  useEffect(() => {
+    if (showingExplanation) {
+      const timer = setTimeout(() => {
+        setShowingExplanation(false);
+        // Transition to darker
+        const group = groupRef.current;
+        if (group) {
+          group.findOne('.main-bg')?.to({
+            fill: 'rgba(127, 29, 29, 0.9)',
+            duration: 0.5
+          });
+          
+          group.findOne('.explanation-bg')?.to({
+            fill: 'rgba(127, 29, 29, 0.9)',
+            duration: 0.5
+          });
+          
+          group.findOne('.explanation-text')?.to({
+            fill: '#FCA5A5',
+            duration: 0.5
+          });
+        }
+      }, 2000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [showingExplanation]);
 
   return (
     <Group
@@ -88,98 +116,114 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
       x={x}
       y={y}
     >
-      {/* Glow Effect */}
+      {/* Glow */}
       <Rect
+        ref={glowRef}
         x={-3}
         y={-3}
         width={BOX_WIDTH + 6}
         height={BOX_HEIGHT + 6}
         fill="transparent"
-        cornerRadius={CORNER_RADIUS + 2}
-        shadowColor={COLORS.glow}
+        cornerRadius={10}
+        shadowColor="rgba(239, 68, 68, 0.6)"
         shadowBlur={12}
         shadowOpacity={0.5}
-        opacity={0.7}
+        opacity={0}
       />
 
-      {/* Main Background */}
+      {/* Main Background - Light when showing explanation */}
       <Rect
+        name="main-bg"
         width={BOX_WIDTH}
         height={BOX_HEIGHT}
-        fill="rgba(15, 23, 42, 0.96)"
-        stroke={COLORS.primary}
+        fill={showingExplanation ? 
+              'rgba(239, 68, 68, 0.15)' :  // Light red
+              'rgba(127, 29, 29, 0.9)'}    // Dark red
+        stroke={showingExplanation ? '#EF4444' : '#7F1D1D'}
         strokeWidth={2}
-        cornerRadius={CORNER_RADIUS}
+        cornerRadius={8}
         shadowColor="rgba(0, 0, 0, 0.3)"
         shadowBlur={10}
         shadowOffsetY={2}
       />
 
-      {/* Header Background */}
-      <Rect
-        width={BOX_WIDTH}
-        height={25}
-        fill={COLORS.bg}
-        cornerRadius={[CORNER_RADIUS, CORNER_RADIUS, 0, 0]}
-      />
-
       {/* Return Icon */}
-      <Circle
-        x={PADDING + 8}
-        y={BOX_HEIGHT / 2}
-        radius={12}
-        fill={COLORS.primary}
-        opacity={0.2}
-      />
       <Text
         text="↩"
-        x={PADDING}
-        y={BOX_HEIGHT / 2 - 8}
-        fontSize={16}
-        fill={COLORS.light}
+        x={16}
+        y={12}
+        fontSize={20}
+        fill="#FCA5A5"
         fontStyle="bold"
       />
 
       {/* Function Name */}
       <Text
-        text={functionName}
-        x={PADDING + 25}
-        y={5}
-        fontSize={10}
-        fontStyle="bold"
-        fill={COLORS.light}
-        fontFamily="'SF Mono', monospace"
-      />
-
-      {/* Return Value */}
-      <Text
-        text={`Returns: ${returnValue !== undefined ? returnValue : 'void'}`}
-        x={PADDING + 25}
-        y={25}
+        text={`${functionName}()`}
+        x={48}
+        y={10}
         fontSize={12}
-        fill="#F1F5F9"
+        fontStyle="bold"
+        fill={showingExplanation ? '#7F1D1D' : '#FCA5A5'}
         fontFamily="'SF Mono', monospace"
       />
 
-      {/* Frame ID */}
-      <Text
-        text={`Frame: ${frameId}`}
-        x={PADDING + 25}
-        y={40}
-        fontSize={8}
-        fill="#94A3B8"
-        fontFamily="'SF Mono', monospace"
-      />
+      {/* Return Value - PROMINENT */}
+      <Group y={32}>
+        <Text
+          text="RETURNS:"
+          x={16}
+          y={0}
+          fontSize={9}
+          fontStyle="bold"
+          fill={showingExplanation ? '#991B1B' : '#F87171'}
+          fontFamily="'SF Pro Display', system-ui"
+          letterSpacing={1}
+        />
+        <Text
+          text={displayValue}
+          x={80}
+          y={-2}
+          fontSize={18}
+          fontStyle="bold"
+          fill={hasValue ? '#10B981' : '#64748B'}
+          fontFamily="'SF Mono', monospace"
+        />
+      </Group>
 
-      {/* Step Number */}
+      {/* Explanation at bottom */}
+      <Group y={BOX_HEIGHT - 32}>
+        <Rect
+          name="explanation-bg"
+          width={BOX_WIDTH}
+          height={28}
+          fill={showingExplanation ? 
+                'rgba(239, 68, 68, 0.3)' : 
+                'rgba(127, 29, 29, 0.9)'}
+          cornerRadius={[0, 0, 8, 8]}
+        />
+        <Text
+          name="explanation-text"
+          text={`💡 Returns to ${frameId.split('-')[0]}`}
+          x={16}
+          y={8}
+          width={BOX_WIDTH - 32}
+          fontSize={10}
+          fill={showingExplanation ? '#7F1D1D' : '#FCA5A5'}
+          fontFamily="'SF Pro Display', system-ui"
+          align="center"
+        />
+      </Group>
+
+      {/* Step number */}
       {stepNumber !== undefined && (
         <Text
           text={`#${stepNumber}`}
-          x={BOX_WIDTH - 35}
-          y={BOX_HEIGHT - 15}
-          fontSize={8}
+          x={BOX_WIDTH - 45}
+          y={10}
+          fontSize={9}
           fontStyle="bold"
-          fill="#475569"
+          fill="#64748B"
           fontFamily="'SF Mono', monospace"
         />
       )}

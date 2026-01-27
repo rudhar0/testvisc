@@ -353,7 +353,7 @@ export class LayoutEngine {
       i++
     ) {
       const step = executionTrace.steps[i];
-      this.processStep(step, layout, i, currentStepIndex);
+      this.processStep(step, layout, i, currentStepIndex, executionTrace);
     }
 
     this.createArrayPanel(layout, currentStepIndex);
@@ -371,6 +371,7 @@ export class LayoutEngine {
     layout: Layout,
     stepIndex: number,
     currentStep: number,
+    executionTrace: ExecutionTrace,
   ): void {
     const stepType: string = (step as any).eventType || (step as any).type;
     const frameId = (step as any).frameId;
@@ -398,33 +399,86 @@ export class LayoutEngine {
         const funcY =
           MAIN_FUNCTION_Y + (orderIndex - 1) * FUNCTION_VERTICAL_SPACING;
         
+        // NEW: Extract parameters by looking ahead in trace
+        const parameters: Array<{name: string; type: string; value?: any}> = [];
+        
+        // Scan next few steps for var_declare/var_assign in this frame
+        for (let i = stepIndex + 1; i < Math.min(stepIndex + 10, executionTrace.steps.length); i++) {
+          const nextStep = executionTrace.steps[i] as any;
+          if (nextStep.frameId !== frameId) break; // Different frame
+          
+          if (nextStep.eventType === 'var_declare') {
+            const paramName = nextStep.name || nextStep.symbol;
+            const paramType = nextStep.varType || 'int';
+            
+            // Check if next step assigns value to this param
+            const valueStep = i + 1 < executionTrace.steps.length ? 
+                             executionTrace.steps[i + 1] as any : null;
+            const paramValue = (valueStep?.eventType === 'var_assign' && 
+                               (valueStep?.name === paramName || valueStep?.symbol === paramName)) ? 
+                               valueStep.value : undefined;
+            
+            parameters.push({
+              name: paramName,
+              type: paramType,
+              value: paramValue
+            });
+          }
+        }
+        
         // 1. Create Call Site Element in Parent Frame (if exists)
         let arrowFromX = parentFrame ? parentFrame.x + parentFrame.width : 0;
         let arrowFromY = parentFrame ? parentFrame.y + 75 : 0;
 
         if (parentFrame) {
-            const indent = getIndentSize(parentFrame);
-            const callElement: LayoutElement = {
-                id: `call-${parentFrameId}-to-${frameId}`,
-                type: "call_site", // New type
-                x: parentFrame.x + indent,
-                y: this.getNextCursorY(parentFrame),
-                width: parentFrame.width - indent * 2,
-                height: 50, // Compact height
-                parentId: parentFrame.id,
-                stepId: stepIndex,
-                data: {
-                    functionName: functionName,
-                    args: "()", // TODO: Extract args if available
+            // Check if previous step in parent was a var_declare
+            const prevStep = stepIndex > 0 ? executionTrace.steps[stepIndex - 1] : null;
+            const isInlineCall = prevStep && 
+                                (prevStep as any).eventType === 'var_declare' &&
+                                (prevStep as any).frameId === parentFrameId;
+
+            // Only create standalone call_site if NOT inline
+            if (!isInlineCall) {
+                const indent = getIndentSize(parentFrame);
+                const callElement: LayoutElement = {
+                    id: `call-${parentFrameId}-to-${frameId}`,
+                    type: "call_site",
+                    subtype: "standalone", // NEW subtype
+                    x: parentFrame.x + indent,
+                    y: this.getNextCursorY(parentFrame),
+                    width: parentFrame.width - indent * 2,
+                    height: 50, // Compact height
+                    parentId: parentFrame.id,
+                    stepId: stepIndex,
+                    data: {
+                        functionName: functionName,
+                        args: "()", // TODO: Extract args if available
+                        targetFrameId: frameId
+                    }
+                };
+                parentFrame.children?.push(callElement);
+                layout.elements.push(callElement);
+                this.elementHistory.set(callElement.id, callElement);
+                
+                // Arrow starts from this element
+                arrowFromX = callElement.x + callElement.width;
+                arrowFromY = callElement.y + callElement.height / 2;
+            } else {
+                // NEW: For inline calls, find the variable element
+                const varName = (prevStep as any).name || (prevStep as any).symbol;
+                const varId = `var-${parentFrameId}-${varName}-${stepIndex - 1}`;
+                const varElement = this.elementHistory.get(varId);
+                
+                if (varElement) {
+                    // Arrow starts from variable's right edge
+                    arrowFromX = varElement.x + varElement.width;
+                    arrowFromY = varElement.y + varElement.height / 2;
+                } else {
+                    // Fallback to parent frame edge
+                    arrowFromX = parentFrame.x + parentFrame.width;
+                    arrowFromY = parentFrame.y + 75;
                 }
-            };
-            parentFrame.children?.push(callElement);
-            layout.elements.push(callElement);
-            this.elementHistory.set(callElement.id, callElement);
-            
-            // Arrow starts from this element
-            arrowFromX = callElement.x + callElement.width;
-            arrowFromY = callElement.y + callElement.height / 2;
+            }
         }
 
         const functionElement: LayoutElement = {
@@ -433,7 +487,7 @@ export class LayoutEngine {
           x: funcX,
           y: funcY,
           width: FUNCTION_BOX_WIDTH,
-          height: 150,
+          height: 150, // Initial - will grow
           children: [],
           stepId: stepIndex,
           data: {
@@ -443,7 +497,7 @@ export class LayoutEngine {
             isRecursive: isRecursive,
             depth: callDepth,
             calledFrom: parentFrameId || "main",
-            parameters: [],
+            parameters: parameters, // NEW: Pass parameters
             localVarCount: 0,
             isActive: true,
             isReturning: false,
@@ -455,6 +509,12 @@ export class LayoutEngine {
 
         // Initialize Lanes for new function
         this.getLane(functionElement, 'HEADER');
+        const paramLane = this.getLane(functionElement, 'PARAMS');
+        
+        // Reserve space for parameters
+        if (parameters.length > 0) {
+          paramLane.usedHeight = 25 + (parameters.length * 28) + 10;
+        }
 
         layout.elements.push(functionElement);
         this.elementHistory.set(functionElement.id, functionElement);
@@ -492,39 +552,98 @@ export class LayoutEngine {
         funcFrame.data.isReturning = true;
       }
 
-      const returnValue = (step as any).returnValue;
+      // NEW: Extract return value from trace
+      const returnValue = (step as any).returnValue ?? (step as any).value;
       const functionName = (step as any).function;
 
       if (funcFrame) {
-        // Relocate Return Element INSIDE the function frame
-        // LANE: RETURN
         const lane = this.getLane(funcFrame, 'RETURN');
         const indent = getIndentSize(funcFrame);
+        
+        // NEW: Check if there's a return value in previous steps
+        // Look for the last var_assign in this frame
+        let actualReturnValue = returnValue;
+        if (actualReturnValue === undefined) {
+          for (let i = stepIndex - 1; i >= 0; i--) {
+            const prevStep = executionTrace.steps[i];
+            if (prevStep.frameId !== frameId) break;
+            if ((prevStep as any).eventType === 'var_assign' && 
+                (prevStep as any).name === 'result') {
+              actualReturnValue = (prevStep as any).value;
+              break;
+            }
+          }
+        }
         
         const returnElement: LayoutElement = {
           id: `return-${frameId}-${stepIndex}`,
           type: "function_return",
-          // Position it inside the frame using Lane
           x: funcFrame.x + indent,
           y: funcFrame.y + lane.startY + lane.usedHeight,
           width: funcFrame.width - indent * 2,
-          height: 60,
+          height: 70, // Increased for explanation
           stepId: stepIndex,
-          parentId: funcFrame.id, // Mark parent
+          parentId: funcFrame.id,
           data: {
             frameId: frameId,
             functionName: functionName,
-            returnValue: returnValue,
-            explanation: `return ${returnValue}`, // Use as explanation
+            returnValue: actualReturnValue, // Use extracted value
+            explanation: `Returns ${actualReturnValue ?? 'void'} to caller`,
           },
         };
         
         // Update Lane Usage
         lane.usedHeight += returnElement.height + ELEMENT_SPACING;
 
-        funcFrame.children?.push(returnElement); // Add to children
+        funcFrame.children?.push(returnElement);
         layout.elements.push(returnElement);
         this.elementHistory.set(returnElement.id, returnElement);
+        
+        // NEW: Create return arrow back to call site
+        const parentFrame = parentFrameId ? 
+                            this.functionFrames.get(parentFrameId) : null;
+        
+        if (parentFrame) {
+          // Find where to return to (call site or variable)
+          let returnToX = parentFrame.x;
+          let returnToY = parentFrame.y + parentFrame.height / 2;
+          
+          // Check if there's a variable waiting for this return
+          for (let i = stepIndex + 1; i < Math.min(stepIndex + 5, executionTrace.steps.length); i++) {
+            const nextStep = executionTrace.steps[i] as any;
+            if (nextStep.frameId === parentFrameId && 
+                nextStep.eventType === 'var_assign') {
+              const varId = `var-${parentFrameId}-${nextStep.name || nextStep.symbol}-${i}`;
+              const varElement = this.elementHistory.get(varId);
+              if (varElement) {
+                returnToX = varElement.x;
+                returnToY = varElement.y + varElement.height / 2;
+                break;
+              }
+            }
+          }
+          
+          const returnArrow: LayoutElement = {
+            id: `return-arrow-${frameId}-${stepIndex}`,
+            type: "array_reference",
+            subtype: "return_arrow",
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            stepId: stepIndex,
+            data: {
+              fromX: funcFrame.x,
+              fromY: funcFrame.y + funcFrame.height - 35,
+              toX: returnToX,
+              toY: returnToY,
+              label: `↩ ${actualReturnValue ?? 'void'}`,
+              isReturn: true,
+            },
+          };
+          
+          this.functionArrows.push(returnArrow);
+        }
       }
       return;
     }
@@ -602,6 +721,12 @@ export class LayoutEngine {
 
       const varId = `var-${frameId}-${varName}-${stepIndex}`;
 
+      // NEW: Detect if this is a function return assignment
+      // Look for function exit in previous steps
+      const isFunctionReturnAssignment = 
+        stepIndex > 0 && 
+        executionTrace.steps[stepIndex - 1]?.eventType === 'func_exit';
+
       // If the variable element does not exist yet, create it. Use the "variable_load" subtype to indicate
       // that this is the initial value being loaded onto the canvas.
       const variable: any = {
@@ -618,11 +743,21 @@ export class LayoutEngine {
       };
 
       const indent = getIndentSize(ownerFrame);
-      const elementHeight = explanation ? VARIABLE_HEIGHT + EXPLANATION_HEIGHT : VARIABLE_HEIGHT;
+      
+      // Calculate height based on explanation and function call
+      const baseHeight = VARIABLE_HEIGHT;
+      const hasExplanation = !!explanation;
+      const hasFunctionCall = isFunctionReturnAssignment;
+      
+      // If function call, add extra space for inline call element
+      const extraHeight = (hasExplanation ? EXPLANATION_HEIGHT : 0) + 
+                         (hasFunctionCall ? 60 : 0); // 60px for inline call
+      const elementHeight = baseHeight + extraHeight;
+      
       const varElement: LayoutElement = {
         id: varId,
         type: "variable",
-        subtype: "variable_load",
+        subtype: isFunctionReturnAssignment ? "variable_with_call" : "variable_load",
         x: ownerFrame.x + indent,
         y: this.getNextCursorY(ownerFrame),
         width: ownerFrame.width - indent * 2,
@@ -633,6 +768,12 @@ export class LayoutEngine {
           ...variable,
           value: value !== undefined ? String(value) : undefined,
           explanation: explanation,
+          hasFunctionCall: isFunctionReturnAssignment,
+          // Store function info if it was a call
+          functionCallInfo: isFunctionReturnAssignment ? {
+            functionName: executionTrace.steps[stepIndex - 1].function,
+            returnValue: value
+          } : null
         },
       };
 
@@ -1025,6 +1166,22 @@ export class LayoutEngine {
 
   private static updateContainerHeights(layout: Layout): void {
     const updateHeight = (element: LayoutElement): number => {
+      // SORT children by stepId before calculating height
+      if (element.children && element.children.length > 0) {
+        element.children.sort((a, b) => {
+          const aStep = a.stepId ?? a.data?.birthStep ?? 0;
+          const bStep = b.stepId ?? b.data?.birthStep ?? 0;
+          return aStep - bStep;
+        });
+        
+        // Recalculate positions after sorting
+        let currentY = element.y + HEADER_HEIGHT;
+        element.children.forEach(child => {
+          child.y = currentY;
+          currentY += child.height + ELEMENT_SPACING;
+        });
+      }
+      
       // If it has lanes, calculate height based on used lanes
       if (element.metadata && element.metadata.lanes) {
           const lanes = element.metadata.lanes;
