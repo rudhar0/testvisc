@@ -1,9 +1,6 @@
 // frontend/src/components/canvas/layout/LayoutEngine.ts
 
-import type {
-  ExecutionStep,
-  ExecutionTrace,
-} from "../../../types";
+import type { ExecutionStep, ExecutionTrace } from "../../../types";
 
 export interface LayoutElement {
   id: string;
@@ -57,7 +54,7 @@ export interface Layout {
 }
 
 const ELEMENT_SPACING = 8;
-const INDENT_SIZE = 10;
+const INDENT_SIZE = -10;
 const HEADER_HEIGHT = 50;
 const MAIN_FUNCTION_X = 40;
 const MAIN_FUNCTION_Y = 40;
@@ -90,7 +87,7 @@ class ProgressiveArrayTracker {
     address: string,
     owner: string,
     stepIndex: number,
-    initializerValues?: any[]
+    initializerValues?: any[],
   ) {
     if (!Array.isArray(dimensions) || dimensions.length === 0) {
       dimensions = [1];
@@ -103,7 +100,7 @@ class ProgressiveArrayTracker {
       initializerValues.forEach((val, flatIdx) => {
         if (flatIdx >= totalSize) return;
         const indices = this.flatIndexToIndices(flatIdx, dimensions);
-        const key = indices.join(',');
+        const key = indices.join(",");
         valuesMap.set(key, val);
       });
     }
@@ -142,10 +139,10 @@ class ProgressiveArrayTracker {
     if (!arr) {
       console.warn(`Array ${name} not found, creating it...`);
       const dimensions = indices.map((idx) => idx + 1);
-      this.createArray(name, 'int', dimensions, '0x0', 'main', stepIndex);
+      this.createArray(name, "int", dimensions, "0x0", "main", stepIndex);
       const newArr = this.arrays.get(name);
       if (!newArr) return;
-      
+
       const key = indices.join(",");
       newArr.values.set(key, value);
       newArr.lastUpdateStep = stepIndex;
@@ -329,18 +326,21 @@ export class LayoutEngine {
 
     if (stepType === "func_enter" && isFunctionEntry) {
       const functionName = (step as any).function;
-      
+
       if (!this.functionFrames.has(frameId)) {
         this.frameDepthMap.set(frameId, callDepth);
         this.frameOrderMap.set(frameId, this.frameOrder++);
 
-        const parentFrame = parentFrameId ? this.functionFrames.get(parentFrameId) : null;
-        const isRecursive = functionName === (parentFrame?.data?.functionName);
+        const parentFrame = parentFrameId
+          ? this.functionFrames.get(parentFrameId)
+          : null;
+        const isRecursive = functionName === parentFrame?.data?.functionName;
 
-        const funcX = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP + (callDepth - 1) * 80;
-        const baseY = MAIN_FUNCTION_Y;
+        const baseX = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP;
+        const funcX = baseX + (callDepth - 1) * (FUNCTION_BOX_WIDTH + 60);
         const orderIndex = this.frameOrderMap.get(frameId) || 0;
-        const funcY = baseY + (orderIndex - 1) * FUNCTION_VERTICAL_SPACING;
+        const funcY =
+          MAIN_FUNCTION_Y + (orderIndex - 1) * FUNCTION_VERTICAL_SPACING;
 
         const functionElement: LayoutElement = {
           id: `function-${frameId}`,
@@ -401,10 +401,9 @@ export class LayoutEngine {
         funcFrame.data.isReturning = true;
       }
 
-      // Create return element
       const returnValue = (step as any).returnValue;
       const functionName = (step as any).function;
-      
+
       if (funcFrame) {
         const returnElement: LayoutElement = {
           id: `return-${frameId}-${stepIndex}`,
@@ -534,7 +533,7 @@ export class LayoutEngine {
       if (!this.elementHistory.has(ptrId)) {
         const pointerData: any = {
           name: ptrName,
-          value: aliasOf ? `→ ${aliasOf}` : '→ unresolved',
+          value: aliasOf ? `→ ${aliasOf}` : "→ unresolved",
           type: decayedFromArray ? `int*` : `void*`,
           primitive: "pointer",
           address: pointsTo?.address || "0x0",
@@ -592,13 +591,13 @@ export class LayoutEngine {
     }
 
     if (stepType === "array_create" || stepType === "array_declaration") {
-      const { 
-        name, 
-        symbol, 
-        baseType, 
-        dimensions, 
-        isInitializer, 
-        initializerValues 
+      const {
+        name,
+        symbol,
+        baseType,
+        dimensions,
+        isInitializer,
+        initializerValues,
       } = step as any;
       const arrayName = name || symbol;
       const owner = (step as any).function || "main";
@@ -611,7 +610,7 @@ export class LayoutEngine {
         address,
         owner,
         stepIndex,
-        isInitializer ? initializerValues : undefined
+        isInitializer ? initializerValues : undefined,
       );
 
       const varId = `var-${frameId}-${arrayName}`;
@@ -660,10 +659,21 @@ export class LayoutEngine {
     if (stepType === "array_index_assign" || stepType === "array_assignment") {
       const { name, symbol, indices, value } = step as any;
       const arrayName = name || symbol;
-      this.arrayTracker.updateArrayElement(arrayName, indices, value, stepIndex);
+      this.arrayTracker.updateArrayElement(
+        arrayName,
+        indices,
+        value,
+        stepIndex,
+      );
 
       if (stepIndex === currentStep) {
-        this.createArrayUpdateArrow(layout, arrayName, indices, stepIndex, frameId);
+        this.createArrayUpdateArrow(
+          layout,
+          arrayName,
+          indices,
+          stepIndex,
+          frameId,
+        );
       }
       return;
     }
@@ -704,7 +714,11 @@ export class LayoutEngine {
       return;
     }
 
-    const arrayPanelX = MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH + PANEL_GAP * 2 + FUNCTION_BOX_WIDTH * 2;
+    const arrayPanelX =
+      MAIN_FUNCTION_X +
+      MAIN_FUNCTION_WIDTH +
+      PANEL_GAP * 2 +
+      FUNCTION_BOX_WIDTH * 2;
     const arrayPanelY = MAIN_FUNCTION_Y;
 
     layout.arrayPanel = {
@@ -746,10 +760,14 @@ export class LayoutEngine {
 
     const fromX = varElement
       ? varElement.x + varElement.width
-      : (ownerFrame ? ownerFrame.x + ownerFrame.width : MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH);
+      : ownerFrame
+        ? ownerFrame.x + ownerFrame.width
+        : MAIN_FUNCTION_X + MAIN_FUNCTION_WIDTH;
     const fromY = varElement
       ? varElement.y + varElement.height / 2
-      : (ownerFrame ? ownerFrame.y + 100 : MAIN_FUNCTION_Y + 100);
+      : ownerFrame
+        ? ownerFrame.y + 100
+        : MAIN_FUNCTION_Y + 100;
 
     const ARRAY_PANEL_HEADER = 50;
     const ARRAY_BOX_HEADER = 50;
@@ -758,7 +776,12 @@ export class LayoutEngine {
     const CELL_HEIGHT = 50;
 
     const firstCellX = layout.arrayPanel.x + ARRAY_BOX_PADDING + CELL_WIDTH / 2;
-    const firstCellY = layout.arrayPanel.y + ARRAY_PANEL_HEADER + ARRAY_BOX_HEADER + ARRAY_BOX_PADDING + CELL_HEIGHT / 2;
+    const firstCellY =
+      layout.arrayPanel.y +
+      ARRAY_PANEL_HEADER +
+      ARRAY_BOX_HEADER +
+      ARRAY_BOX_PADDING +
+      CELL_HEIGHT / 2;
 
     const arrow: LayoutElement = {
       id: `arrow-${arrayName}-${stepIndex}`,
@@ -810,7 +833,7 @@ export class LayoutEngine {
       (el) =>
         (el.metadata?.referencesArray || el.data?.aliasOf) &&
         el.stepId !== undefined &&
-        el.stepId <= currentStep
+        el.stepId <= currentStep,
     );
 
     const ARRAY_PANEL_HEADER = 50;
@@ -820,14 +843,21 @@ export class LayoutEngine {
     const CELL_HEIGHT = 50;
 
     arrayRefVars.forEach((refVar) => {
-      const arrayName = refVar.metadata?.referencesArray || refVar.data?.aliasOf;
+      const arrayName =
+        refVar.metadata?.referencesArray || refVar.data?.aliasOf;
       const array = layout.arrayPanel!.data?.arrays?.find(
         (arr: any) => arr.name === arrayName,
       );
 
       if (array) {
-        const firstCellX = layout.arrayPanel!.x + ARRAY_BOX_PADDING + CELL_WIDTH / 2;
-        const firstCellY = layout.arrayPanel!.y + ARRAY_PANEL_HEADER + ARRAY_BOX_HEADER + ARRAY_BOX_PADDING + CELL_HEIGHT / 2;
+        const firstCellX =
+          layout.arrayPanel!.x + ARRAY_BOX_PADDING + CELL_WIDTH / 2;
+        const firstCellY =
+          layout.arrayPanel!.y +
+          ARRAY_PANEL_HEADER +
+          ARRAY_BOX_HEADER +
+          ARRAY_BOX_PADDING +
+          CELL_HEIGHT / 2;
 
         const refArrow: LayoutElement = {
           id: `ref-${refVar.id}-${arrayName}`,
@@ -878,7 +908,7 @@ export class LayoutEngine {
 
       element.height = Math.max(
         80,
-        maxChildBottom - element.y + ELEMENT_SPACING
+        maxChildBottom - element.y + ELEMENT_SPACING,
       );
 
       return element.y + element.height;
