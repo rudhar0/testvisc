@@ -1,5 +1,4 @@
 // backend/src/services/instrumentation-tracer.service.js
-// ENHANCED VERSION with call frame tracking metadata
 import { spawn } from 'child_process';
 import { writeFile, readFile, unlink, mkdir, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -23,10 +22,9 @@ class InstrumentationTracer {
         this.functionRegistry = new Map();
         this.callStack = [];
         
-        // NEW: Call frame tracking
         this.frameStack = [];
         this.globalCallIndex = 0;
-        this.frameCounts = new Map(); // Track call count per function name
+        this.frameCounts = new Map();
     }
 
     async ensureTempDir() {
@@ -35,14 +33,12 @@ class InstrumentationTracer {
         }
     }
 
-    // NEW: Generate unique frame ID
     generateFrameId(functionName) {
         const count = this.frameCounts.get(functionName) || 0;
         this.frameCounts.set(functionName, count + 1);
         return `${functionName}-${count}`;
     }
 
-    // NEW: Get current frame metadata
     getCurrentFrameMetadata() {
         if (this.frameStack.length === 0) {
             return {
@@ -62,7 +58,6 @@ class InstrumentationTracer {
         };
     }
 
-    // NEW: Push a new call frame
     pushCallFrame(functionName) {
         const parentFrame = this.frameStack.length > 0 
             ? this.frameStack[this.frameStack.length - 1] 
@@ -76,14 +71,15 @@ class InstrumentationTracer {
             functionName,
             callDepth,
             parentFrameId: parentFrame ? parentFrame.frameId : undefined,
-            entryCallIndex: this.globalCallIndex++
+            entryCallIndex: this.globalCallIndex++,
+            activeLoops: new Set(),
+            declaredVariables: new Map()
         };
         
         this.frameStack.push(frame);
         return frame;
     }
 
-    // NEW: Pop call frame on function exit
     popCallFrame() {
         return this.frameStack.pop();
     }
@@ -119,7 +115,6 @@ class InstrumentationTracer {
         
         if (!file || line === 0 || file === 'unknown' || file === '??') return true;
         
-        // Filter C++ static initialization
         if (fn && (fn.includes('GLOBAL__sub') || 
                    fn.includes('_static_initialization_and_destruction'))) {
             return true;
@@ -181,7 +176,6 @@ class InstrumentationTracer {
 
             const { rendered, escapes } = this.parseEscapeSequences(line);
             
-            // NEW: Add frame metadata to output steps
             const frameMetadata = this.getCurrentFrameMetadata();
             
             steps.push({
@@ -197,7 +191,6 @@ class InstrumentationTracer {
                 escapeInfo: escapes,
                 explanation: `📤 Output: "${rendered}"`,
                 internalEvents: [],
-                // NEW: Frame tracking
                 ...frameMetadata
             });
         }
@@ -316,7 +309,6 @@ class InstrumentationTracer {
         let mainStarted = false;
         let currentFunction = 'main';
 
-        // NEW: Reset frame tracking for this trace
         this.frameStack = [];
         this.globalCallIndex = 0;
         this.frameCounts = new Map();
@@ -341,9 +333,7 @@ class InstrumentationTracer {
                 info.function = normalizeFunctionName(info.function);
             }
 
-            // Program start - Initialize main frame
             if (!mainStarted && info.function === 'main' && ev.type === 'func_enter') {
-                // NEW: Push main frame
                 const mainFrame = this.pushCallFrame('main');
                 
                 steps.push({
@@ -356,7 +346,6 @@ class InstrumentationTracer {
                     timestamp: ev.ts || null,
                     explanation: '🚀 Program started',
                     internalEvents: [],
-                    // NEW: Frame metadata
                     frameId: mainFrame.frameId,
                     callDepth: mainFrame.callDepth,
                     callIndex: mainFrame.entryCallIndex,
@@ -368,16 +357,13 @@ class InstrumentationTracer {
                 continue;
             }
 
-            // Filter system events
             if (this.shouldFilterEvent(info, ev, sourceFile)) continue;
             if (!info.file || info.line === 0) continue;
 
-            // NEW: Function entry - push frame
             if (ev.type === 'func_enter' && info.function !== 'main') {
                 const newFrame = this.pushCallFrame(info.function);
                 currentFunction = info.function;
                 
-                // Add function entry step
                 steps.push({
                     stepIndex: stepIndex++,
                     eventType: 'func_enter',
@@ -388,7 +374,6 @@ class InstrumentationTracer {
                     timestamp: ev.ts || null,
                     explanation: `➡️ Entering ${info.function}`,
                     internalEvents: [],
-                    // NEW: Frame metadata
                     frameId: newFrame.frameId,
                     callDepth: newFrame.callDepth,
                     callIndex: newFrame.entryCallIndex,
@@ -398,7 +383,6 @@ class InstrumentationTracer {
                 continue;
             }
 
-            // NEW: Function exit - pop frame
             if (ev.type === 'func_exit') {
                 const exitingFrame = this.popCallFrame();
                 
@@ -413,7 +397,6 @@ class InstrumentationTracer {
                         timestamp: ev.ts || null,
                         explanation: `⬅️ Exiting ${info.function}`,
                         internalEvents: [],
-                        // NEW: Frame metadata (use exiting frame)
                         frameId: exitingFrame.frameId,
                         callDepth: exitingFrame.callDepth,
                         callIndex: this.globalCallIndex++,
@@ -429,13 +412,95 @@ class InstrumentationTracer {
                 continue;
             }
 
-            // NEW: Get current frame metadata for all other events
             const frameMetadata = this.getCurrentFrameMetadata();
+            const currentFrame = this.frameStack[this.frameStack.length - 1];
 
             let step = null;
 
-            // Array creation
-            if (ev.type === 'array_create') {
+            if (ev.type === 'loop_start') {
+                const loopId = ev.loopId;
+                if (currentFrame && !currentFrame.activeLoops.has(loopId)) {
+                    currentFrame.activeLoops.add(loopId);
+                    step = {
+                        stepIndex: stepIndex++,
+                        eventType: 'loop_start',
+                        line: info.line,
+                        function: currentFunction,
+                        scope: 'block',
+                        file: path.basename(info.file),
+                        timestamp: ev.ts || null,
+                        loopId: ev.loopId,
+                        loopType: ev.loopType,
+                        explanation: `Loop started (${ev.loopType})`,
+                        internalEvents: [],
+                        ...frameMetadata
+                    };
+                }
+                
+            } else if (ev.type === 'loop_end') {
+                const loopId = ev.loopId;
+                if (currentFrame && currentFrame.activeLoops.has(loopId)) {
+                    currentFrame.activeLoops.delete(loopId);
+                    step = {
+                        stepIndex: stepIndex++,
+                        eventType: 'loop_end',
+                        line: info.line,
+                        function: currentFunction,
+                        scope: 'block',
+                        file: path.basename(info.file),
+                        timestamp: ev.ts || null,
+                        loopId: ev.loopId,
+                        explanation: `Loop ended`,
+                        internalEvents: [],
+                        ...frameMetadata
+                    };
+                }
+                
+            } else if (ev.type === 'loop_condition') {
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'loop_condition',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    loopId: ev.loopId,
+                    result: ev.result,
+                    explanation: `Loop condition: ${ev.result ? 'true (continue)' : 'false (exit)'}`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
+                
+            } else if (ev.type === 'loop_break') {
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'loop_break',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    explanation: '🔴 Break statement',
+                    internalEvents: [],
+                    ...frameMetadata
+                };
+                
+            } else if (ev.type === 'loop_continue') {
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'loop_continue',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    explanation: '🔄 Continue statement',
+                    internalEvents: [],
+                    ...frameMetadata
+                };
+                
+            } else if (ev.type === 'array_create') {
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'array_create',
@@ -452,7 +517,6 @@ class InstrumentationTracer {
                     memoryRegion: 'stack',
                     explanation: `📦 Array ${ev.name}${JSON.stringify(ev.dimensions)} declared`,
                     internalEvents: [],
-                    // NEW: Frame metadata
                     ...frameMetadata
                 };
                 
@@ -463,7 +527,6 @@ class InstrumentationTracer {
                     isStack: ev.isStack !== false
                 });
                 
-            // Array element assignment - ALWAYS emit
             } else if (ev.type === 'array_index_assign') {
                 const charInfo = ev.char ? ` ('${String.fromCharCode(ev.value)}')` : '';
                 step = {
@@ -481,11 +544,9 @@ class InstrumentationTracer {
                     memoryRegion: 'stack',
                     explanation: `${ev.name}${JSON.stringify(ev.indices)} = ${ev.value}${charInfo}`,
                     internalEvents: [],
-                    // NEW: Frame metadata
                     ...frameMetadata
                 };
                 
-            // Pointer alias (array decay or address-of)
             } else if (ev.type === 'pointer_alias') {
                 step = {
                     stepIndex: stepIndex++,
@@ -508,7 +569,6 @@ class InstrumentationTracer {
                         ? `${ev.name} → ${ev.aliasOf} (array decay)`
                         : `${ev.name} → &${ev.aliasOf}`,
                     internalEvents: [],
-                    // NEW: Frame metadata
                     ...frameMetadata
                 };
                 
@@ -517,7 +577,6 @@ class InstrumentationTracer {
                     isHeap: false
                 });
                 
-            // CRITICAL: Pointer dereference write
             } else if (ev.type === 'pointer_deref_write') {
                 step = {
                     stepIndex: stepIndex++,
@@ -536,11 +595,9 @@ class InstrumentationTracer {
                         ? `*${ev.pointerName} = ${ev.value} (heap write)`
                         : `*${ev.pointerName} = ${ev.value} (writes to ${ev.targetName})`,
                     internalEvents: [],
-                    // NEW: Frame metadata
                     ...frameMetadata
                 };
                 
-            // Heap write (following pointer deref)
             } else if (ev.type === 'heap_write') {
                 step = {
                     stepIndex: stepIndex++,
@@ -555,30 +612,48 @@ class InstrumentationTracer {
                     memoryRegion: 'heap',
                     explanation: `Heap cell = ${ev.value}`,
                     internalEvents: [],
-                    // NEW: Frame metadata
                     ...frameMetadata
                 };
                 
-            // Variable declaration
             } else if (ev.type === 'declare') {
-                step = {
-                    stepIndex: stepIndex++,
-                    eventType: 'var_declare',
-                    line: info.line,
-                    function: currentFunction,
-                    scope: 'block',
-                    symbol: ev.name,
-                    file: path.basename(info.file),
-                    timestamp: ev.ts || null,
-                    name: ev.name,
-                    varType: ev.varType,
-                    explanation: `${ev.varType} ${ev.name} declared`,
-                    internalEvents: [],
-                    // NEW: Frame metadata
-                    ...frameMetadata
-                };
+                const varKey = `${frameMetadata.frameId}:${ev.name}`;
+                if (currentFrame && currentFrame.declaredVariables.has(varKey)) {
+                    step = {
+                        stepIndex: stepIndex++,
+                        eventType: 'var_assign',
+                        line: info.line,
+                        function: currentFunction,
+                        scope: 'block',
+                        symbol: ev.name,
+                        file: path.basename(info.file),
+                        timestamp: ev.ts || null,
+                        name: ev.name,
+                        value: null,
+                        explanation: `${ev.name} redeclared in loop (treated as assignment)`,
+                        internalEvents: [],
+                        ...frameMetadata
+                    };
+                } else {
+                    if (currentFrame) {
+                        currentFrame.declaredVariables.set(varKey, true);
+                    }
+                    step = {
+                        stepIndex: stepIndex++,
+                        eventType: 'var_declare',
+                        line: info.line,
+                        function: currentFunction,
+                        scope: 'block',
+                        symbol: ev.name,
+                        file: path.basename(info.file),
+                        timestamp: ev.ts || null,
+                        name: ev.name,
+                        varType: ev.varType,
+                        explanation: `${ev.varType} ${ev.name} declared`,
+                        internalEvents: [],
+                        ...frameMetadata
+                    };
+                }
                 
-            // Variable assignment - ALWAYS emit (no dedup in beginner mode)
             } else if (ev.type === 'assign') {
                 step = {
                     stepIndex: stepIndex++,
@@ -593,11 +668,9 @@ class InstrumentationTracer {
                     value: ev.value,
                     explanation: `${ev.name} = ${ev.value}`,
                     internalEvents: [],
-                    // NEW: Frame metadata
                     ...frameMetadata
                 };
                 
-            // Heap allocation
             } else if (ev.type === 'heap_alloc' && ev.isHeap) {
                 step = {
                     stepIndex: stepIndex++,
@@ -613,11 +686,9 @@ class InstrumentationTracer {
                     baseType: 'int',
                     explanation: `Allocated ${ev.size} bytes on heap`,
                     internalEvents: [],
-                    // NEW: Frame metadata
                     ...frameMetadata
                 };
                 
-            // Heap free
             } else if (ev.type === 'heap_free') {
                 step = {
                     stepIndex: stepIndex++,
@@ -631,7 +702,6 @@ class InstrumentationTracer {
                     memoryRegion: 'heap',
                     explanation: `Freed heap memory`,
                     internalEvents: [],
-                    // NEW: Frame metadata
                     ...frameMetadata
                 };
             }
@@ -641,11 +711,9 @@ class InstrumentationTracer {
             }
         }
 
-        // Output steps
         const outputSteps = this.createOutputSteps(programOutput.stdout, steps.length);
         const allSteps = [...steps, ...outputSteps];
 
-        // Program end
         const lastStepIndex = allSteps.at(-1)?.stepIndex ?? 0;
         const finalFrameMetadata = this.getCurrentFrameMetadata();
         
@@ -659,7 +727,6 @@ class InstrumentationTracer {
             timestamp: Date.now(),
             explanation: '✅ Program completed',
             internalEvents: [],
-            // NEW: Frame metadata
             ...finalFrameMetadata
         });
 
@@ -706,7 +773,6 @@ class InstrumentationTracer {
         this.functionRegistry.clear();
         this.callStack = [];
         
-        // NEW: Reset frame tracking
         this.frameStack = [];
         this.globalCallIndex = 0;
         this.frameCounts = new Map();
@@ -730,7 +796,7 @@ class InstrumentationTracer {
                 functions: this.extractFunctions(steps, functions),
                 metadata: {
                     debugger: 'gcc-instrumentation-beginner-correct',
-                    version: '7.1',  // Increment version for frame tracking
+                    version: '7.4',
                     hasRealMemory: true,
                     hasHeapTracking: true,
                     hasArraySupport: true,
@@ -738,7 +804,9 @@ class InstrumentationTracer {
                     hasPointerDerefWriteSemantics: true,
                     hasCharArrayStringInit: true,
                     noStepCollapsing: true,
-                    hasCallFrameTracking: true,  // NEW: Feature flag
+                    hasCallFrameTracking: true,
+                    hasLoopStructureTracking: true,
+                    hasBreakContinueTracking: true,
                     capturedEvents: events.length,
                     emittedSteps: steps.length,
                     programOutput: stdout,

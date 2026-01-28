@@ -41,6 +41,9 @@ void __trace_pointer_deref_write_loc(const char* ptrName, long long value,
 void __trace_pointer_heap_init_loc(const char* ptrName, void* heapAddr,
                                     const char* file, int line);
 
+void __trace_control_flow_loc(const char* controlType, const char* file, int line);
+void __trace_loop_condition_loc(const char* loopVar, int result, const char* file, int line);
+
 #ifdef __cplusplus
 }
 #endif
@@ -74,6 +77,10 @@ void __trace_pointer_heap_init_loc(const char* ptrName, void* heapAddr,
     __trace_pointer_deref_write_loc(#ptrName, (long long)(value), __FILE__, line)
 #define __trace_pointer_heap_init(ptrName, heapAddr, line) \
     __trace_pointer_heap_init_loc(#ptrName, heapAddr, __FILE__, line)
+#define __trace_control_flow(controlType, line) \
+    __trace_control_flow_loc(controlType, __FILE__, line)
+#define __trace_loop_condition(loopVar, result, line) \
+    __trace_loop_condition_loc(loopVar, result, __FILE__, line)
 
 #else   /* POSIX */
 
@@ -113,6 +120,9 @@ void __trace_pointer_deref_write_loc(const char* ptrName, long long value,
 void __trace_pointer_heap_init_loc(const char* ptrName, void* heapAddr,
                                     const char* file, int line);
 
+void __trace_control_flow_loc(const char* controlType, const char* file, int line);
+void __trace_loop_condition_loc(const char* loopVar, int result, const char* file, int line);
+
 #ifdef __cplusplus
 }
 #endif
@@ -146,5 +156,9 @@ void __trace_pointer_heap_init_loc(const char* ptrName, void* heapAddr,
     __trace_pointer_deref_write_loc(#ptrName, (long long)(value), __FILE__, line)
 #define __trace_pointer_heap_init(ptrName, heapAddr, line) \
     __trace_pointer_heap_init_loc(#ptrName, heapAddr, __FILE__, line)
+#define __trace_control_flow(controlType, line) \
+    __trace_control_flow_loc(controlType, __FILE__, line)
+#define __trace_loop_condition(loopVar, result, line) \
+    __trace_loop_condition_loc(loopVar, result, __FILE__, line)
 
 #endif
