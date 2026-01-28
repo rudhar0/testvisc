@@ -1,5 +1,5 @@
 // frontend/src/components/canvas/elements/FunctionElement.tsx
-// COMPLETE - No dependencies on other new files
+// COMPLETE FILE - REPLACE ENTIRELY
 
 import React, { useRef, useEffect, useState, memo } from 'react';
 import { Group, Rect, Text, Line, Circle } from 'react-konva';
@@ -21,8 +21,8 @@ export interface FunctionElementProps {
   returnType: string;
   x: number;
   y: number;
-  width?: number; // Added width
-  height?: number; // Added height
+  width?: number;
+  height?: number;
   
   // Metadata
   isRecursive?: boolean;
@@ -112,17 +112,9 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
   const [isHovered, setIsHovered] = useState(false);
   const isInitialMount = useRef(true);
 
-  // Use props directly, with fallback calculation only if not provided
+  // Use prop height/width directly (calculated by LayoutEngine)
   const totalWidth = width || BOX_WIDTH;
-  
-  // Calculate fallback height only if height prop is not provided
-  const paramSectionHeight = parameters.length > 0 ? 25 + parameters.length * 28 : 0;
-  const localVarSectionHeight = localVarCount > 0 ? 40 : 0;
-  const calculatedHeight = Math.max(MIN_BODY_HEIGHT, paramSectionHeight + localVarSectionHeight + 20);
-  const fallbackHeight = HEADER_HEIGHT + calculatedHeight;
-  
-  // Use prop height if available, otherwise use calculated fallback
-  const totalHeight = height || fallbackHeight;
+  const totalHeight = height || 150;
 
   const colorScheme = isReturning 
     ? COLORS.returning 
@@ -149,6 +141,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
       group.y(origY + 35);
 
       const playAnim = () => {
+        if (!group.getLayer()) return;
         new Konva.Tween({
           node: group,
           opacity: 1,
@@ -301,7 +294,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
 
       {/* Recursive Badge */}
       {isRecursive && (
-        <Group x={BOX_WIDTH - 95} y={8}>
+        <Group x={totalWidth - 95} y={8}>
           <Rect
             width={85}
             height={20}
@@ -326,7 +319,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
       {depth > 0 && (
         <Text
           text={`depth: ${depth}`}
-          x={BOX_WIDTH - 95}
+          x={totalWidth - 95}
           y={32}
           fontSize={8}
           fill="#94A3B8"
@@ -350,7 +343,7 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
 
       {/* Divider */}
       <Line
-        points={[0, HEADER_HEIGHT, BOX_WIDTH, HEADER_HEIGHT]}
+        points={[0, HEADER_HEIGHT, totalWidth, HEADER_HEIGHT]}
         stroke="#334155"
         strokeWidth={1}
       />
@@ -413,36 +406,8 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
           </Group>
         )}
 
-        {/* Local Variables Placeholder */}
-        {localVarCount > 0 && (
-          <Group y={paramSectionHeight + PADDING + 10}>
-            <Text
-              text="LOCALS:"
-              x={PADDING}
-              fontSize={9}
-              fontStyle="bold"
-              fill="#64748B"
-              fontFamily="'SF Pro Display', system-ui"
-              letterSpacing={1}
-            />
-            <Text
-              text={`${localVarCount} variable${localVarCount > 1 ? 's' : ''}`}
-              x={PADDING + 50}
-              y={1}
-              fontSize={8}
-              fill="#475569"
-              fontFamily="'SF Mono', monospace"
-              fontStyle="italic"
-            />
-          </Group>
-        )}
-
         {/* Children */}
-        {children && (
-          <Group y={paramSectionHeight + PADDING + 30}>
-            {children}
-          </Group>
-        )}
+        {children}
       </Group>
 
       {/* Call Connector */}
@@ -451,8 +416,8 @@ export const FunctionElement: React.FC<FunctionElementProps> = memo(({
         y={totalHeight / 2}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-        onClick={() => onConnectorClick?.({ x: BOX_WIDTH, y: totalHeight / 2 })}
-        onTap={() => onConnectorClick?.({ x: BOX_WIDTH, y: totalHeight / 2 })}
+        onClick={() => onConnectorClick?.({ x: totalWidth, y: totalHeight / 2 })}
+        onTap={() => onConnectorClick?.({ x: totalWidth, y: totalHeight / 2 })}
       >
         <Circle
           radius={CONNECTOR_RADIUS + 3}

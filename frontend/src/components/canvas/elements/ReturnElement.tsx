@@ -1,8 +1,8 @@
 // frontend/src/components/canvas/elements/ReturnElement.tsx
-// Return visualization component with prominent value display
+// COMPLETE FILE - REPLACE ENTIRELY
 
-import React, { useRef, useEffect, memo, useState } from 'react';
-import { Group, Rect, Text } from 'react-konva';
+import React, { useRef, useEffect, useState, memo } from 'react';
+import { Group, Rect, Text, Circle } from 'react-konva';
 import Konva from 'konva';
 
 export interface ReturnElementProps {
@@ -16,6 +16,19 @@ export interface ReturnElementProps {
   stepNumber?: number;
   enterDelay?: number;
 }
+
+const BOX_WIDTH = 360;
+const BOX_HEIGHT = 70;
+const PADDING = 12;
+const CORNER_RADIUS = 8;
+
+const COLORS = {
+  primary: '#EF4444',
+  light: '#FCA5A5',
+  bg: 'rgba(239, 68, 68, 0.15)',
+  bgDark: 'rgba(127, 29, 29, 0.9)',
+  glow: 'rgba(239, 68, 68, 0.6)'
+};
 
 export const ReturnElement: React.FC<ReturnElementProps> = memo(({
   id,
@@ -33,13 +46,10 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
   const isInitialMount = useRef(true);
   const [showingExplanation, setShowingExplanation] = useState(true);
 
-  const BOX_WIDTH = 360; // Match other elements
-  const BOX_HEIGHT = 70;
-  
   const hasValue = returnValue !== undefined && returnValue !== null;
   const displayValue = hasValue ? String(returnValue) : 'void';
 
-  // Animation
+  // Entrance animation
   useEffect(() => {
     const group = groupRef.current;
     if (!group) return;
@@ -52,6 +62,7 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
       group.y(origY + 20);
 
       const playAnim = () => {
+        if (!group.getLayer()) return;
         new Konva.Tween({
           node: group,
           opacity: 1,
@@ -80,28 +91,21 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
     }
   }, [isNew, enterDelay]);
 
-  // Color transition for explanation
+  // Color transition
   useEffect(() => {
     if (showingExplanation) {
       const timer = setTimeout(() => {
         setShowingExplanation(false);
-        // Transition to darker
         const group = groupRef.current;
         if (group) {
-          group.findOne('.main-bg')?.to({
-            fill: 'rgba(127, 29, 29, 0.9)',
-            duration: 0.5
-          });
-          
-          group.findOne('.explanation-bg')?.to({
-            fill: 'rgba(127, 29, 29, 0.9)',
-            duration: 0.5
-          });
-          
-          group.findOne('.explanation-text')?.to({
-            fill: '#FCA5A5',
-            duration: 0.5
-          });
+          const mainBg = group.findOne('.main-bg');
+          const explBg = group.findOne('.explanation-bg');
+          if (mainBg) {
+            mainBg.to({ fill: COLORS.bgDark, stroke: '#7F1D1D', duration: 0.5 });
+          }
+          if (explBg) {
+            explBg.to({ fill: 'rgba(127, 29, 29, 0.9)', duration: 0.5 });
+          }
         }
       }, 2000);
       
@@ -124,47 +128,52 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
         width={BOX_WIDTH + 6}
         height={BOX_HEIGHT + 6}
         fill="transparent"
-        cornerRadius={10}
-        shadowColor="rgba(239, 68, 68, 0.6)"
+        cornerRadius={CORNER_RADIUS + 2}
+        shadowColor={COLORS.glow}
         shadowBlur={12}
         shadowOpacity={0.5}
         opacity={0}
       />
 
-      {/* Main Background - Light when showing explanation */}
+      {/* Main Background */}
       <Rect
         name="main-bg"
         width={BOX_WIDTH}
         height={BOX_HEIGHT}
-        fill={showingExplanation ? 
-              'rgba(239, 68, 68, 0.15)' :  // Light red
-              'rgba(127, 29, 29, 0.9)'}    // Dark red
-        stroke={showingExplanation ? '#EF4444' : '#7F1D1D'}
+        fill={showingExplanation ? COLORS.bg : COLORS.bgDark}
+        stroke={showingExplanation ? COLORS.primary : '#7F1D1D'}
         strokeWidth={2}
-        cornerRadius={8}
+        cornerRadius={CORNER_RADIUS}
         shadowColor="rgba(0, 0, 0, 0.3)"
         shadowBlur={10}
         shadowOffsetY={2}
       />
 
       {/* Return Icon */}
+      <Circle
+        x={PADDING + 12}
+        y={16}
+        radius={14}
+        fill={COLORS.primary}
+        opacity={0.2}
+      />
       <Text
         text="↩"
-        x={16}
-        y={12}
+        x={PADDING + 3}
+        y={8}
         fontSize={20}
-        fill="#FCA5A5"
+        fill={COLORS.light}
         fontStyle="bold"
       />
 
       {/* Function Name */}
       <Text
         text={`${functionName}()`}
-        x={48}
-        y={10}
+        x={PADDING + 32}
+        y={8}
         fontSize={12}
         fontStyle="bold"
-        fill={showingExplanation ? '#7F1D1D' : '#FCA5A5'}
+        fill={showingExplanation ? '#7F1D1D' : COLORS.light}
         fontFamily="'SF Mono', monospace"
       />
 
@@ -172,7 +181,7 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
       <Group y={32}>
         <Text
           text="RETURNS:"
-          x={16}
+          x={PADDING}
           y={0}
           fontSize={9}
           fontStyle="bold"
@@ -180,47 +189,48 @@ export const ReturnElement: React.FC<ReturnElementProps> = memo(({
           fontFamily="'SF Pro Display', system-ui"
           letterSpacing={1}
         />
+        <Rect
+          x={PADDING + 70}
+          y={-4}
+          width={displayValue.length * 11 + 16}
+          height={24}
+          fill={hasValue ? 'rgba(16, 185, 129, 0.2)' : 'rgba(100, 116, 139, 0.2)'}
+          stroke={hasValue ? '#10B981' : '#64748B'}
+          strokeWidth={1}
+          cornerRadius={6}
+        />
         <Text
           text={displayValue}
-          x={80}
-          y={-2}
-          fontSize={18}
+          x={PADDING + 78}
+          y={2}
+          fontSize={16}
           fontStyle="bold"
           fill={hasValue ? '#10B981' : '#64748B'}
           fontFamily="'SF Mono', monospace"
         />
       </Group>
 
-      {/* Explanation at bottom */}
-      <Group y={BOX_HEIGHT - 32}>
-        <Rect
-          name="explanation-bg"
-          width={BOX_WIDTH}
-          height={28}
-          fill={showingExplanation ? 
-                'rgba(239, 68, 68, 0.3)' : 
-                'rgba(127, 29, 29, 0.9)'}
-          cornerRadius={[0, 0, 8, 8]}
-        />
+      {/* Explanation */}
+      <Group y={BOX_HEIGHT - 8}>
         <Text
-          name="explanation-text"
           text={`💡 Returns to ${frameId.split('-')[0]}`}
-          x={16}
-          y={8}
-          width={BOX_WIDTH - 32}
-          fontSize={10}
-          fill={showingExplanation ? '#7F1D1D' : '#FCA5A5'}
+          x={PADDING}
+          y={-14}
+          width={BOX_WIDTH - PADDING * 2}
+          fontSize={9}
+          fill={showingExplanation ? '#7F1D1D' : COLORS.light}
           fontFamily="'SF Pro Display', system-ui"
           align="center"
+          fontStyle="italic"
         />
       </Group>
 
-      {/* Step number */}
+      {/* Step Number */}
       {stepNumber !== undefined && (
         <Text
           text={`#${stepNumber}`}
-          x={BOX_WIDTH - 45}
-          y={10}
+          x={BOX_WIDTH - 40}
+          y={8}
           fontSize={9}
           fontStyle="bold"
           fill="#64748B"

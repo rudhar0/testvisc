@@ -68,10 +68,7 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
   const glowRef = useRef<Konva.Rect>(null);
   const [isHovered, setIsHovered] = useState(false);
   const isInitialMount = useRef(true);
-  
-  // NEW: Explanation color transition state
-  const hasExplanation = !!explanation;
-  const [showingExplanation, setShowingExplanation] = useState(hasExplanation);
+  const [showingExplanation, setShowingExplanation] = useState(!!explanation);
 
   const isPointer = type.includes('*') || !!pointsTo || decayedFromArray;
   const displayRegion = memoryRegion === 'heap' ? 'HEAP' : 'STACK';
@@ -92,50 +89,7 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
   const displayValue = formatValue(value);
   const displayAddress = address && address !== '0x0' ? address.slice(0, 12) : '—';
 
-  const totalHeight = explanation ? BASE_HEIGHT + EXPLANATION_HEIGHT + 5 : BASE_HEIGHT;
-  
-  // NEW: Color scheme changes based on explanation presence
-  const bgColorStops = hasExplanation && showingExplanation
-    ? [0, 'rgba(139, 92, 246, 0.15)', 1, 'rgba(139, 92, 246, 0.15)']  // Light purple
-    : isHeapBacked
-      ? [0, HEAP_GRADIENT.start, 1, HEAP_GRADIENT.end]
-      : [0, BG_COLOR, 1, BG_COLOR];
-      
-  const borderColor = hasExplanation && showingExplanation
-    ? '#8B5CF6'  // Light purple
-    : isPointer ? POINTER_ACCENT : HEAP_GRADIENT.start;
-
-  // NEW: Explanation color transition effect
-  useEffect(() => {
-    if (hasExplanation && showingExplanation) {
-      const timer = setTimeout(() => {
-        setShowingExplanation(false);
-        // Same color transition logic
-        if (groupRef.current) {
-          const bgRect = groupRef.current.findOne('.main-bg');
-          bgRect?.to({
-            fill: 'rgba(124, 58, 237, 0.25)', // Dark purple
-            stroke: '#6D28D9',
-            duration: 0.5
-          });
-          
-          const explRect = groupRef.current.findOne('.explanation-bg');
-          explRect?.to({
-            fill: 'rgba(76, 29, 149, 0.9)',
-            duration: 0.5
-          });
-          
-          const explText = groupRef.current.findOne('.explanation-text');
-          explText?.to({
-            fill: '#E9D5FF',
-            duration: 0.5
-          });
-        }
-      }, 2000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [hasExplanation, showingExplanation]);
+  const totalHeight = BASE_HEIGHT;
 
   useEffect(() => {
     const group = groupRef.current;
@@ -151,6 +105,7 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
       group.y(origY + 30);
 
       const playAnim = () => {
+        if (!group.getLayer()) return;
         new Konva.Tween({
           node: group,
           opacity: 1,
@@ -181,6 +136,29 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
       isInitialMount.current = false;
     }
   }, [isNew, enterDelay]);
+
+  // Color transition for explanation
+  useEffect(() => {
+    if (explanation && showingExplanation) {
+      const timer = setTimeout(() => {
+        setShowingExplanation(false);
+        
+        const group = groupRef.current;
+        if (group) {
+          const mainBg = group.findOne('.main-bg');
+          if (mainBg) {
+            mainBg.to({
+              fill: 'rgba(124, 58, 237, 0.25)',
+              stroke: '#6D28D9',
+              duration: 0.5
+            });
+          }
+        }
+      }, 2000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [explanation, showingExplanation]);
 
   useEffect(() => {
     if (!isUpdated || !glowRef.current) return;
@@ -229,13 +207,16 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
       />
 
       <Rect
-        name="main-bg"
         width={BOX_WIDTH}
         height={BASE_HEIGHT}
         fillLinearGradientStartPoint={{ x: 0, y: 0 }}
         fillLinearGradientEndPoint={{ x: BOX_WIDTH, y: BASE_HEIGHT }}
-        fillLinearGradientColorStops={bgColorStops}
-        stroke={borderColor}
+        fillLinearGradientColorStops={
+          isHeapBacked
+            ? [0, HEAP_GRADIENT.start, 1, HEAP_GRADIENT.end]
+            : [0, BG_COLOR, 1, BG_COLOR]
+        }
+        stroke={isPointer ? POINTER_ACCENT : HEAP_GRADIENT.start}
         strokeWidth={isHovered ? 3 : 2}
         cornerRadius={CORNER_RADIUS}
         shadowColor="rgba(0, 0, 0, 0.4)"
@@ -245,9 +226,12 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
       />
 
       <Rect
+        name="main-bg"
         width={BOX_WIDTH}
         height={BASE_HEIGHT}
-        fill={BG_COLOR}
+        fill={showingExplanation ? 
+              'rgba(139, 92, 246, 0.15)' : 
+              'rgba(124, 58, 237, 0.25)'}
         cornerRadius={CORNER_RADIUS}
         opacity={0.9}
       />
@@ -416,7 +400,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
         />
       )}
 
-      {/* Explanation INSIDE at bottom */}
       {explanation && (
         <Group y={BASE_HEIGHT - EXPLANATION_HEIGHT - 8}>
           <Rect
@@ -431,7 +414,6 @@ export const HeapPointerElement: React.FC<HeapPointerElementProps> = ({
             cornerRadius={8}
           />
           <Text
-            name="explanation-text"
             text={`💡 ${explanation}`}
             x={12}
             y={12}

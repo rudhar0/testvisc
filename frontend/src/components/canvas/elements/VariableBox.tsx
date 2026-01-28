@@ -175,10 +175,7 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
   const dotRef = useRef<Konva.Circle>(null);
   const [isHovered, setIsHovered] = useState(false);
   const isInitialMount = useRef(true);
-
-  // NEW: Explanation color transition state
-  const hasExplanation = !!explanation;
-  const [showingExplanation, setShowingExplanation] = useState(hasExplanation);
+  const [showingExplanation, setShowingExplanation] = useState(!!explanation);
 
   const stateConfig = STATE_CONFIGS[varState];
   
@@ -215,79 +212,23 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
 
   const displayValue = varState === 'declared' ? '—' : formatValue(value);
 
-  // NEW: Color scheme changes based on explanation presence
-  // Use datatype-specific colors for explanations
-  const baseColors = hasExplanation && showingExplanation ? {
-    bg: colors.bg,                        // Light datatype color
-    border: colors.primary,               // Datatype primary color
-    accent: colors.accent                 // Datatype accent
-  } : {
-    bg: varState === 'declared' ? 'rgba(51, 65, 85, 0.5)' : colors.bg,
-    border: varState === 'declared' ? '#64748B' : colors.primary,
-    accent: colors.accent
-  };
-
-  const bgColor = baseColors.bg;
-  const borderColor = baseColors.border;
+  const hasExplanation = !!explanation;
+  
+  const bgColor = varState === 'declared' 
+    ? 'rgba(51, 65, 85, 0.5)'
+    : (hasExplanation && showingExplanation) 
+      ? 'rgba(16, 185, 129, 0.15)'
+      : colors.bg;
+  
+  const borderColor = varState === 'declared' 
+    ? '#64748B'
+    : (hasExplanation && showingExplanation)
+      ? '#10B981'
+      : colors.primary;
+  
   const borderWidth = varState === 'declared' ? 2 : 3;
 
-  const totalHeight = explanation ? BASE_HEIGHT + EXPLANATION_HEIGHT + 5 : BASE_HEIGHT;
-
-  // Helper to get dark colors for transitions based on datatype
-  const getDarkColors = () => {
-    // Create darker versions of the datatype colors
-    const darkBg = colors.bg.replace('0.18', '0.35');  // Increase opacity for darker bg
-    const darkBorder = colors.dark;  // Use dark variant
-    const lightText = colors.light;  // Use light variant for text
-    
-    return {
-      bg: darkBg,
-      border: darkBorder,
-      text: lightText
-    };
-  };
-
-  // NEW: Explanation color transition effect
-  useEffect(() => {
-    if (hasExplanation && showingExplanation) {
-      // After 2 seconds, transition to dark
-      const timer = setTimeout(() => {
-        setShowingExplanation(false);
-        
-        const darkColors = getDarkColors();
-        
-        // Animate to dark colors
-        if (groupRef.current) {
-          const bgRect = groupRef.current.findOne('.main-bg');
-          if (bgRect) {
-            bgRect.to({
-              fill: darkColors.bg,
-              stroke: darkColors.border,
-              duration: 0.5
-            });
-          }
-          
-          const explRect = groupRef.current.findOne('.explanation-bg');
-          if (explRect) {
-            explRect.to({
-              fill: darkColors.bg,
-              duration: 0.5
-            });
-          }
-          
-          const explText = groupRef.current.findOne('.explanation-text');
-          if (explText) {
-            explText.to({
-              fill: darkColors.text,
-              duration: 0.5
-            });
-          }
-        }
-      }, 2000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [hasExplanation, showingExplanation]);
+  const totalHeight = BASE_HEIGHT;
 
   useEffect(() => {
     const group = groupRef.current;
@@ -344,6 +285,30 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
       isInitialMount.current = false;
     }
   }, [isNew, varState, enterDelay]);
+
+  // Color transition for explanation
+  useEffect(() => {
+    if (explanation && showingExplanation) {
+      const timer = setTimeout(() => {
+        setShowingExplanation(false);
+        
+        // Transition to dark colors
+        const group = groupRef.current;
+        if (group) {
+          const mainBg = group.findOne('.main-bg');
+          if (mainBg) {
+            mainBg.to({
+              fill: 'rgba(5, 92, 64, 0.25)',
+              stroke: '#065F46',
+              duration: 0.5
+            });
+          }
+        }
+      }, 2000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [explanation, showingExplanation]);
 
   const handleMouseEnter = () => {
     setIsHovered(true);
@@ -563,7 +528,6 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
         )}
       </Group>
 
-      {/* Explanation INSIDE at bottom */}
       {explanation && (
         <Group y={BASE_HEIGHT - EXPLANATION_HEIGHT - 8}>
           <Rect
@@ -571,9 +535,9 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
             width={BOX_WIDTH}
             height={EXPLANATION_HEIGHT}
             fill={showingExplanation ? 
-                  colors.bg :                    // Light datatype color
-                  getDarkColors().bg}             // Dark datatype color
-            stroke={showingExplanation ? colors.primary : getDarkColors().border}
+                  'rgba(16, 185, 129, 0.3)' : 
+                  'rgba(5, 92, 64, 0.9)'}
+            stroke={showingExplanation ? '#10B981' : '#065F46'}
             strokeWidth={1}
             cornerRadius={8}
             shadowColor="rgba(0,0,0,0.2)"
@@ -581,13 +545,12 @@ export const VariableBox: React.FC<VariableBoxProps> = ({
             opacity={showingExplanation ? 1 : 0.9}
           />
           <Text
-            name="explanation-text"
             text={`💡 ${explanation}`}
             x={12}
             y={12}
             width={BOX_WIDTH - 24}
             fontSize={10}
-            fill={showingExplanation ? colors.dark : getDarkColors().text}
+            fill={showingExplanation ? '#064E3B' : '#D1FAE5'}
             fontFamily="'SF Pro Display', system-ui"
             fontStyle="bold"
             align="center"

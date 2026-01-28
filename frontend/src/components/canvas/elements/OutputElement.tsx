@@ -35,40 +35,9 @@ export const OutputElement: React.FC<OutputElementProps> = ({
   explanation
 }) => {
   const groupRef = useRef<any>(null);
-  
-  // NEW: Explanation color transition state
   const [showingExplanation, setShowingExplanation] = useState(!!explanation);
 
   console.log('[OutputElement] render attempt:', { id, x, y, width, height, value, isNew, subtype });
-
-  // NEW: Explanation color transition effect
-  useEffect(() => {
-    if (explanation && showingExplanation) {
-      const timer = setTimeout(() => {
-        setShowingExplanation(false);
-        // Transition to dark
-        if (groupRef.current) {
-          groupRef.current.findOne('.main-bg')?.to({
-            fill: 'rgba(5, 46, 22, 0.9)',
-            stroke: '#064E3B',
-            duration: 0.5
-          });
-          
-          groupRef.current.findOne('.explanation-bg')?.to({
-            fill: 'rgba(5, 46, 22, 0.9)',
-            duration: 0.5
-          });
-          
-          groupRef.current.findOne('.explanation-text')?.to({
-            fill: '#D1FAE5',
-            duration: 0.5
-          });
-        }
-      }, 2000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [explanation, showingExplanation]);
 
   useEffect(() => {
     const node = groupRef.current as any;
@@ -103,6 +72,29 @@ export const OutputElement: React.FC<OutputElementProps> = ({
     };
   }, [isNew, x, value, subtype, id]);
 
+  // Color transition for explanation
+  useEffect(() => {
+    if (explanation && showingExplanation) {
+      const timer = setTimeout(() => {
+        setShowingExplanation(false);
+        
+        const group = groupRef.current;
+        if (group) {
+          const mainBg = group.findOne('.main-bg');
+          if (mainBg) {
+            mainBg.to({
+              fill: 'rgba(5, 46, 22, 0.9)',
+              stroke: '#064E3B',
+              duration: 0.5
+            });
+          }
+        }
+      }, 2000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [explanation, showingExplanation]);
+
   const outputLabel = subtype === 'output_cout' ? 'cout <<' : subtype === 'output_endl' ? 'cout << endl' : 'printf';
 
   const safeWidth = typeof width === 'number' && isFinite(width) ? width : 200;
@@ -115,8 +107,8 @@ export const OutputElement: React.FC<OutputElementProps> = ({
         width={safeWidth}
         height={safeHeight}
         fill={showingExplanation ? 
-              'rgba(16, 185, 129, 0.2)' :  // Light
-              'rgba(5, 46, 22, 0.9)'}      // Dark
+              'rgba(16, 185, 129, 0.2)' : 
+              'rgba(5, 46, 22, 0.9)'}
         stroke={showingExplanation ? '#10B981' : '#064E3B'}
         strokeWidth={2}
         cornerRadius={8}
@@ -155,7 +147,6 @@ export const OutputElement: React.FC<OutputElementProps> = ({
             cornerRadius={8}
           />
           <Text
-            name="explanation-text"
             text={`💡 ${explanation}`}
             x={12}
             y={10}

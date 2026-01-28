@@ -1,3 +1,6 @@
+// frontend/src/components/canvas/elements/CallElement.tsx
+// COMPLETE FILE - REPLACE ENTIRELY
+
 import React, { useRef, useEffect, useState } from 'react';
 import { Group, Rect, Text, Circle } from 'react-konva';
 import Konva from 'konva';
@@ -16,10 +19,10 @@ interface CallElementProps {
 }
 
 const COLORS = {
-  bg: '#312E81', // Indigo 900
-  border: '#6366F1', // Indigo 500
-  text: '#E0E7FF', // Indigo 100
-  label: '#818CF8', // Indigo 400
+  bg: '#312E81',
+  border: '#6366F1',
+  text: '#E0E7FF',
+  label: '#818CF8',
 };
 
 export const CallElement: React.FC<CallElementProps> = ({
@@ -121,12 +124,15 @@ export const CallElement: React.FC<CallElementProps> = ({
         />
       )}
 
-      {/* Connector Dot (Right side for arrow source) */}
+      {/* Connector Dot */}
       <Circle
         x={width}
         y={height / 2}
         radius={5}
         fill={COLORS.border}
+        shadowColor={COLORS.border}
+        shadowBlur={8}
+        shadowOpacity={0.6}
       />
     </Group>
   );
