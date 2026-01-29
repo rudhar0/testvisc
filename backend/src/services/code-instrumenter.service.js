@@ -1,10 +1,11 @@
-// src/services/code-instrumenter.service.js
+// backend/src/services/code-instrumenter.service.js
 import { spawn } from 'child_process';
 import { writeFile, readFile, unlink } from 'fs/promises';
 import path from 'path';
 import { v4 as uuid } from 'uuid';
 
 let loopIdCounter = 0;
+let blockDepthCounter = 0;
 
 class CodeInstrumenter {
   constructor() {
@@ -12,6 +13,8 @@ class CodeInstrumenter {
     this.scopeVariables = new Map();
     this.currentScope = 0;
     this.pointerAliases = new Map();
+    this.blockDepth = 0;
+    this.loopStack = [];
   }
 
   async instrumentCode(code, language = 'cpp') {
@@ -139,7 +142,7 @@ class CodeInstrumenter {
   }
 
   isHeapAllocation(value) {
-    return /\b(malloc|calloc)\s*\(/.test(value);
+    return /\b(malloc|calloc|new)\s*[\(\[]/.test(value);
   }
 
   isBreakOrContinue(trimmed) {
@@ -169,6 +172,9 @@ class CodeInstrumenter {
     this.currentScope = 0;
     this.scopeVariables.clear();
     loopIdCounter = 0;
+    blockDepthCounter = 0;
+    this.blockDepth = 0;
+    this.loopStack = [];
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -188,12 +194,14 @@ class CodeInstrumenter {
         for (let b = 0; b < openBraces; b++) {
           this.currentScope++;
           scopeStack.push(this.currentScope);
+          this.blockDepth++;
         }
       }
       
       if (closeBraces > 0 && !inStruct && inFunc) {
         for (let b = 0; b < closeBraces; b++) {
           scopeStack.pop();
+          this.blockDepth--;
         }
       }
       
@@ -218,9 +226,16 @@ class CodeInstrumenter {
       if (trimmed.startsWith('//') ||
           trimmed.startsWith('/*') ||
           trimmed.startsWith('#') ||
-          trimmed.startsWith('return') ||
-          trimmed.includes('include') ||
           !inFunc) {
+        out.push(line);
+        continue;
+      }
+
+      const returnStmt = trimmed.match(/^\s*return\s+([^;]+);/);
+      if (returnStmt) {
+        const returnValue = returnStmt[1];
+        const destinationSymbol = '';
+        out.push(`${indent}__trace_return(${returnValue}, "auto", "", ${i + 1});`);
         out.push(line);
         continue;
       }
@@ -489,6 +504,7 @@ class CodeInstrumenter {
         const currentScopeId = scopeStack[scopeStack.length - 1];
         const alreadyDeclared = this.isVariableDeclaredInScope(varName, currentScopeId);
         const loopId = loopIdCounter++;
+        this.loopStack.push(loopId);
         
         if (!alreadyDeclared) {
           out.push(`${indent}${type} ${varName};`);
@@ -504,6 +520,7 @@ class CodeInstrumenter {
         out.push(`${indent}for (; ${condition}; ) {`);
         out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}  if (!(${condition})) { __trace_loop_end(${loopId}, ${i + 1}); break; }`);
+        out.push(`${indent}  __trace_loop_body_start(${loopId}, ${i + 1});`);
         out.push(`${indent}  {`);
         
         let j = i + 1;
@@ -527,8 +544,10 @@ class CodeInstrumenter {
         out.push(`${indent}  }`);
         out.push(`${indent}  ${increment};`);
         out.push(`${indent}  __trace_assign(${varName}, ${varName}, ${i + 1});`);
+        out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
         out.push(`${indent}}`);
         
+        this.loopStack.pop();
         i = j - 1;
         continue;
       }
@@ -537,27 +556,42 @@ class CodeInstrumenter {
       if (whileLoop) {
         const [, condition] = whileLoop;
         const loopId = loopIdCounter++;
+        this.loopStack.push(loopId);
         out.push(`${indent}__trace_loop_start(${loopId}, "while", ${i + 1});`);
         out.push(`${indent}while (1) {`);
         out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}  if (!(${condition})) { __trace_loop_end(${loopId}, ${i + 1}); break; }`);
+        out.push(`${indent}  __trace_loop_body_start(${loopId}, ${i + 1});`);
         continue;
       }
 
       const doWhile = trimmed.match(/^\s*do\s*\{?$/);
       if (doWhile) {
         const loopId = loopIdCounter++;
+        this.loopStack.push(loopId);
         out.push(`${indent}__trace_loop_start(${loopId}, "do-while", ${i + 1});`);
         out.push(`${indent}do {`);
+        out.push(`${indent}  __trace_loop_body_start(${loopId}, ${i + 1});`);
         continue;
       }
 
       const whileEnd = trimmed.match(/^\s*}\s*while\s*\(([^)]+)\)\s*;/);
       if (whileEnd) {
         const [, condition] = whileEnd;
-        out.push(`${indent}  __trace_loop_condition(-1, (${condition}) ? 1 : 0, ${i + 1});`);
+        const loopId = this.loopStack[this.loopStack.length - 1] || 0;
+        out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
+        out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}} while (${condition});`);
-        out.push(`${indent}__trace_loop_end(-1, ${i + 1});`);
+        out.push(`${indent}__trace_loop_end(${loopId}, ${i + 1});`);
+        this.loopStack.pop();
+        continue;
+      }
+
+      if (trimmed === '}' && this.loopStack.length > 0) {
+        const loopId = this.loopStack[this.loopStack.length - 1];
+        out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
+        out.push(line);
+        this.loopStack.pop();
         continue;
       }
 

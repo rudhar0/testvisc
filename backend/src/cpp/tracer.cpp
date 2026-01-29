@@ -1,6 +1,4 @@
-// src/cpp/tracer.cpp
-// BEGINNER-CORRECT implementation with proper pointer/heap semantics
-
+// backend/src/cpp/tracer.cpp
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -63,6 +61,7 @@ struct CallFrame {
     std::string functionName;
     std::map<std::string, PointerInfo> pointerAliases;
     std::vector<int> activeLoops;
+    std::map<int, int> loopIterations;
 };
 
 static std::map<std::string, long long> g_variable_values;
@@ -336,34 +335,21 @@ extern "C" void __trace_pointer_deref_write_loc(const char* ptrName, long long v
         }
     }
     
-    if (!pinfo) {
-        char extra[512];
-        snprintf(extra, sizeof(extra),
-                 "\"pointerName\":\"%s\",\"value\":%lld,\"targetName\":\"unknown\",\"file\":\"%s\",\"line\":%d",
-                 ptrName, value, f.c_str(), line);
-        write_json_event("pointer_deref_write", nullptr, g_current_function.c_str(), g_depth, extra);
-        return;
-    }
+    std::string targetName = pinfo ? pinfo->pointsTo : "unknown";
+    bool isHeap = pinfo ? pinfo->isHeap : false;
     
     char extra[512];
     snprintf(extra, sizeof(extra),
              "\"pointerName\":\"%s\",\"value\":%lld,\"targetName\":\"%s\",\"isHeap\":%s,\"file\":\"%s\",\"line\":%d",
-             ptrName, value, pinfo->pointsTo.c_str(), pinfo->isHeap ? "true" : "false", f.c_str(), line);
+             ptrName, value, targetName.c_str(), isHeap ? "true" : "false", f.c_str(), line);
     write_json_event("pointer_deref_write", nullptr, g_current_function.c_str(), g_depth, extra);
     
-    if (pinfo->isHeap) {
+    if (pinfo && pinfo->isHeap) {
         char heap_extra[512];
         snprintf(heap_extra, sizeof(heap_extra),
                  "\"address\":\"%p\",\"value\":%lld,\"file\":\"%s\",\"line\":%d",
                  pinfo->heapAddress, value, f.c_str(), line);
         write_json_event("heap_write", pinfo->heapAddress, g_current_function.c_str(), g_depth, heap_extra);
-    } else {
-        char target_extra[256];
-        snprintf(target_extra, sizeof(target_extra),
-                 "\"name\":\"%s\",\"value\":%lld,\"file\":\"%s\",\"line\":%d",
-                 pinfo->pointsTo.c_str(), value, f.c_str(), line);
-        write_json_event("assign", nullptr, pinfo->pointsTo.c_str(), g_depth, target_extra);
-        g_variable_values[pinfo->pointsTo] = value;
     }
 }
 
@@ -424,6 +410,7 @@ extern "C" void __trace_loop_start_loc(int loopId, const char* loopType, const c
     
     if (!g_call_stack.empty()) {
         g_call_stack.back().activeLoops.push_back(loopId);
+        g_call_stack.back().loopIterations[loopId] = 0;
     }
     
     const std::string f = json_safe_path(file);
@@ -432,6 +419,38 @@ extern "C" void __trace_loop_start_loc(int loopId, const char* loopType, const c
              "\"loopId\":%d,\"loopType\":\"%s\",\"file\":\"%s\",\"line\":%d",
              loopId, loopType, f.c_str(), line);
     write_json_event("loop_start", nullptr, g_current_function.c_str(), g_depth, extra);
+}
+
+extern "C" void __trace_loop_body_start_loc(int loopId, const char* file, int line) {
+    if (!g_trace_file) return;
+    
+    int iteration = 0;
+    if (!g_call_stack.empty()) {
+        iteration = ++g_call_stack.back().loopIterations[loopId];
+    }
+    
+    const std::string f = json_safe_path(file);
+    char extra[256];
+    snprintf(extra, sizeof(extra),
+             "\"loopId\":%d,\"iteration\":%d,\"file\":\"%s\",\"line\":%d",
+             loopId, iteration, f.c_str(), line);
+    write_json_event("loop_body_start", nullptr, g_current_function.c_str(), g_depth, extra);
+}
+
+extern "C" void __trace_loop_iteration_end_loc(int loopId, const char* file, int line) {
+    if (!g_trace_file) return;
+    
+    int iteration = 0;
+    if (!g_call_stack.empty()) {
+        iteration = g_call_stack.back().loopIterations[loopId];
+    }
+    
+    const std::string f = json_safe_path(file);
+    char extra[256];
+    snprintf(extra, sizeof(extra),
+             "\"loopId\":%d,\"iteration\":%d,\"file\":\"%s\",\"line\":%d",
+             loopId, iteration, f.c_str(), line);
+    write_json_event("loop_iteration_end", nullptr, g_current_function.c_str(), g_depth, extra);
 }
 
 extern "C" void __trace_loop_end_loc(int loopId, const char* file, int line) {
@@ -443,6 +462,7 @@ extern "C" void __trace_loop_end_loc(int loopId, const char* file, int line) {
         if (it != loops.end()) {
             loops.erase(it);
         }
+        g_call_stack.back().loopIterations.erase(loopId);
     }
     
     const std::string f = json_safe_path(file);
@@ -461,6 +481,45 @@ extern "C" void __trace_loop_condition_loc(int loopId, int result, const char* f
              "\"loopId\":%d,\"result\":%d,\"file\":\"%s\",\"line\":%d",
              loopId, result, f.c_str(), line);
     write_json_event("loop_condition", nullptr, g_current_function.c_str(), g_depth, extra);
+}
+
+extern "C" void __trace_return_loc(long long value, const char* returnType, 
+                                    const char* destinationSymbol, const char* file, int line) {
+    if (!g_trace_file) return;
+    const std::string f = json_safe_path(file);
+    char extra[512];
+    
+    if (destinationSymbol && destinationSymbol[0] != '\0') {
+        snprintf(extra, sizeof(extra),
+                 "\"value\":%lld,\"returnType\":\"%s\",\"destinationSymbol\":\"%s\",\"file\":\"%s\",\"line\":%d",
+                 value, returnType ? returnType : "auto", destinationSymbol, f.c_str(), line);
+    } else {
+        snprintf(extra, sizeof(extra),
+                 "\"value\":%lld,\"returnType\":\"%s\",\"file\":\"%s\",\"line\":%d",
+                 value, returnType ? returnType : "auto", f.c_str(), line);
+    }
+    
+    write_json_event("return", nullptr, g_current_function.c_str(), g_depth, extra);
+}
+
+extern "C" void __trace_block_enter_loc(int blockDepth, const char* file, int line) {
+    if (!g_trace_file) return;
+    const std::string f = json_safe_path(file);
+    char extra[256];
+    snprintf(extra, sizeof(extra),
+             "\"blockDepth\":%d,\"file\":\"%s\",\"line\":%d",
+             blockDepth, f.c_str(), line);
+    write_json_event("block_enter", nullptr, g_current_function.c_str(), g_depth, extra);
+}
+
+extern "C" void __trace_block_exit_loc(int blockDepth, const char* file, int line) {
+    if (!g_trace_file) return;
+    const std::string f = json_safe_path(file);
+    char extra[256];
+    snprintf(extra, sizeof(extra),
+             "\"blockDepth\":%d,\"file\":\"%s\",\"line\":%d",
+             blockDepth, f.c_str(), line);
+    write_json_event("block_exit", nullptr, g_current_function.c_str(), g_depth, extra);
 }
 
 extern "C" void trace_var_int_loc(const char* name, int value,

@@ -1,4 +1,4 @@
-// src/cpp/trace.h
+// backend/src/cpp/trace.h
 #pragma once
 
 #include <cstdio>
@@ -43,8 +43,13 @@ void __trace_pointer_heap_init_loc(const char* ptrName, void* heapAddr,
 
 void __trace_control_flow_loc(const char* controlType, const char* file, int line);
 void __trace_loop_start_loc(int loopId, const char* loopType, const char* file, int line);
+void __trace_loop_body_start_loc(int loopId, const char* file, int line);
+void __trace_loop_iteration_end_loc(int loopId, const char* file, int line);
 void __trace_loop_end_loc(int loopId, const char* file, int line);
 void __trace_loop_condition_loc(int loopId, int result, const char* file, int line);
+void __trace_return_loc(long long value, const char* returnType, const char* destinationSymbol, const char* file, int line);
+void __trace_block_enter_loc(int blockDepth, const char* file, int line);
+void __trace_block_exit_loc(int blockDepth, const char* file, int line);
 
 #ifdef __cplusplus
 }
@@ -83,12 +88,22 @@ void __trace_loop_condition_loc(int loopId, int result, const char* file, int li
     __trace_control_flow_loc(controlType, __FILE__, line)
 #define __trace_loop_start(loopId, loopType, line) \
     __trace_loop_start_loc(loopId, loopType, __FILE__, line)
+#define __trace_loop_body_start(loopId, line) \
+    __trace_loop_body_start_loc(loopId, __FILE__, line)
+#define __trace_loop_iteration_end(loopId, line) \
+    __trace_loop_iteration_end_loc(loopId, __FILE__, line)
 #define __trace_loop_end(loopId, line) \
     __trace_loop_end_loc(loopId, __FILE__, line)
 #define __trace_loop_condition(loopId, result, line) \
     __trace_loop_condition_loc(loopId, result, __FILE__, line)
+#define __trace_return(value, returnType, destinationSymbol, line) \
+    __trace_return_loc((long long)(value), returnType, destinationSymbol, __FILE__, line)
+#define __trace_block_enter(blockDepth, line) \
+    __trace_block_enter_loc(blockDepth, __FILE__, line)
+#define __trace_block_exit(blockDepth, line) \
+    __trace_block_exit_loc(blockDepth, __FILE__, line)
 
-#else   /* POSIX */
+#else
 
 #ifdef __cplusplus
 extern "C" {
@@ -128,8 +143,13 @@ void __trace_pointer_heap_init_loc(const char* ptrName, void* heapAddr,
 
 void __trace_control_flow_loc(const char* controlType, const char* file, int line);
 void __trace_loop_start_loc(int loopId, const char* loopType, const char* file, int line);
+void __trace_loop_body_start_loc(int loopId, const char* file, int line);
+void __trace_loop_iteration_end_loc(int loopId, const char* file, int line);
 void __trace_loop_end_loc(int loopId, const char* file, int line);
 void __trace_loop_condition_loc(int loopId, int result, const char* file, int line);
+void __trace_return_loc(long long value, const char* returnType, const char* destinationSymbol, const char* file, int line);
+void __trace_block_enter_loc(int blockDepth, const char* file, int line);
+void __trace_block_exit_loc(int blockDepth, const char* file, int line);
 
 #ifdef __cplusplus
 }
@@ -168,9 +188,19 @@ void __trace_loop_condition_loc(int loopId, int result, const char* file, int li
     __trace_control_flow_loc(controlType, __FILE__, line)
 #define __trace_loop_start(loopId, loopType, line) \
     __trace_loop_start_loc(loopId, loopType, __FILE__, line)
+#define __trace_loop_body_start(loopId, line) \
+    __trace_loop_body_start_loc(loopId, __FILE__, line)
+#define __trace_loop_iteration_end(loopId, line) \
+    __trace_loop_iteration_end_loc(loopId, __FILE__, line)
 #define __trace_loop_end(loopId, line) \
     __trace_loop_end_loc(loopId, __FILE__, line)
 #define __trace_loop_condition(loopId, result, line) \
     __trace_loop_condition_loc(loopId, result, __FILE__, line)
+#define __trace_return(value, returnType, destinationSymbol, line) \
+    __trace_return_loc((long long)(value), returnType, destinationSymbol, __FILE__, line)
+#define __trace_block_enter(blockDepth, line) \
+    __trace_block_enter_loc(blockDepth, __FILE__, line)
+#define __trace_block_exit(blockDepth, line) \
+    __trace_block_exit_loc(blockDepth, __FILE__, line)
 
 #endif

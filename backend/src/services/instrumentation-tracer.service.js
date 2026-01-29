@@ -25,6 +25,7 @@ class InstrumentationTracer {
         this.frameStack = [];
         this.globalCallIndex = 0;
         this.frameCounts = new Map();
+        this.loopIterationCounts = new Map();
     }
 
     async ensureTempDir() {
@@ -72,9 +73,17 @@ class InstrumentationTracer {
             callDepth,
             parentFrameId: parentFrame ? parentFrame.frameId : undefined,
             entryCallIndex: this.globalCallIndex++,
-            activeLoops: new Set(),
-            declaredVariables: new Map()
+            activeLoops: new Map(),
+            declaredVariables: new Map(),
+            pointerAliases: new Map(),
+            blockScopes: []
         };
+        
+        if (parentFrame && parentFrame.pointerAliases) {
+            for (const [key, value] of parentFrame.pointerAliases.entries()) {
+                frame.pointerAliases.set(key, { ...value });
+            }
+        }
         
         this.frameStack.push(frame);
         return frame;
@@ -313,6 +322,7 @@ class InstrumentationTracer {
         this.frameStack = [];
         this.globalCallIndex = 0;
         this.frameCounts = new Map();
+        this.loopIterationCounts = new Map();
 
         const normalizeFunctionName = (name) => {
             if (!name) return 'unknown';
@@ -420,44 +430,47 @@ class InstrumentationTracer {
 
             if (ev.type === 'loop_start') {
                 const loopId = ev.loopId;
-                if (currentFrame && !currentFrame.activeLoops.has(loopId)) {
-                    currentFrame.activeLoops.add(loopId);
-                    step = {
-                        stepIndex: stepIndex++,
-                        eventType: 'loop_start',
-                        line: info.line,
-                        function: currentFunction,
-                        scope: 'block',
-                        file: path.basename(info.file),
-                        timestamp: ev.ts || null,
-                        loopId: ev.loopId,
-                        loopType: ev.loopType,
-                        explanation: `Loop started (${ev.loopType})`,
-                        internalEvents: [],
-                        ...frameMetadata
-                    };
+                if (currentFrame) {
+                    currentFrame.activeLoops.set(loopId, { iterations: 0 });
+                    this.loopIterationCounts.set(loopId, 0);
                 }
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'loop_start',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    loopId: ev.loopId,
+                    loopType: ev.loopType,
+                    explanation: `🔄 Loop started (${ev.loopType})`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
                 
             } else if (ev.type === 'loop_end') {
                 const loopId = ev.loopId;
                 if (currentFrame && currentFrame.activeLoops.has(loopId)) {
                     currentFrame.activeLoops.delete(loopId);
-                    step = {
-                        stepIndex: stepIndex++,
-                        eventType: 'loop_end',
-                        line: info.line,
-                        function: currentFunction,
-                        scope: 'block',
-                        file: path.basename(info.file),
-                        timestamp: ev.ts || null,
-                        loopId: ev.loopId,
-                        explanation: `Loop ended`,
-                        internalEvents: [],
-                        ...frameMetadata
-                    };
+                    this.loopIterationCounts.delete(loopId);
                 }
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'loop_end',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    loopId: ev.loopId,
+                    explanation: `🏁 Loop ended`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
                 
             } else if (ev.type === 'loop_condition') {
+                const loopId = ev.loopId;
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'loop_condition',
@@ -468,7 +481,48 @@ class InstrumentationTracer {
                     timestamp: ev.ts || null,
                     loopId: ev.loopId,
                     result: ev.result,
-                    explanation: `Loop condition: ${ev.result ? 'true (continue)' : 'false (exit)'}`,
+                    explanation: ev.result 
+                        ? `🟢 Loop condition: true (continue)` 
+                        : `🔴 Loop condition: false (exit)`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
+                
+            } else if (ev.type === 'loop_body_start') {
+                const loopId = ev.loopId;
+                const iterCount = this.loopIterationCounts.get(loopId) || 0;
+                this.loopIterationCounts.set(loopId, iterCount + 1);
+                
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'loop_body_start',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    loopId: ev.loopId,
+                    iteration: iterCount + 1,
+                    explanation: `🔁 Loop iteration ${iterCount + 1} begins`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
+                
+            } else if (ev.type === 'loop_iteration_end') {
+                const loopId = ev.loopId;
+                const iterCount = this.loopIterationCounts.get(loopId) || 0;
+                
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'loop_iteration_end',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    loopId: ev.loopId,
+                    iteration: iterCount,
+                    explanation: `🔁 Loop iteration ${iterCount} ends`,
                     internalEvents: [],
                     ...frameMetadata
                 };
@@ -484,7 +538,7 @@ class InstrumentationTracer {
                         scope: 'block',
                         file: path.basename(info.file),
                         timestamp: ev.ts || null,
-                        explanation: '🔴 Break statement',
+                        explanation: '🔴 Break statement - exiting loop',
                         internalEvents: [],
                         ...frameMetadata
                     };
@@ -497,11 +551,47 @@ class InstrumentationTracer {
                         scope: 'block',
                         file: path.basename(info.file),
                         timestamp: ev.ts || null,
-                        explanation: '🔄 Continue statement',
+                        explanation: '🔄 Continue statement - next iteration',
                         internalEvents: [],
                         ...frameMetadata
                     };
                 }
+                
+            } else if (ev.type === 'block_enter') {
+                if (currentFrame) {
+                    currentFrame.blockScopes.push({ depth: ev.blockDepth || 0 });
+                }
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'block_enter',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    blockDepth: ev.blockDepth || 0,
+                    explanation: `{ Entering code block`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
+                
+            } else if (ev.type === 'block_exit') {
+                if (currentFrame && currentFrame.blockScopes.length > 0) {
+                    currentFrame.blockScopes.pop();
+                }
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'block_exit',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    blockDepth: ev.blockDepth || 0,
+                    explanation: `} Exiting code block`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
                 
             } else if (ev.type === 'array_create') {
                 step = {
@@ -551,6 +641,16 @@ class InstrumentationTracer {
                 };
                 
             } else if (ev.type === 'pointer_alias') {
+                if (currentFrame) {
+                    currentFrame.pointerAliases.set(ev.name, {
+                        pointerName: ev.name,
+                        aliasOf: ev.aliasOf,
+                        decayedFromArray: ev.decayedFromArray || false,
+                        memoryRegion: 'stack',
+                        address: null
+                    });
+                }
+                
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'pointer_alias',
@@ -581,6 +681,17 @@ class InstrumentationTracer {
                 });
                 
             } else if (ev.type === 'pointer_deref_write') {
+                let targetName = ev.targetName || 'unknown';
+                let isHeap = ev.isHeap || false;
+                
+                if (targetName === 'unknown' && currentFrame) {
+                    const ptrAlias = currentFrame.pointerAliases.get(ev.pointerName);
+                    if (ptrAlias && ptrAlias.aliasOf) {
+                        targetName = ptrAlias.aliasOf;
+                        isHeap = ptrAlias.isHeap || false;
+                    }
+                }
+                
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'pointer_deref_write',
@@ -591,15 +702,36 @@ class InstrumentationTracer {
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     pointerName: ev.pointerName,
-                    targetName: ev.targetName,
+                    targetName: targetName,
                     value: ev.value,
-                    isHeap: ev.isHeap || false,
-                    explanation: ev.isHeap
+                    isHeap: isHeap,
+                    explanation: isHeap
                         ? `*${ev.pointerName} = ${ev.value} (heap write)`
-                        : `*${ev.pointerName} = ${ev.value} (writes to ${ev.targetName})`,
+                        : `*${ev.pointerName} = ${ev.value} (writes to ${targetName})`,
                     internalEvents: [],
                     ...frameMetadata
                 };
+                
+                if (step) steps.push(step);
+                
+                if (!isHeap && targetName !== 'unknown') {
+                    steps.push({
+                        stepIndex: stepIndex++,
+                        eventType: 'var_assign',
+                        line: info.line,
+                        function: currentFunction,
+                        scope: 'block',
+                        symbol: targetName,
+                        file: path.basename(info.file),
+                        timestamp: ev.ts || null,
+                        name: targetName,
+                        value: ev.value,
+                        explanation: `${targetName} = ${ev.value}`,
+                        internalEvents: [],
+                        ...frameMetadata
+                    });
+                }
+                step = null;
                 
             } else if (ev.type === 'heap_write') {
                 step = {
@@ -670,6 +802,25 @@ class InstrumentationTracer {
                     name: ev.name,
                     value: ev.value,
                     explanation: `${ev.name} = ${ev.value}`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
+                
+            } else if (ev.type === 'return') {
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'return',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'function',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    returnValue: ev.value,
+                    returnType: ev.returnType || 'auto',
+                    destinationSymbol: ev.destinationSymbol || null,
+                    explanation: ev.destinationSymbol 
+                        ? `⬅️ Returning ${ev.value} to ${ev.destinationSymbol}`
+                        : `⬅️ Returning ${ev.value}`,
                     internalEvents: [],
                     ...frameMetadata
                 };
@@ -779,6 +930,7 @@ class InstrumentationTracer {
         this.frameStack = [];
         this.globalCallIndex = 0;
         this.frameCounts = new Map();
+        this.loopIterationCounts = new Map();
 
         let exe, src, traceOut, hdr;
         try {
@@ -799,7 +951,7 @@ class InstrumentationTracer {
                 functions: this.extractFunctions(steps, functions),
                 metadata: {
                     debugger: 'gcc-instrumentation-beginner-correct',
-                    version: '7.4',
+                    version: '8.0',
                     hasRealMemory: true,
                     hasHeapTracking: true,
                     hasArraySupport: true,
@@ -810,6 +962,10 @@ class InstrumentationTracer {
                     hasCallFrameTracking: true,
                     hasLoopStructureTracking: true,
                     hasBreakContinueTracking: true,
+                    hasLoopIterationTracking: true,
+                    hasReturnEvents: true,
+                    hasBlockScopeTracking: true,
+                    hasPointerAliasPropagation: true,
                     capturedEvents: events.length,
                     emittedSteps: steps.length,
                     programOutput: stdout,
