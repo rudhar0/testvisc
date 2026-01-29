@@ -16,12 +16,12 @@ class InstrumentationTracer {
         this.tracerCpp = path.join(process.cwd(), 'src', 'cpp', 'tracer.cpp');
         this.traceHeader = path.join(process.cwd(), 'src', 'cpp', 'trace.h');
         this.ensureTempDir();
-        
+
         this.arrayRegistry = new Map();
         this.pointerRegistry = new Map();
         this.functionRegistry = new Map();
         this.callStack = [];
-        
+
         this.frameStack = [];
         this.globalCallIndex = 0;
         this.frameCounts = new Map();
@@ -49,7 +49,7 @@ class InstrumentationTracer {
                 parentFrameId: undefined
             };
         }
-        
+
         const current = this.frameStack[this.frameStack.length - 1];
         return {
             frameId: current.frameId,
@@ -60,13 +60,13 @@ class InstrumentationTracer {
     }
 
     pushCallFrame(functionName) {
-        const parentFrame = this.frameStack.length > 0 
-            ? this.frameStack[this.frameStack.length - 1] 
+        const parentFrame = this.frameStack.length > 0
+            ? this.frameStack[this.frameStack.length - 1]
             : null;
-        
+
         const frameId = this.generateFrameId(functionName);
         const callDepth = this.frameStack.length;
-        
+
         const frame = {
             frameId,
             functionName,
@@ -79,13 +79,13 @@ class InstrumentationTracer {
             blockScopes: [],
             scopeStack: []
         };
-        
+
         if (parentFrame && parentFrame.pointerAliases) {
             for (const [key, value] of parentFrame.pointerAliases.entries()) {
                 frame.pointerAliases.set(key, { ...value });
             }
         }
-        
+
         this.frameStack.push(frame);
         return frame;
     }
@@ -96,13 +96,13 @@ class InstrumentationTracer {
 
     resolvePointerTarget(pointerName, currentFrame) {
         if (!currentFrame) return null;
-        
+
         let current = pointerName;
         let visited = new Set();
-        
+
         while (current && !visited.has(current)) {
             visited.add(current);
-            
+
             const alias = currentFrame.pointerAliases.get(current);
             if (alias && alias.aliasOf) {
                 const nextAlias = currentFrame.pointerAliases.get(alias.aliasOf);
@@ -119,15 +119,15 @@ class InstrumentationTracer {
                 break;
             }
         }
-        
+
         for (let i = this.frameStack.length - 1; i >= 0; i--) {
             const frame = this.frameStack[i];
             current = pointerName;
             visited.clear();
-            
+
             while (current && !visited.has(current)) {
                 visited.add(current);
-                
+
                 const frameAlias = frame.pointerAliases.get(current);
                 if (frameAlias && frameAlias.aliasOf) {
                     const nextAlias = frame.pointerAliases.get(frameAlias.aliasOf);
@@ -145,7 +145,7 @@ class InstrumentationTracer {
                 }
             }
         }
-        
+
         return null;
     }
 
@@ -177,19 +177,19 @@ class InstrumentationTracer {
 
     shouldFilterEvent(info, event, userSourceFile) {
         const { file, function: fn, line } = info;
-        
+
         if (!file || line === 0 || file === 'unknown' || file === '??') return true;
-        
-        if (fn && (fn.includes('GLOBAL__sub') || 
-                   fn.includes('_static_initialization_and_destruction'))) {
+
+        if (fn && (fn.includes('GLOBAL__sub') ||
+            fn.includes('_static_initialization_and_destruction'))) {
             return true;
         }
-        
+
         const userBasename = path.basename(userSourceFile);
         const eventBasename = path.basename(file);
-        
+
         if (eventBasename === userBasename) return false;
-        
+
         if (process.platform !== 'win32') {
             if (file.startsWith('/usr/') || file.startsWith('/lib/') ||
                 file.includes('include/c++/') || file.includes('include/bits/')) return true;
@@ -197,14 +197,14 @@ class InstrumentationTracer {
             if (file.includes('mingw') || file.includes('include\\c++') ||
                 file.includes('lib\\gcc')) return true;
         }
-        
+
         if (file.includes('stl_') || file.includes('bits/') ||
             file.includes('iostream') || file.includes('ostream') ||
             file.includes('streambuf')) return true;
-        
-        const internalPrefixes = ['__', '_IO_', '_M_', 'std::__', 
+
+        const internalPrefixes = ['__', '_IO_', '_M_', 'std::__',
             'std::basic_', 'std::char_traits', '__gnu_cxx::', '__cxxabi'];
-        
+
         return internalPrefixes.some(prefix => fn && fn.startsWith(prefix));
     }
 
@@ -241,9 +241,9 @@ class InstrumentationTracer {
             if (line.trim().length === 0 && i === lines.length - 1) continue;
 
             const { rendered, escapes } = this.parseEscapeSequences(line);
-            
+
             const frameMetadata = this.getCurrentFrameMetadata();
-            
+
             steps.push({
                 stepIndex: stepIndex++,
                 eventType: 'output',
@@ -387,7 +387,7 @@ class InstrumentationTracer {
 
         for (let i = 0; i < events.length; i++) {
             const ev = events[i];
-            
+
             let info;
             if (ev.file && ev.line) {
                 info = {
@@ -402,7 +402,7 @@ class InstrumentationTracer {
 
             if (!mainStarted && info.function === 'main' && ev.type === 'func_enter') {
                 const mainFrame = this.pushCallFrame('main');
-                
+
                 steps.push({
                     stepIndex: stepIndex++,
                     eventType: 'program_start',
@@ -430,7 +430,7 @@ class InstrumentationTracer {
             if (ev.type === 'func_enter' && info.function !== 'main') {
                 const newFrame = this.pushCallFrame(info.function);
                 currentFunction = info.function;
-                
+
                 steps.push({
                     stepIndex: stepIndex++,
                     eventType: 'func_enter',
@@ -452,7 +452,7 @@ class InstrumentationTracer {
 
             if (ev.type === 'func_exit') {
                 const exitingFrame = this.popCallFrame();
-                
+
                 if (exitingFrame) {
                     if (exitingFrame.scopeStack.length > 0) {
                         const allDestroyedSymbols = new Set();
@@ -461,7 +461,7 @@ class InstrumentationTracer {
                                 allDestroyedSymbols.add(varName);
                             }
                         }
-                        
+
                         if (allDestroyedSymbols.size > 0) {
                             steps.push({
                                 stepIndex: stepIndex++,
@@ -481,10 +481,10 @@ class InstrumentationTracer {
                                 parentFrameId: exitingFrame.parentFrameId
                             });
                         }
-                        
+
                         exitingFrame.scopeStack = [];
                     }
-                    
+
                     steps.push({
                         stepIndex: stepIndex++,
                         eventType: 'func_exit',
@@ -502,9 +502,9 @@ class InstrumentationTracer {
                         isFunctionExit: true
                     });
                 }
-                
-                currentFunction = this.frameStack.length > 0 
-                    ? this.frameStack[this.frameStack.length - 1].functionName 
+
+                currentFunction = this.frameStack.length > 0
+                    ? this.frameStack[this.frameStack.length - 1].functionName
                     : 'main';
                 if (!currentFunction) currentFunction = 'main';
                 continue;
@@ -535,7 +535,7 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'loop_end') {
                 const loopId = ev.loopId;
                 if (currentFrame && currentFrame.activeLoops.has(loopId)) {
@@ -555,7 +555,7 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'loop_condition') {
                 const loopId = ev.loopId;
                 step = {
@@ -568,18 +568,18 @@ class InstrumentationTracer {
                     timestamp: ev.ts || null,
                     loopId: ev.loopId,
                     result: ev.result,
-                    explanation: ev.result 
-                        ? `🟢 Loop condition: true (continue)` 
+                    explanation: ev.result
+                        ? `🟢 Loop condition: true (continue)`
                         : `🔴 Loop condition: false (exit)`,
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'loop_body_start') {
                 const loopId = ev.loopId;
                 const iterCount = this.loopIterationCounts.get(loopId) || 0;
                 this.loopIterationCounts.set(loopId, iterCount + 1);
-                
+
                 if (currentFrame) {
                     currentFrame.scopeStack.push({
                         type: 'loop_iteration',
@@ -588,7 +588,7 @@ class InstrumentationTracer {
                         variables: new Set()
                     });
                 }
-                
+
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'loop_body_start',
@@ -603,16 +603,16 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'loop_iteration_end') {
                 const loopId = ev.loopId;
                 const iterCount = this.loopIterationCounts.get(loopId) || 0;
-                
+
                 if (currentFrame && currentFrame.scopeStack.length > 0) {
                     const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
                     if (topScope.type === 'loop_iteration' && topScope.loopId === loopId) {
                         const destroyedSymbols = Array.from(topScope.variables);
-                        
+
                         if (destroyedSymbols.length > 0) {
                             steps.push({
                                 stepIndex: stepIndex++,
@@ -631,11 +631,11 @@ class InstrumentationTracer {
                                 ...frameMetadata
                             });
                         }
-                        
+
                         currentFrame.scopeStack.pop();
                     }
                 }
-                
+
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'loop_iteration_end',
@@ -650,7 +650,7 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'control_flow') {
                 const controlType = ev.controlType;
                 if (controlType === 'break') {
@@ -680,7 +680,7 @@ class InstrumentationTracer {
                         ...frameMetadata
                     };
                 }
-                
+
             } else if (ev.type === 'block_enter') {
                 if (currentFrame) {
                     currentFrame.blockScopes.push({ depth: ev.blockDepth || 0 });
@@ -703,13 +703,13 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'block_exit') {
                 if (currentFrame && currentFrame.scopeStack.length > 0) {
                     const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
                     if (topScope.type === 'block') {
                         const destroyedSymbols = Array.from(topScope.variables);
-                        
+
                         if (destroyedSymbols.length > 0) {
                             steps.push({
                                 stepIndex: stepIndex++,
@@ -727,15 +727,15 @@ class InstrumentationTracer {
                                 ...frameMetadata
                             });
                         }
-                        
+
                         currentFrame.scopeStack.pop();
                     }
                 }
-                
+
                 if (currentFrame && currentFrame.blockScopes.length > 0) {
                     currentFrame.blockScopes.pop();
                 }
-                
+
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'block_exit',
@@ -749,7 +749,7 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'array_create') {
                 step = {
                     stepIndex: stepIndex++,
@@ -769,19 +769,19 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
                 this.arrayRegistry.set(ev.name, {
                     name: ev.name,
                     baseType: ev.baseType,
                     dimensions: ev.dimensions,
                     isStack: ev.isStack !== false
                 });
-                
+
                 if (currentFrame && currentFrame.scopeStack.length > 0) {
                     const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
                     topScope.variables.add(ev.name);
                 }
-                
+
             } else if (ev.type === 'array_index_assign') {
                 const charInfo = ev.char ? ` ('${String.fromCharCode(ev.value)}')` : '';
                 step = {
@@ -801,7 +801,7 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'pointer_alias') {
                 if (currentFrame) {
                     currentFrame.pointerAliases.set(ev.name, {
@@ -813,7 +813,7 @@ class InstrumentationTracer {
                         isHeap: false
                     });
                 }
-                
+
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'pointer_alias',
@@ -831,38 +831,43 @@ class InstrumentationTracer {
                         target: ev.aliasOf,
                         address: null
                     },
-                    explanation: ev.decayedFromArray 
+                    explanation: ev.decayedFromArray
                         ? `${ev.name} → ${ev.aliasOf} (array decay)`
                         : `${ev.name} → &${ev.aliasOf}`,
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
                 this.pointerRegistry.set(ev.name, {
                     pointsTo: ev.aliasOf,
                     isHeap: false
                 });
-                
+
                 if (currentFrame && currentFrame.scopeStack.length > 0) {
                     const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
                     topScope.variables.add(ev.name);
                 }
-                
+
             } else if (ev.type === 'pointer_deref_write') {
                 const resolved = this.resolvePointerTarget(ev.pointerName, currentFrame);
-                
-                let targetName = resolved ? resolved.targetName : null;
-                let isHeap = resolved ? resolved.isHeap : false;
-                
-                if (!targetName && ev.targetName && ev.targetName !== 'unknown') {
+
+                let targetName = null;
+                let isHeap = false;
+
+                // CRITICAL: Only use resolved target if it's valid and different from pointer
+                if (resolved && resolved.targetName && resolved.targetName !== ev.pointerName) {
+                    targetName = resolved.targetName;
+                    isHeap = resolved.isHeap || false;
+                } else if (ev.targetName && ev.targetName !== 'unknown' && ev.targetName !== ev.pointerName) {
                     targetName = ev.targetName;
                     isHeap = ev.isHeap || false;
                 }
-                
-                if (!targetName) {
-                    targetName = ev.pointerName;
+
+                // CRITICAL: Never fall back to pointerName as targetName
+                if (!targetName || targetName === ev.pointerName) {
+                    targetName = null;
                 }
-                
+
                 steps.push({
                     stepIndex: stepIndex++,
                     eventType: 'pointer_deref_write',
@@ -873,17 +878,20 @@ class InstrumentationTracer {
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     pointerName: ev.pointerName,
-                    targetName: targetName,
+                    targetName: targetName || 'unknown',
                     value: ev.value,
                     isHeap: isHeap,
                     explanation: isHeap
                         ? `*${ev.pointerName} = ${ev.value} (heap write)`
-                        : `*${ev.pointerName} = ${ev.value} (writes to ${targetName})`,
+                        : targetName
+                            ? `*${ev.pointerName} = ${ev.value} (writes to ${targetName})`
+                            : `*${ev.pointerName} = ${ev.value}`,
                     internalEvents: [],
                     ...frameMetadata
                 });
-                
-                if (!isHeap && targetName && targetName !== ev.pointerName) {
+
+                // CRITICAL: Only emit var_assign if we have a valid target
+                if (!isHeap && targetName && targetName !== 'unknown') {
                     steps.push({
                         stepIndex: stepIndex++,
                         eventType: 'var_assign',
@@ -900,9 +908,9 @@ class InstrumentationTracer {
                         ...frameMetadata
                     });
                 }
-                
+
                 step = null;
-                
+
             } else if (ev.type === 'heap_write') {
                 step = {
                     stepIndex: stepIndex++,
@@ -919,19 +927,19 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'declare') {
                 const varKey = `${frameMetadata.frameId}:${ev.name}`;
-                
+
                 if (currentFrame) {
                     if (!currentFrame.declaredVariables.has(varKey)) {
                         currentFrame.declaredVariables.set(varKey, true);
-                        
+
                         if (currentFrame.scopeStack.length > 0) {
                             const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
                             topScope.variables.add(ev.name);
                         }
-                        
+
                         step = {
                             stepIndex: stepIndex++,
                             eventType: 'var_declare',
@@ -951,7 +959,7 @@ class InstrumentationTracer {
                         step = null;
                     }
                 }
-                
+
             } else if (ev.type === 'assign') {
                 step = {
                     stepIndex: stepIndex++,
@@ -968,7 +976,7 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'return') {
                 step = {
                     stepIndex: stepIndex++,
@@ -981,13 +989,13 @@ class InstrumentationTracer {
                     returnValue: ev.value,
                     returnType: ev.returnType || 'auto',
                     destinationSymbol: ev.destinationSymbol || null,
-                    explanation: ev.destinationSymbol 
+                    explanation: ev.destinationSymbol
                         ? `⬅️ Returning ${ev.value} to ${ev.destinationSymbol}`
                         : `⬅️ Returning ${ev.value}`,
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'heap_alloc' && ev.isHeap) {
                 step = {
                     stepIndex: stepIndex++,
@@ -1005,7 +1013,7 @@ class InstrumentationTracer {
                     internalEvents: [],
                     ...frameMetadata
                 };
-                
+
             } else if (ev.type === 'heap_free') {
                 step = {
                     stepIndex: stepIndex++,
@@ -1033,7 +1041,7 @@ class InstrumentationTracer {
 
         const lastStepIndex = allSteps.at(-1)?.stepIndex ?? 0;
         const finalFrameMetadata = this.getCurrentFrameMetadata();
-        
+
         allSteps.push({
             stepIndex: lastStepIndex + 1,
             eventType: 'program_end',
@@ -1048,7 +1056,7 @@ class InstrumentationTracer {
         });
 
         console.log(`✅ Generated ${allSteps.length} steps`);
-        
+
         return allSteps;
     }
 
@@ -1065,20 +1073,20 @@ class InstrumentationTracer {
 
     extractFunctions(steps, trackedFunctions) {
         const map = new Map();
-        
+
         for (const fn of trackedFunctions) {
             if (fn && fn !== 'unknown' && fn.length > 1) {
                 if (!map.has(fn)) {
-                    map.set(fn, { 
-                        name: fn, 
-                        line: 0, 
+                    map.set(fn, {
+                        name: fn,
+                        line: 0,
                         returnType: 'auto',
                         type: 'function'
                     });
                 }
             }
         }
-        
+
         return Array.from(map.values());
     }
 
@@ -1089,7 +1097,7 @@ class InstrumentationTracer {
         this.pointerRegistry.clear();
         this.functionRegistry.clear();
         this.callStack = [];
-        
+
         this.frameStack = [];
         this.globalCallIndex = 0;
         this.frameCounts = new Map();
@@ -1097,12 +1105,12 @@ class InstrumentationTracer {
 
         let exe, src, traceOut, hdr;
         try {
-            ({ executable: exe, sourceFile: src, traceOutput: traceOut, headerCopy: hdr } = 
+            ({ executable: exe, sourceFile: src, traceOutput: traceOut, headerCopy: hdr } =
                 await this.compile(code, language));
 
             const { stdout, stderr } = await this.executeInstrumented(exe, traceOut);
             const { events, functions } = await this.parseTraceFile(traceOut);
-            
+
             console.log(`📋 Captured ${events.length} raw events, ${functions.length} functions`);
 
             const steps = await this.convertToSteps(events, exe, src, { stdout, stderr }, functions);
@@ -1130,7 +1138,7 @@ class InstrumentationTracer {
                     timestamp: Date.now()
                 }
             };
-            
+
             console.log('✅ Trace complete', {
                 steps: result.totalSteps,
                 functions: result.functions.length,
@@ -1138,7 +1146,7 @@ class InstrumentationTracer {
                 pointers: this.pointerRegistry.size,
                 maxCallDepth: Math.max(...steps.map(s => s.callDepth || 0))
             });
-            
+
             return result;
         } catch (e) {
             console.error('❌ Trace failed:', e.message);
@@ -1151,7 +1159,7 @@ class InstrumentationTracer {
     async cleanup(files) {
         for (const f of files) {
             if (f && existsSync(f)) {
-                try { await unlink(f); } catch (_) {}
+                try { await unlink(f); } catch (_) { }
             }
         }
     }
