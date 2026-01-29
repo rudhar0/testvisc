@@ -4,13 +4,8 @@ import { writeFile, readFile, unlink } from 'fs/promises';
 import path from 'path';
 import { v4 as uuid } from 'uuid';
 
-/**
- * BEGINNER-CORRECT code instrumenter with fixes:
- * - Break/continue control flow
- * - Loop condition tracing in functions
- * - Pointer alias propagation across calls
- * - Variable declaration scope tracking
- */
+let loopIdCounter = 0;
+
 class CodeInstrumenter {
   constructor() {
     this.tempDir = path.join(process.cwd(), 'temp');
@@ -173,6 +168,7 @@ class CodeInstrumenter {
     let scopeStack = [0];
     this.currentScope = 0;
     this.scopeVariables.clear();
+    loopIdCounter = 0;
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -420,14 +416,13 @@ class CodeInstrumenter {
         const alreadyDeclared = this.isVariableDeclaredInScope(varName, currentScopeId);
         
         if (!alreadyDeclared) {
-          out.push(`${indent}const ${type} ${varName};`);
+          out.push(`${indent}const ${type} ${varName} = ${value};`);
           out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
+          out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
           this.markVariableDeclared(varName, currentScopeId);
         } else {
-          out.push(`${indent}const ${type} ${varName};`);
+          out.push(line);
         }
-        out.push(`${indent}${varName} = ${value};`);
-        out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         continue;
       }
 
@@ -506,9 +501,35 @@ class CodeInstrumenter {
           out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         }
         out.push(`${indent}__trace_loop_start(${loopId}, "for", ${i + 1});`);
-        out.push(`${indent}for (; ${condition}; ${increment}) {`);
+        out.push(`${indent}for (; ${condition}; ) {`);
         out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}  if (!(${condition})) { __trace_loop_end(${loopId}, ${i + 1}); break; }`);
+        out.push(`${indent}  {`);
+        
+        let j = i + 1;
+        let loopBraceDepth = 1;
+        const loopBody = [];
+        
+        while (j < lines.length && loopBraceDepth > 0) {
+          const bodyLine = lines[j];
+          const bodyTrimmed = bodyLine.trim();
+          
+          if (bodyTrimmed.includes('{')) loopBraceDepth++;
+          if (bodyTrimmed.includes('}')) loopBraceDepth--;
+          
+          if (loopBraceDepth > 0) {
+            loopBody.push(bodyLine);
+          }
+          j++;
+        }
+        
+        out.push(...loopBody);
+        out.push(`${indent}  }`);
+        out.push(`${indent}  ${increment};`);
+        out.push(`${indent}  __trace_assign(${varName}, ${varName}, ${i + 1});`);
+        out.push(`${indent}}`);
+        
+        i = j - 1;
         continue;
       }
 
@@ -517,7 +538,7 @@ class CodeInstrumenter {
         const [, condition] = whileLoop;
         const loopId = loopIdCounter++;
         out.push(`${indent}__trace_loop_start(${loopId}, "while", ${i + 1});`);
-        out.push(`${indent}while (${condition}) {`);
+        out.push(`${indent}while (1) {`);
         out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}  if (!(${condition})) { __trace_loop_end(${loopId}, ${i + 1}); break; }`);
         continue;

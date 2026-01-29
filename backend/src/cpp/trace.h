@@ -42,7 +42,9 @@ void __trace_pointer_heap_init_loc(const char* ptrName, void* heapAddr,
                                     const char* file, int line);
 
 void __trace_control_flow_loc(const char* controlType, const char* file, int line);
-void __trace_loop_condition_loc(const char* loopVar, int result, const char* file, int line);
+void __trace_loop_start_loc(int loopId, const char* loopType, const char* file, int line);
+void __trace_loop_end_loc(int loopId, const char* file, int line);
+void __trace_loop_condition_loc(int loopId, int result, const char* file, int line);
 
 #ifdef __cplusplus
 }
@@ -79,8 +81,12 @@ void __trace_loop_condition_loc(const char* loopVar, int result, const char* fil
     __trace_pointer_heap_init_loc(#ptrName, heapAddr, __FILE__, line)
 #define __trace_control_flow(controlType, line) \
     __trace_control_flow_loc(controlType, __FILE__, line)
-#define __trace_loop_condition(loopVar, result, line) \
-    __trace_loop_condition_loc(loopVar, result, __FILE__, line)
+#define __trace_loop_start(loopId, loopType, line) \
+    __trace_loop_start_loc(loopId, loopType, __FILE__, line)
+#define __trace_loop_end(loopId, line) \
+    __trace_loop_end_loc(loopId, __FILE__, line)
+#define __trace_loop_condition(loopId, result, line) \
+    __trace_loop_condition_loc(loopId, result, __FILE__, line)
 
 #else   /* POSIX */
 
@@ -121,7 +127,9 @@ void __trace_pointer_heap_init_loc(const char* ptrName, void* heapAddr,
                                     const char* file, int line);
 
 void __trace_control_flow_loc(const char* controlType, const char* file, int line);
-void __trace_loop_condition_loc(const char* loopVar, int result, const char* file, int line);
+void __trace_loop_start_loc(int loopId, const char* loopType, const char* file, int line);
+void __trace_loop_end_loc(int loopId, const char* file, int line);
+void __trace_loop_condition_loc(int loopId, int result, const char* file, int line);
 
 #ifdef __cplusplus
 }
@@ -158,7 +166,11 @@ void __trace_loop_condition_loc(const char* loopVar, int result, const char* fil
     __trace_pointer_heap_init_loc(#ptrName, heapAddr, __FILE__, line)
 #define __trace_control_flow(controlType, line) \
     __trace_control_flow_loc(controlType, __FILE__, line)
-#define __trace_loop_condition(loopVar, result, line) \
-    __trace_loop_condition_loc(loopVar, result, __FILE__, line)
+#define __trace_loop_start(loopId, loopType, line) \
+    __trace_loop_start_loc(loopId, loopType, __FILE__, line)
+#define __trace_loop_end(loopId, line) \
+    __trace_loop_end_loc(loopId, __FILE__, line)
+#define __trace_loop_condition(loopId, result, line) \
+    __trace_loop_condition_loc(loopId, result, __FILE__, line)
 
 #endif

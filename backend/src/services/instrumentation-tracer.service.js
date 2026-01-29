@@ -120,6 +120,11 @@ class InstrumentationTracer {
             return true;
         }
         
+        const userBasename = path.basename(userSourceFile);
+        const eventBasename = path.basename(file);
+        
+        if (eventBasename === userBasename) return false;
+        
         if (process.platform !== 'win32') {
             if (file.startsWith('/usr/') || file.startsWith('/lib/') ||
                 file.includes('include/c++/') || file.includes('include/bits/')) return true;
@@ -127,10 +132,6 @@ class InstrumentationTracer {
             if (file.includes('mingw') || file.includes('include\\c++') ||
                 file.includes('lib\\gcc')) return true;
         }
-        
-        const userBasename = path.basename(userSourceFile);
-        const eventBasename = path.basename(file);
-        if (eventBasename === userBasename) return false;
         
         if (file.includes('stl_') || file.includes('bits/') ||
             file.includes('iostream') || file.includes('ostream') ||
@@ -472,33 +473,35 @@ class InstrumentationTracer {
                     ...frameMetadata
                 };
                 
-            } else if (ev.type === 'loop_break') {
-                step = {
-                    stepIndex: stepIndex++,
-                    eventType: 'loop_break',
-                    line: info.line,
-                    function: currentFunction,
-                    scope: 'block',
-                    file: path.basename(info.file),
-                    timestamp: ev.ts || null,
-                    explanation: '🔴 Break statement',
-                    internalEvents: [],
-                    ...frameMetadata
-                };
-                
-            } else if (ev.type === 'loop_continue') {
-                step = {
-                    stepIndex: stepIndex++,
-                    eventType: 'loop_continue',
-                    line: info.line,
-                    function: currentFunction,
-                    scope: 'block',
-                    file: path.basename(info.file),
-                    timestamp: ev.ts || null,
-                    explanation: '🔄 Continue statement',
-                    internalEvents: [],
-                    ...frameMetadata
-                };
+            } else if (ev.type === 'control_flow') {
+                const controlType = ev.controlType;
+                if (controlType === 'break') {
+                    step = {
+                        stepIndex: stepIndex++,
+                        eventType: 'loop_break',
+                        line: info.line,
+                        function: currentFunction,
+                        scope: 'block',
+                        file: path.basename(info.file),
+                        timestamp: ev.ts || null,
+                        explanation: '🔴 Break statement',
+                        internalEvents: [],
+                        ...frameMetadata
+                    };
+                } else if (controlType === 'continue') {
+                    step = {
+                        stepIndex: stepIndex++,
+                        eventType: 'loop_continue',
+                        line: info.line,
+                        function: currentFunction,
+                        scope: 'block',
+                        file: path.basename(info.file),
+                        timestamp: ev.ts || null,
+                        explanation: '🔄 Continue statement',
+                        internalEvents: [],
+                        ...frameMetadata
+                    };
+                }
                 
             } else if (ev.type === 'array_create') {
                 step = {

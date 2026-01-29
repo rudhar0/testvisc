@@ -62,6 +62,7 @@ struct PointerInfo {
 struct CallFrame {
     std::string functionName;
     std::map<std::string, PointerInfo> pointerAliases;
+    std::vector<int> activeLoops;
 };
 
 static std::map<std::string, long long> g_variable_values;
@@ -322,6 +323,20 @@ extern "C" void __trace_pointer_deref_write_loc(const char* ptrName, long long v
     PointerInfo* pinfo = findPointerInfo(ptrName);
     
     if (!pinfo) {
+        if (!g_call_stack.empty()) {
+            for (auto it = g_call_stack.rbegin(); it != g_call_stack.rend(); ++it) {
+                for (const auto& pair : it->pointerAliases) {
+                    if (pair.second.pointerName == ptrName) {
+                        pinfo = const_cast<PointerInfo*>(&pair.second);
+                        break;
+                    }
+                }
+                if (pinfo) break;
+            }
+        }
+    }
+    
+    if (!pinfo) {
         char extra[512];
         snprintf(extra, sizeof(extra),
                  "\"pointerName\":\"%s\",\"value\":%lld,\"targetName\":\"unknown\",\"file\":\"%s\",\"line\":%d",
@@ -404,13 +419,47 @@ extern "C" void __trace_control_flow_loc(const char* controlType, const char* fi
     write_json_event("control_flow", nullptr, g_current_function.c_str(), g_depth, extra);
 }
 
-extern "C" void __trace_loop_condition_loc(const char* loopVar, int result, const char* file, int line) {
+extern "C" void __trace_loop_start_loc(int loopId, const char* loopType, const char* file, int line) {
+    if (!g_trace_file) return;
+    
+    if (!g_call_stack.empty()) {
+        g_call_stack.back().activeLoops.push_back(loopId);
+    }
+    
+    const std::string f = json_safe_path(file);
+    char extra[256];
+    snprintf(extra, sizeof(extra),
+             "\"loopId\":%d,\"loopType\":\"%s\",\"file\":\"%s\",\"line\":%d",
+             loopId, loopType, f.c_str(), line);
+    write_json_event("loop_start", nullptr, g_current_function.c_str(), g_depth, extra);
+}
+
+extern "C" void __trace_loop_end_loc(int loopId, const char* file, int line) {
+    if (!g_trace_file) return;
+    
+    if (!g_call_stack.empty()) {
+        auto& loops = g_call_stack.back().activeLoops;
+        auto it = std::find(loops.begin(), loops.end(), loopId);
+        if (it != loops.end()) {
+            loops.erase(it);
+        }
+    }
+    
+    const std::string f = json_safe_path(file);
+    char extra[256];
+    snprintf(extra, sizeof(extra),
+             "\"loopId\":%d,\"file\":\"%s\",\"line\":%d",
+             loopId, f.c_str(), line);
+    write_json_event("loop_end", nullptr, g_current_function.c_str(), g_depth, extra);
+}
+
+extern "C" void __trace_loop_condition_loc(int loopId, int result, const char* file, int line) {
     if (!g_trace_file) return;
     const std::string f = json_safe_path(file);
     char extra[256];
     snprintf(extra, sizeof(extra),
-             "\"loopVar\":\"%s\",\"result\":%d,\"file\":\"%s\",\"line\":%d",
-             loopVar, result, f.c_str(), line);
+             "\"loopId\":%d,\"result\":%d,\"file\":\"%s\",\"line\":%d",
+             loopId, result, f.c_str(), line);
     write_json_event("loop_condition", nullptr, g_current_function.c_str(), g_depth, extra);
 }
 
@@ -523,6 +572,11 @@ void __cyg_profile_func_enter(void* func, void* caller) {
     
     CallFrame frame;
     frame.functionName = fn;
+    
+    if (!g_call_stack.empty()) {
+        frame.pointerAliases = g_call_stack.back().pointerAliases;
+    }
+    
     g_call_stack.push_back(frame);
     
     char extra[256];
@@ -554,6 +608,16 @@ void __cyg_profile_func_exit(void* func, void* caller) {
 #endif
 
     if (!g_call_stack.empty()) {
+        auto& activeLoops = g_call_stack.back().activeLoops;
+        while (!activeLoops.empty()) {
+            int loopId = activeLoops.back();
+            activeLoops.pop_back();
+            
+            char extra[128];
+            snprintf(extra, sizeof(extra), "\"loopId\":%d,\"file\":\"unknown\",\"line\":0", loopId);
+            write_json_event("loop_end", nullptr, g_current_function.c_str(), g_depth, extra);
+        }
+        
         g_call_stack.pop_back();
     }
     
