@@ -76,7 +76,8 @@ class InstrumentationTracer {
             activeLoops: new Map(),
             declaredVariables: new Map(),
             pointerAliases: new Map(),
-            blockScopes: []
+            blockScopes: [],
+            scopeStack: []
         };
         
         if (parentFrame && parentFrame.pointerAliases) {
@@ -91,6 +92,61 @@ class InstrumentationTracer {
 
     popCallFrame() {
         return this.frameStack.pop();
+    }
+
+    resolvePointerTarget(pointerName, currentFrame) {
+        if (!currentFrame) return null;
+        
+        let current = pointerName;
+        let visited = new Set();
+        
+        while (current && !visited.has(current)) {
+            visited.add(current);
+            
+            const alias = currentFrame.pointerAliases.get(current);
+            if (alias && alias.aliasOf) {
+                const nextAlias = currentFrame.pointerAliases.get(alias.aliasOf);
+                if (!nextAlias) {
+                    return {
+                        targetName: alias.aliasOf,
+                        region: alias.memoryRegion || 'stack',
+                        address: alias.address,
+                        isHeap: alias.isHeap || false
+                    };
+                }
+                current = alias.aliasOf;
+            } else {
+                break;
+            }
+        }
+        
+        for (let i = this.frameStack.length - 1; i >= 0; i--) {
+            const frame = this.frameStack[i];
+            current = pointerName;
+            visited.clear();
+            
+            while (current && !visited.has(current)) {
+                visited.add(current);
+                
+                const frameAlias = frame.pointerAliases.get(current);
+                if (frameAlias && frameAlias.aliasOf) {
+                    const nextAlias = frame.pointerAliases.get(frameAlias.aliasOf);
+                    if (!nextAlias) {
+                        return {
+                            targetName: frameAlias.aliasOf,
+                            region: frameAlias.memoryRegion || 'stack',
+                            address: frameAlias.address,
+                            isHeap: frameAlias.isHeap || false
+                        };
+                    }
+                    current = frameAlias.aliasOf;
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        return null;
     }
 
     async getLineInfo(executable, address) {
@@ -398,6 +454,37 @@ class InstrumentationTracer {
                 const exitingFrame = this.popCallFrame();
                 
                 if (exitingFrame) {
+                    if (exitingFrame.scopeStack.length > 0) {
+                        const allDestroyedSymbols = new Set();
+                        for (const scope of exitingFrame.scopeStack) {
+                            for (const varName of scope.variables) {
+                                allDestroyedSymbols.add(varName);
+                            }
+                        }
+                        
+                        if (allDestroyedSymbols.size > 0) {
+                            steps.push({
+                                stepIndex: stepIndex++,
+                                eventType: 'scope_exit',
+                                line: info.line,
+                                function: info.function,
+                                scope: 'function',
+                                file: path.basename(info.file),
+                                timestamp: ev.ts || null,
+                                scopeType: 'function',
+                                destroyedSymbols: Array.from(allDestroyedSymbols),
+                                explanation: `} Function scope exit - destroying: ${Array.from(allDestroyedSymbols).join(', ')}`,
+                                internalEvents: [],
+                                frameId: exitingFrame.frameId,
+                                callDepth: exitingFrame.callDepth,
+                                callIndex: this.globalCallIndex++,
+                                parentFrameId: exitingFrame.parentFrameId
+                            });
+                        }
+                        
+                        exitingFrame.scopeStack = [];
+                    }
+                    
                     steps.push({
                         stepIndex: stepIndex++,
                         eventType: 'func_exit',
@@ -493,6 +580,15 @@ class InstrumentationTracer {
                 const iterCount = this.loopIterationCounts.get(loopId) || 0;
                 this.loopIterationCounts.set(loopId, iterCount + 1);
                 
+                if (currentFrame) {
+                    currentFrame.scopeStack.push({
+                        type: 'loop_iteration',
+                        loopId: loopId,
+                        iteration: iterCount + 1,
+                        variables: new Set()
+                    });
+                }
+                
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'loop_body_start',
@@ -511,6 +607,34 @@ class InstrumentationTracer {
             } else if (ev.type === 'loop_iteration_end') {
                 const loopId = ev.loopId;
                 const iterCount = this.loopIterationCounts.get(loopId) || 0;
+                
+                if (currentFrame && currentFrame.scopeStack.length > 0) {
+                    const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
+                    if (topScope.type === 'loop_iteration' && topScope.loopId === loopId) {
+                        const destroyedSymbols = Array.from(topScope.variables);
+                        
+                        if (destroyedSymbols.length > 0) {
+                            steps.push({
+                                stepIndex: stepIndex++,
+                                eventType: 'scope_exit',
+                                line: info.line,
+                                function: currentFunction,
+                                scope: 'block',
+                                file: path.basename(info.file),
+                                timestamp: ev.ts || null,
+                                scopeType: 'loop_iteration',
+                                loopId: loopId,
+                                iteration: iterCount,
+                                destroyedSymbols: destroyedSymbols,
+                                explanation: `} Iteration ${iterCount} scope exit - destroying: ${destroyedSymbols.join(', ')}`,
+                                internalEvents: [],
+                                ...frameMetadata
+                            });
+                        }
+                        
+                        currentFrame.scopeStack.pop();
+                    }
+                }
                 
                 step = {
                     stepIndex: stepIndex++,
@@ -560,6 +684,11 @@ class InstrumentationTracer {
             } else if (ev.type === 'block_enter') {
                 if (currentFrame) {
                     currentFrame.blockScopes.push({ depth: ev.blockDepth || 0 });
+                    currentFrame.scopeStack.push({
+                        type: 'block',
+                        depth: ev.blockDepth || 0,
+                        variables: new Set()
+                    });
                 }
                 step = {
                     stepIndex: stepIndex++,
@@ -576,9 +705,37 @@ class InstrumentationTracer {
                 };
                 
             } else if (ev.type === 'block_exit') {
+                if (currentFrame && currentFrame.scopeStack.length > 0) {
+                    const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
+                    if (topScope.type === 'block') {
+                        const destroyedSymbols = Array.from(topScope.variables);
+                        
+                        if (destroyedSymbols.length > 0) {
+                            steps.push({
+                                stepIndex: stepIndex++,
+                                eventType: 'scope_exit',
+                                line: info.line,
+                                function: currentFunction,
+                                scope: 'block',
+                                file: path.basename(info.file),
+                                timestamp: ev.ts || null,
+                                scopeType: 'block',
+                                blockDepth: ev.blockDepth || 0,
+                                destroyedSymbols: destroyedSymbols,
+                                explanation: `} Block scope exit - destroying: ${destroyedSymbols.join(', ')}`,
+                                internalEvents: [],
+                                ...frameMetadata
+                            });
+                        }
+                        
+                        currentFrame.scopeStack.pop();
+                    }
+                }
+                
                 if (currentFrame && currentFrame.blockScopes.length > 0) {
                     currentFrame.blockScopes.pop();
                 }
+                
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'block_exit',
@@ -620,6 +777,11 @@ class InstrumentationTracer {
                     isStack: ev.isStack !== false
                 });
                 
+                if (currentFrame && currentFrame.scopeStack.length > 0) {
+                    const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
+                    topScope.variables.add(ev.name);
+                }
+                
             } else if (ev.type === 'array_index_assign') {
                 const charInfo = ev.char ? ` ('${String.fromCharCode(ev.value)}')` : '';
                 step = {
@@ -647,7 +809,8 @@ class InstrumentationTracer {
                         aliasOf: ev.aliasOf,
                         decayedFromArray: ev.decayedFromArray || false,
                         memoryRegion: 'stack',
-                        address: null
+                        address: null,
+                        isHeap: false
                     });
                 }
                 
@@ -680,19 +843,27 @@ class InstrumentationTracer {
                     isHeap: false
                 });
                 
-            } else if (ev.type === 'pointer_deref_write') {
-                let targetName = ev.targetName || 'unknown';
-                let isHeap = ev.isHeap || false;
-                
-                if (targetName === 'unknown' && currentFrame) {
-                    const ptrAlias = currentFrame.pointerAliases.get(ev.pointerName);
-                    if (ptrAlias && ptrAlias.aliasOf) {
-                        targetName = ptrAlias.aliasOf;
-                        isHeap = ptrAlias.isHeap || false;
-                    }
+                if (currentFrame && currentFrame.scopeStack.length > 0) {
+                    const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
+                    topScope.variables.add(ev.name);
                 }
                 
-                step = {
+            } else if (ev.type === 'pointer_deref_write') {
+                const resolved = this.resolvePointerTarget(ev.pointerName, currentFrame);
+                
+                let targetName = resolved ? resolved.targetName : null;
+                let isHeap = resolved ? resolved.isHeap : false;
+                
+                if (!targetName && ev.targetName && ev.targetName !== 'unknown') {
+                    targetName = ev.targetName;
+                    isHeap = ev.isHeap || false;
+                }
+                
+                if (!targetName) {
+                    targetName = ev.pointerName;
+                }
+                
+                steps.push({
                     stepIndex: stepIndex++,
                     eventType: 'pointer_deref_write',
                     line: info.line,
@@ -710,11 +881,9 @@ class InstrumentationTracer {
                         : `*${ev.pointerName} = ${ev.value} (writes to ${targetName})`,
                     internalEvents: [],
                     ...frameMetadata
-                };
+                });
                 
-                if (step) steps.push(step);
-                
-                if (!isHeap && targetName !== 'unknown') {
+                if (!isHeap && targetName && targetName !== ev.pointerName) {
                     steps.push({
                         stepIndex: stepIndex++,
                         eventType: 'var_assign',
@@ -731,6 +900,7 @@ class InstrumentationTracer {
                         ...frameMetadata
                     });
                 }
+                
                 step = null;
                 
             } else if (ev.type === 'heap_write') {
@@ -752,41 +922,34 @@ class InstrumentationTracer {
                 
             } else if (ev.type === 'declare') {
                 const varKey = `${frameMetadata.frameId}:${ev.name}`;
-                if (currentFrame && currentFrame.declaredVariables.has(varKey)) {
-                    step = {
-                        stepIndex: stepIndex++,
-                        eventType: 'var_assign',
-                        line: info.line,
-                        function: currentFunction,
-                        scope: 'block',
-                        symbol: ev.name,
-                        file: path.basename(info.file),
-                        timestamp: ev.ts || null,
-                        name: ev.name,
-                        value: null,
-                        explanation: `${ev.name} redeclared in loop (treated as assignment)`,
-                        internalEvents: [],
-                        ...frameMetadata
-                    };
-                } else {
-                    if (currentFrame) {
+                
+                if (currentFrame) {
+                    if (!currentFrame.declaredVariables.has(varKey)) {
                         currentFrame.declaredVariables.set(varKey, true);
+                        
+                        if (currentFrame.scopeStack.length > 0) {
+                            const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];
+                            topScope.variables.add(ev.name);
+                        }
+                        
+                        step = {
+                            stepIndex: stepIndex++,
+                            eventType: 'var_declare',
+                            line: info.line,
+                            function: currentFunction,
+                            scope: 'block',
+                            symbol: ev.name,
+                            file: path.basename(info.file),
+                            timestamp: ev.ts || null,
+                            name: ev.name,
+                            varType: ev.varType,
+                            explanation: `${ev.varType} ${ev.name} declared`,
+                            internalEvents: [],
+                            ...frameMetadata
+                        };
+                    } else {
+                        step = null;
                     }
-                    step = {
-                        stepIndex: stepIndex++,
-                        eventType: 'var_declare',
-                        line: info.line,
-                        function: currentFunction,
-                        scope: 'block',
-                        symbol: ev.name,
-                        file: path.basename(info.file),
-                        timestamp: ev.ts || null,
-                        name: ev.name,
-                        varType: ev.varType,
-                        explanation: `${ev.varType} ${ev.name} declared`,
-                        internalEvents: [],
-                        ...frameMetadata
-                    };
                 }
                 
             } else if (ev.type === 'assign') {
@@ -884,7 +1047,7 @@ class InstrumentationTracer {
             ...finalFrameMetadata
         });
 
-        console.log(`✅ Generated ${allSteps.length} beginner-correct steps with frame tracking`);
+        console.log(`✅ Generated ${allSteps.length} steps`);
         
         return allSteps;
     }
@@ -920,7 +1083,7 @@ class InstrumentationTracer {
     }
 
     async generateTrace(code, language = 'cpp') {
-        console.log('🚀 Starting beginner-correct trace generation with frame tracking...');
+        console.log('🚀 Starting trace generation...');
 
         this.arrayRegistry.clear();
         this.pointerRegistry.clear();
@@ -950,22 +1113,17 @@ class InstrumentationTracer {
                 globals: this.extractGlobals(steps),
                 functions: this.extractFunctions(steps, functions),
                 metadata: {
-                    debugger: 'gcc-instrumentation-beginner-correct',
-                    version: '8.0',
+                    debugger: 'gcc-instrumentation-semantic-correct',
+                    version: '10.0',
                     hasRealMemory: true,
                     hasHeapTracking: true,
                     hasArraySupport: true,
                     hasPointerSupport: true,
-                    hasPointerDerefWriteSemantics: true,
-                    hasCharArrayStringInit: true,
-                    noStepCollapsing: true,
-                    hasCallFrameTracking: true,
-                    hasLoopStructureTracking: true,
-                    hasBreakContinueTracking: true,
-                    hasLoopIterationTracking: true,
-                    hasReturnEvents: true,
-                    hasBlockScopeTracking: true,
-                    hasPointerAliasPropagation: true,
+                    hasPointerResolution: true,
+                    hasScopeTracking: true,
+                    hasBlockScopeExit: true,
+                    hasLoopIterationScope: true,
+                    deterministicStepCount: true,
                     capturedEvents: events.length,
                     emittedSteps: steps.length,
                     programOutput: stdout,
@@ -973,7 +1131,7 @@ class InstrumentationTracer {
                 }
             };
             
-            console.log('✅ Beginner-correct trace complete with frame tracking', {
+            console.log('✅ Trace complete', {
                 steps: result.totalSteps,
                 functions: result.functions.length,
                 arrays: this.arrayRegistry.size,
