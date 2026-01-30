@@ -87,7 +87,7 @@ class CodeInstrumenter {
     let parenDepth = 0;
     let braceDepth = 0;
     let bracketDepth = 0;
-    
+
     for (let c of rest) {
       if (c === '(') parenDepth++;
       else if (c === ')') parenDepth--;
@@ -95,7 +95,7 @@ class CodeInstrumenter {
       else if (c === '}') braceDepth--;
       else if (c === '[') bracketDepth++;
       else if (c === ']') bracketDepth--;
-      
+
       if (c === ',' && parenDepth === 0 && braceDepth === 0 && bracketDepth === 0) {
         const trimmed = current.trim();
         if (trimmed) vars.push(trimmed);
@@ -104,7 +104,7 @@ class CodeInstrumenter {
         current += c;
       }
     }
-    
+
     const trimmed = current.trim();
     if (trimmed) vars.push(trimmed);
     return vars;
@@ -159,14 +159,73 @@ class CodeInstrumenter {
     this.scopeVariables.set(key, true);
   }
 
+  countBraces(line) {
+    let open = 0;
+    let close = 0;
+    let inString = false;
+    let inChar = false;
+    let escape = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+
+      if (escape) {
+        escape = false;
+        continue;
+      }
+
+      if (c === '\\') {
+        escape = true;
+        continue;
+      }
+
+      if (c === '"' && !inChar) {
+        inString = !inString;
+        continue;
+      }
+
+      if (c === "'" && !inString) {
+        inChar = !inChar;
+        continue;
+      }
+
+      if (inString || inChar) continue;
+
+      if (c === '/' && i + 1 < line.length && line[i + 1] === '/') {
+        break;
+      }
+
+      if (c === '{') open++;
+      if (c === '}') close++;
+    }
+
+    return { open, close };
+  }
+
+  isFunctionDefinitionStart(line, globalBraceDepth) {
+    if (globalBraceDepth !== 0) return null;
+
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#') || trimmed.startsWith('//')) return null;
+
+    const funcPattern = /^\s*(static\s+)?(inline\s+)?(const\s+)?(unsigned\s+|signed\s+)?(void|int|long|float|double|char|bool|auto|short|size_t)\s*\**\s*(\w+)\s*\([^;]*$/;
+    const match = trimmed.match(funcPattern);
+    if (match) {
+      return match[6];
+    }
+
+    return null;
+  }
+
   async injectBeginnerModeTracing(code, language) {
     const lines = code.split('\n');
     const out = [];
-    
-    let inFunc = false;
-    let braceDepth = 0;
+
+    let globalBraceDepth = 0;
     let inStruct = false;
     let inClass = false;
+    let inFunction = false;
+    let functionBraceDepth = 0;
     let currentFunction = 'main';
     let scopeStack = [0];
     this.currentScope = 0;
@@ -175,58 +234,88 @@ class CodeInstrumenter {
     blockDepthCounter = 0;
     this.blockDepth = 0;
     this.loopStack = [];
-    
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const trimmed = line.trim();
       const indent = line.match(/^\s*/)[0];
 
-      if (trimmed.match(/^\s*(struct|class)\s+\w+/)) {
+      // Always count braces for global tracking
+      const { open: openBraces, close: closeBraces } = this.countBraces(line);
+
+      if (trimmed.match(/^\s*(struct|class)\s+\w+/) && !trimmed.includes(';')) {
         inStruct = true;
       }
-      
-      const openBraces = (line.match(/{/g) || []).length;
-      const closeBraces = (line.match(/}/g) || []).length;
-      const prevDepth = braceDepth;
-      braceDepth += openBraces - closeBraces;
-      
-      if (openBraces > 0 && !inStruct && inFunc) {
+
+      if (!inFunction && !inStruct && !inClass) {
+        const funcName = this.isFunctionDefinitionStart(line, globalBraceDepth);
+        if (funcName) {
+          inFunction = true;
+          functionBraceDepth = 0;
+          currentFunction = funcName;
+          console.log(`✓ Function definition at line ${i + 1}: ${trimmed.substring(0, 50)}`);
+        }
+      }
+
+      if (!inFunction) {
+        globalBraceDepth += openBraces - closeBraces;
+
+        if (inStruct && globalBraceDepth === 0 && closeBraces > 0) {
+          inStruct = false;
+        }
+        if (inClass && globalBraceDepth === 0 && closeBraces > 0) {
+          inClass = false;
+        }
+
+        out.push(line);
+        continue;
+      }
+
+      // WE ARE IN FUNCTION
+      // Update local depth
+      functionBraceDepth += openBraces - closeBraces;
+
+      // Update global depth
+      globalBraceDepth += openBraces - closeBraces;
+
+      // Check if function ends
+      if (functionBraceDepth === 0 && closeBraces > 0) {
+        inFunction = false;
+        out.push(line);
+        continue;
+      }
+
+      if (functionBraceDepth < 0) {
+        inFunction = false;
+        out.push(line);
+        continue;
+      }
+
+      if (openBraces > 0) {
         for (let b = 0; b < openBraces; b++) {
           this.currentScope++;
           scopeStack.push(this.currentScope);
           this.blockDepth++;
         }
       }
-      
-      if (closeBraces > 0 && !inStruct && inFunc) {
+
+      if (closeBraces > 0) {
         for (let b = 0; b < closeBraces; b++) {
           scopeStack.pop();
           this.blockDepth--;
         }
       }
-      
-      if (braceDepth > 0 && !inStruct) {
-        inFunc = true;
-      }
-      
-      if (inStruct && braceDepth === 0 && closeBraces > 0) {
-        inStruct = false;
-      }
 
-      const funcDef = trimmed.match(/^\s*(void|int|long|float|double|char|bool|auto)\s+(\w+)\s*\(/);
-      if (funcDef && !inStruct) {
-        currentFunction = funcDef[2];
-      }
-
-      if (inStruct || inClass) {
+      // Skip comments / preprocessor inside function
+      if (trimmed.startsWith('//') ||
+        trimmed.startsWith('/*') ||
+        trimmed.startsWith('#')) {
         out.push(line);
         continue;
       }
 
-      if (trimmed.startsWith('//') ||
-          trimmed.startsWith('/*') ||
-          trimmed.startsWith('#') ||
-          !inFunc) {
+      // Check for nested function definitions (ERROR State protection)
+      if (this.isFunctionDefinitionStart(line, 0)) {
         out.push(line);
         continue;
       }
@@ -234,7 +323,6 @@ class CodeInstrumenter {
       const returnStmt = trimmed.match(/^\s*return\s+([^;]+);/);
       if (returnStmt) {
         const returnValue = returnStmt[1];
-        const destinationSymbol = '';
         out.push(`${indent}__trace_return(${returnValue}, "auto", "", ${i + 1});`);
         out.push(line);
         continue;
@@ -259,63 +347,47 @@ class CodeInstrumenter {
       if (multiDecl && multiDecl[2].includes(',')) {
         const [, type, rest] = multiDecl;
         const vars = this.parseMultiDeclaration(rest);
-        
         for (let idx = 0; idx < vars.length; idx++) {
           const varDecl = vars[idx];
-          
           if (this.isArrayDeclaration(varDecl)) {
             const arrayInfo = this.parseArrayDeclaration(type, varDecl);
-            if (!arrayInfo) continue;
-
-            const { name, dimensions, hasInitializer, initValues, isStringLiteral } = arrayInfo;
-            
-            const dimArgs = dimensions.slice(0, 3).join(',');
-            const paddedDims = dimensions.length === 1 ? `${dimArgs},0,0` :
-                              dimensions.length === 2 ? `${dimArgs},0` : dimArgs;
-            
-            out.push(`${indent}${type} ${varDecl};`);
-            out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
-            
-            if (hasInitializer) {
-              if (isStringLiteral) {
-                out.push(`${indent}__trace_array_init_string(${name}, "${initValues}", ${i + 1});`);
-              } else if (initValues) {
-                const totalSize = dimensions.reduce((a, b) => a * (parseInt(b) || 1), 1);
-                const initList = initValues.split(',').map(v => v.trim()).filter(Boolean);
-                const paddedInit = [...initList, ...Array(totalSize - initList.length).fill('0')].join(',');
-                
-                out.push(`${indent}{`);
-                out.push(`${indent}  int __temp_${name}[] = {${paddedInit}};`);
-                out.push(`${indent}  __trace_array_init(${name}, __temp_${name}, ${totalSize}, ${i + 1});`);
-                out.push(`${indent}}`);
+            if (arrayInfo) {
+              const { name, dimensions, hasInitializer, initValues, isStringLiteral } = arrayInfo;
+              const dimArgs = dimensions.slice(0, 3).join(',');
+              const paddedDims = dimensions.length === 1 ? `${dimArgs},0,0` : dimensions.length === 2 ? `${dimArgs},0` : dimArgs;
+              out.push(`${indent}${type} ${varDecl};`);
+              out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
+              if (hasInitializer) {
+                if (isStringLiteral) out.push(`${indent}__trace_array_init_string(${name}, "${initValues}", ${i + 1});`);
+                else if (initValues) {
+                  const totalSize = dimensions.reduce((a, b) => a * (parseInt(b) || 1), 1);
+                  const initList = initValues.split(',').map(v => v.trim()).filter(Boolean);
+                  const paddedInit = [...initList, ...Array(totalSize - initList.length).fill('0')].join(',');
+                  out.push(`${indent}{ int __temp_${name}[] = {${paddedInit}}; __trace_array_init(${name}, __temp_${name}, ${totalSize}, ${i + 1}); }`);
+                }
               }
             }
           } else {
             const varName = this.extractVariableName(varDecl);
-            if (!varName || !/^\w+$/.test(varName)) continue;
-            
-            const hasInit = this.hasInitializer(varDecl);
-            const currentScopeId = scopeStack[scopeStack.length - 1];
-            const alreadyDeclared = this.isVariableDeclaredInScope(varName, currentScopeId);
-            
-            if (hasInit) {
-              const initValue = this.extractInitializer(varDecl);
-              if (!alreadyDeclared) {
-                out.push(`${indent}${type} ${varName};`);
-                out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-                this.markVariableDeclared(varName, currentScopeId);
+            if (varName && /^\w+$/.test(varName)) {
+              const hasInit = this.hasInitializer(varDecl);
+              const currentScopeId = scopeStack[scopeStack.length - 1];
+              const alreadyDeclared = this.isVariableDeclaredInScope(varName, currentScopeId);
+              if (hasInit) {
+                const initValue = this.extractInitializer(varDecl);
+                if (!alreadyDeclared) {
+                  out.push(`${indent}${type} ${varName};`);
+                  out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
+                  this.markVariableDeclared(varName, currentScopeId);
+                } else out.push(`${indent}${type} ${varName};`);
+                out.push(`${indent}${varName} = ${initValue};`);
+                out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
               } else {
-                out.push(`${indent}${type} ${varName};`);
-              }
-              out.push(`${indent}${varName} = ${initValue};`);
-              out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
-            } else {
-              if (!alreadyDeclared) {
-                out.push(`${indent}${type} ${varDecl};`);
-                out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-                this.markVariableDeclared(varName, currentScopeId);
-              } else {
-                out.push(`${indent}${type} ${varDecl};`);
+                if (!alreadyDeclared) {
+                  out.push(`${indent}${type} ${varDecl};`);
+                  out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
+                  this.markVariableDeclared(varName, currentScopeId);
+                } else out.push(`${indent}${type} ${varDecl};`);
               }
             }
           }
@@ -327,68 +399,19 @@ class CodeInstrumenter {
       if (charArrStr) {
         const [, name, size, strValue] = charArrStr;
         const actualSize = size || (strValue.length + 1);
-        
         out.push(line);
         out.push(`${indent}__trace_array_create(${name}, char, ${actualSize},0,0, ${i + 1});`);
         out.push(`${indent}__trace_array_init_string(${name}, "${strValue}", ${i + 1});`);
         continue;
       }
 
-      const arrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\](\s*\[([^\]]+)\])?(\s*\[([^\]]+)\])?\s*;/);
-      if (arrDecl) {
-        const [, type, name, dim1, , dim2, , dim3] = arrDecl;
-        const dims = [dim1, dim2, dim3].filter(Boolean);
-        const dimArgs = dims.slice(0, 3).join(',');
-        const paddedDims = dims.length === 1 ? `${dimArgs},0,0` :
-                          dims.length === 2 ? `${dimArgs},0` : dimArgs;
-        
+      if (trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\]/)) {
         out.push(line);
-        out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
-        continue;
-      }
-
-      const arrDeclInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\](\s*\[([^\]]+)\])?(\s*\[([^\]]+)\])?\s*=\s*\{([^}]*)\}\s*;/);
-      if (arrDeclInit) {
-        const [, type, name, dim1, , dim2, , dim3, initValues] = arrDeclInit;
-        const dims = [dim1, dim2, dim3].filter(Boolean);
-        const dimArgs = dims.slice(0, 3).join(',');
-        const paddedDims = dims.length === 1 ? `${dimArgs},0,0` :
-                          dims.length === 2 ? `${dimArgs},0` : dimArgs;
-        
-        const totalSize = dims.reduce((a, b) => a * (parseInt(b) || 1), 1);
-        const initList = initValues.split(',').map(v => v.trim()).filter(Boolean);
-        const paddedInit = [...initList, ...Array(totalSize - initList.length).fill('0')].join(',');
-        
-        out.push(line);
-        out.push(`${indent}__trace_array_create(${name}, ${type}, ${paddedDims}, ${i + 1});`);
-        out.push(`${indent}{`);
-        out.push(`${indent}  int __temp_${name}[] = {${paddedInit}};`);
-        out.push(`${indent}  __trace_array_init(${name}, __temp_${name}, ${totalSize}, ${i + 1});`);
-        out.push(`${indent}}`);
-        continue;
-      }
-
-      const arrAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
-      if (arrAssign) {
-        const [, varName, index, value] = arrAssign;
-        out.push(line);
-        out.push(`${indent}__trace_array_index_assign_1d(${varName}, ${index}, ${value}, ${i + 1});`);
-        continue;
-      }
-
-      const arr2DAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
-      if (arr2DAssign) {
-        const [, varName, idx1, idx2, value] = arr2DAssign;
-        out.push(line);
-        out.push(`${indent}__trace_array_index_assign_2d(${varName}, ${idx1}, ${idx2}, ${value}, ${i + 1});`);
-        continue;
-      }
-
-      const arr3DAssign = trimmed.match(/^\s*(\w+)\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*\[\s*([^\]]+)\s*\]\s*=\s*([^;]+);/);
-      if (arr3DAssign) {
-        const [, varName, idx1, idx2, idx3, value] = arr3DAssign;
-        out.push(line);
-        out.push(`${indent}__trace_array_index_assign_3d(${varName}, ${idx1}, ${idx2}, ${idx3}, ${value}, ${i + 1});`);
+        const arrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*\[([^\]]+)\]\s*;/);
+        if (arrDecl) {
+          const [, type, name, dim] = arrDecl;
+          out.push(`${indent}__trace_array_create(${name}, ${type}, ${dim},0,0, ${i + 1});`);
+        }
         continue;
       }
 
@@ -396,13 +419,11 @@ class CodeInstrumenter {
       if (declOnly) {
         const [, type, varName] = declOnly;
         const currentScopeId = scopeStack[scopeStack.length - 1];
-        const alreadyDeclared = this.isVariableDeclaredInScope(varName, currentScopeId);
-        
-        out.push(line);
-        if (!alreadyDeclared) {
+        if (!this.isVariableDeclaredInScope(varName, currentScopeId)) {
+          out.push(line);
           out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
           this.markVariableDeclared(varName, currentScopeId);
-        }
+        } else out.push(line);
         continue;
       }
 
@@ -410,150 +431,108 @@ class CodeInstrumenter {
       if (declInit) {
         const [, type, varName, value] = declInit;
         const currentScopeId = scopeStack[scopeStack.length - 1];
-        const alreadyDeclared = this.isVariableDeclaredInScope(varName, currentScopeId);
-        
-        if (!alreadyDeclared) {
+        if (!this.isVariableDeclaredInScope(varName, currentScopeId)) {
           out.push(`${indent}${type} ${varName};`);
           out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
           this.markVariableDeclared(varName, currentScopeId);
-        } else {
-          out.push(`${indent}${type} ${varName};`);
-        }
+        } else out.push(`${indent}${type} ${varName};`);
         out.push(`${indent}${varName} = ${value};`);
         out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         continue;
       }
 
-      const constDecl = trimmed.match(/^\s*const\s+(int|long|float|double|char|bool)\s+(\w+)\s*=\s*([^;]+);/);
-      if (constDecl) {
-        const [, type, varName, value] = constDecl;
-        const currentScopeId = scopeStack[scopeStack.length - 1];
-        const alreadyDeclared = this.isVariableDeclaredInScope(varName, currentScopeId);
-        
-        if (!alreadyDeclared) {
-          out.push(`${indent}const ${type} ${varName} = ${value};`);
-          out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-          out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
-          this.markVariableDeclared(varName, currentScopeId);
-        } else {
+      if (trimmed.match(/^\s*const\s+/)) { out.push(line); continue; }
+      if (trimmed.match(/^\s*[a-zA-Z0-9_]+\s*=\s*[^;]+;/)) {
+        const assign = trimmed.match(/^\s*(\w+)\s*=\s*([^;]+);/);
+        if (assign) {
+          const [, varName, value] = assign;
           out.push(line);
-        }
+          out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
+        } else out.push(line);
         continue;
       }
-
-      const ptrDecl = trimmed.match(/^\s*(int|long|float|double|char|bool)\s*\*\s*(\w+)\s*=\s*([^;]+);/);
-      if (ptrDecl) {
-        const [, type, varName, value] = ptrDecl;
-        
-        const arrayName = this.isArrayDecay(value);
-        const isHeap = this.isHeapAllocation(value);
-        
-        out.push(`${indent}${type} *${varName};`);
-        out.push(`${indent}__trace_declare(${varName}, ${type}*, ${i + 1});`);
-        out.push(`${indent}${varName} = ${value};`);
-        out.push(`${indent}__trace_assign(${varName}, (long long)${varName}, ${i + 1});`);
-        
-        if (arrayName) {
-          out.push(`${indent}__trace_pointer_alias(${varName}, ${arrayName}, true, ${i + 1});`);
-        } else if (isHeap) {
-          out.push(`${indent}__trace_pointer_heap_init(${varName}, ${varName}, ${i + 1});`);
-        } else {
-          const addrMatch = value.match(/&(\w+)/);
-          if (addrMatch) {
-            out.push(`${indent}__trace_pointer_alias(${varName}, ${addrMatch[1]}, false, ${i + 1});`);
-          }
-        }
-        continue;
-      }
-
-      const memberAssign = trimmed.match(/^\s*(\w+)\.(\w+)\s*=\s*([^;]+);/);
-      if (memberAssign) {
-        const [, structName, memberName, value] = memberAssign;
-        out.push(line);
-        out.push(`${indent}__trace_assign(${structName}_${memberName}, ${value}, ${i + 1});`);
-        continue;
-      }
-
-      const assign = trimmed.match(/^\s*(\w+)\s*=\s*([^;]+);/);
-      if (assign && !trimmed.includes('(') && !trimmed.includes('[') && !trimmed.includes('.')) {
-        const [, varName, value] = assign;
-        out.push(line);
-        out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
-        continue;
-      }
-
-      const compound = trimmed.match(/^\s*(\w+)\s*([+\-*/%]|<<|>>)=\s*([^;]+);/);
-      if (compound) {
-        const [, varName, op, value] = compound;
+      if (trimmed.match(/^\s*(\w+)\s*([+\-*/%]|<<|>>)=\s*([^;]+);/)) {
+        const [, varName] = trimmed.match(/^\s*(\w+)/);
         out.push(line);
         out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         continue;
       }
-
-      const inc = trimmed.match(/^\s*(\+\+|--)?(\w+)(\+\+|--)?;/);
-      if (inc) {
-        const varName = inc[2];
-        out.push(line);
-        out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
+      if (trimmed.match(/^\s*(\+\+|--)?(\w+)(\+\+|--)?;/)) {
+        const match = trimmed.match(/^\s*(\+\+|--)?(\w+)(\+\+|--)?;/);
+        if (match) {
+          const varName = match[2];
+          out.push(line);
+          out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
+        } else out.push(line);
         continue;
       }
 
+      // FOR LOOP LOGIC
       const forLoop = trimmed.match(/^\s*for\s*\(\s*(int|long)\s+(\w+)\s*=\s*([^;]+);([^;]+);([^)]+)\)/);
       if (forLoop) {
+        if (!trimmed.includes('{')) {
+          out.push(line);
+          continue;
+        }
+
         const [, type, varName, initValue, condition, increment] = forLoop;
         const currentScopeId = scopeStack[scopeStack.length - 1];
-        const alreadyDeclared = this.isVariableDeclaredInScope(varName, currentScopeId);
         const loopId = loopIdCounter++;
         this.loopStack.push(loopId);
-        
-        if (!alreadyDeclared) {
+
+        if (!this.isVariableDeclaredInScope(varName, currentScopeId)) {
           out.push(`${indent}${type} ${varName};`);
           out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
           this.markVariableDeclared(varName, currentScopeId);
-          out.push(`${indent}${varName} = ${initValue};`);
-          out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
-        } else {
-          out.push(`${indent}${varName} = ${initValue};`);
-          out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         }
+        out.push(`${indent}${varName} = ${initValue};`);
+        out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
+
         out.push(`${indent}__trace_loop_start(${loopId}, "for", ${i + 1});`);
         out.push(`${indent}for (; ${condition}; ) {`);
         out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}  if (!(${condition})) { __trace_loop_end(${loopId}, ${i + 1}); break; }`);
         out.push(`${indent}  __trace_loop_body_start(${loopId}, ${i + 1});`);
         out.push(`${indent}  {`);
-        
+
         let j = i + 1;
         let loopBraceDepth = 1;
         const loopBody = [];
-        
+
         while (j < lines.length && loopBraceDepth > 0) {
           const bodyLine = lines[j];
-          const bodyTrimmed = bodyLine.trim();
-          
-          if (bodyTrimmed.includes('{')) loopBraceDepth++;
-          if (bodyTrimmed.includes('}')) loopBraceDepth--;
-          
+          const { open, close } = this.countBraces(bodyLine);
+          loopBraceDepth += open - close;
+
           if (loopBraceDepth > 0) {
             loopBody.push(bodyLine);
           }
           j++;
         }
-        
+
         out.push(...loopBody);
         out.push(`${indent}  }`);
         out.push(`${indent}  ${increment};`);
         out.push(`${indent}  __trace_assign(${varName}, ${varName}, ${i + 1});`);
         out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
         out.push(`${indent}}`);
-        
+
         this.loopStack.pop();
+
+        // Fix tracking for skipped range
+        functionBraceDepth -= 1;
+        globalBraceDepth -= 1;
+
         i = j - 1;
         continue;
       }
 
+      // WHILE LOOP
       const whileLoop = trimmed.match(/^\s*while\s*\(([^)]+)\)/);
       if (whileLoop) {
+        if (!trimmed.includes('{')) {
+          out.push(line); continue;
+        }
         const [, condition] = whileLoop;
         const loopId = loopIdCounter++;
         this.loopStack.push(loopId);
@@ -565,8 +544,13 @@ class CodeInstrumenter {
         continue;
       }
 
+      // DO-WHILE
       const doWhile = trimmed.match(/^\s*do\s*\{?$/);
       if (doWhile) {
+        // If unbraced do..while? 'do' usually followed by {
+        if (!trimmed.includes('{')) {
+          out.push(line); continue;
+        }
         const loopId = loopIdCounter++;
         this.loopStack.push(loopId);
         out.push(`${indent}__trace_loop_start(${loopId}, "do-while", ${i + 1});`);
@@ -577,8 +561,11 @@ class CodeInstrumenter {
 
       const whileEnd = trimmed.match(/^\s*}\s*while\s*\(([^)]+)\)\s*;/);
       if (whileEnd) {
+        if (this.loopStack.length === 0) {
+          out.push(line); continue;
+        }
         const [, condition] = whileEnd;
-        const loopId = this.loopStack[this.loopStack.length - 1] || 0;
+        const loopId = this.loopStack[this.loopStack.length - 1]; // peek
         out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
         out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}} while (${condition});`);
@@ -587,6 +574,7 @@ class CodeInstrumenter {
         continue;
       }
 
+      // LOOP END CLOSING BRACE
       if (trimmed === '}' && this.loopStack.length > 0) {
         const loopId = this.loopStack[this.loopStack.length - 1];
         out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
@@ -597,7 +585,7 @@ class CodeInstrumenter {
 
       out.push(line);
     }
-    
+
     return out.join('\n');
   }
 }
