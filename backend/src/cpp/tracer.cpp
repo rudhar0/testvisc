@@ -52,7 +52,7 @@ struct ArrayElementKey {
 
 struct PointerInfo {
     std::string pointerName;
-    std::string pointsTo;
+    void* aliasedAddress;
     bool isHeap;
     void* heapAddress;
 };
@@ -66,6 +66,7 @@ struct CallFrame {
 
 static std::map<std::string, long long> g_variable_values;
 static std::map<void*, ArrayInfo> g_array_registry;
+static std::map<void*, std::string> g_address_to_name;
 static std::map<ArrayElementKey, long long> g_array_element_values;
 static std::set<std::string> g_tracked_functions;
 static std::string g_current_function = "main";
@@ -178,6 +179,8 @@ extern "C" void __trace_array_create_loc(const char* name, const char* baseType,
                                          bool isStack, const char* file, int line) {
     if (!g_trace_file) return;
     
+    g_address_to_name[address] = name;
+
     const std::string f = json_safe_path(file);
     char extra[512];
     
@@ -288,80 +291,83 @@ extern "C" void __trace_array_index_assign_loc(const char* name, int idx1, int i
     write_json_event("array_index_assign", nullptr, g_current_function.c_str(), g_depth, extra);
 }
 
-extern "C" void __trace_pointer_alias_loc(const char* name, const char* aliasOf, bool decayedFromArray,
+extern "C" void __trace_pointer_alias_loc(const char* name, void* aliasedAddress, bool decayedFromArray,
                                           const char* file, int line) {
     if (!g_trace_file) return;
+
+    std::string aliasOfName = "unknown";
+    if (g_address_to_name.count(aliasedAddress)) {
+        aliasOfName = g_address_to_name[aliasedAddress];
+    }
     
     const std::string f = json_safe_path(file);
     char extra[512];
     snprintf(extra, sizeof(extra),
-             "\"name\":\"%s\",\"aliasOf\":\"%s\",\"decayedFromArray\":%s,\"file\":\"%s\",\"line\":%d",
-             name, aliasOf, decayedFromArray ? "true" : "false", f.c_str(), line);
+             "\"name\":\"%s\",\"aliasOf\":\"%s\",\"aliasedAddress\":\"%p\",\"decayedFromArray\":%s,\"file\":\"%s\",\"line\":%d",
+             name, aliasOfName.c_str(), aliasedAddress, decayedFromArray ? "true" : "false", f.c_str(), line);
     
-    write_json_event("pointer_alias", nullptr, g_current_function.c_str(), g_depth, extra);
+    write_json_event("pointer_alias", aliasedAddress, g_current_function.c_str(), g_depth, extra);
     
     PointerInfo pinfo;
     pinfo.pointerName = name;
-    pinfo.pointsTo = aliasOf;
+    pinfo.aliasedAddress = aliasedAddress;
     pinfo.isHeap = false;
     pinfo.heapAddress = nullptr;
     
     if (!g_call_stack.empty()) {
         g_call_stack.back().pointerAliases[name] = pinfo;
+    } else {
+        g_pointer_registry[name] = pinfo;
     }
-    
-    g_pointer_registry[name] = pinfo;
 }
 
 extern "C" void __trace_pointer_deref_write_loc(const char* ptrName, long long value,
-                                                 const char* file, int line) {
+                                                const char* file, int line) {
     if (!g_trace_file) return;
     
     const std::string f = json_safe_path(file);
-    
+
     PointerInfo* pinfo = findPointerInfo(ptrName);
-    
-    if (!pinfo) {
-        if (!g_call_stack.empty()) {
-            for (auto it = g_call_stack.rbegin(); it != g_call_stack.rend(); ++it) {
-                for (const auto& pair : it->pointerAliases) {
-                    if (pair.second.pointerName == ptrName) {
-                        pinfo = const_cast<PointerInfo*>(&pair.second);
-                        break;
-                    }
-                }
-                if (pinfo) break;
-            }
+
+    std::string targetName = "unknown";
+    bool isHeap = false;
+    void* targetAddress = nullptr;
+
+    if (pinfo) {
+        isHeap = pinfo->isHeap;
+        targetAddress = pinfo->aliasedAddress;
+        if (g_address_to_name.count(targetAddress)) {
+            targetName = g_address_to_name[targetAddress];
         }
     }
-    
-    std::string targetName = pinfo ? pinfo->pointsTo : "unknown";
-    bool isHeap = pinfo ? pinfo->isHeap : false;
     
     char extra[512];
     snprintf(extra, sizeof(extra),
              "\"pointerName\":\"%s\",\"value\":%lld,\"targetName\":\"%s\",\"isHeap\":%s,\"file\":\"%s\",\"line\":%d",
              ptrName, value, targetName.c_str(), isHeap ? "true" : "false", f.c_str(), line);
-    write_json_event("pointer_deref_write", nullptr, g_current_function.c_str(), g_depth, extra);
+    write_json_event("pointer_deref_write", targetAddress, g_current_function.c_str(), g_depth, extra);
     
-    if (pinfo && pinfo->isHeap) {
+    if (isHeap) {
         char heap_extra[512];
         snprintf(heap_extra, sizeof(heap_extra),
                  "\"address\":\"%p\",\"value\":%lld,\"file\":\"%s\",\"line\":%d",
-                 pinfo->heapAddress, value, f.c_str(), line);
-        write_json_event("heap_write", pinfo->heapAddress, g_current_function.c_str(), g_depth, heap_extra);
+                 targetAddress, value, f.c_str(), line);
+        write_json_event("heap_write", targetAddress, g_current_function.c_str(), g_depth, heap_extra);
     }
 }
 
-extern "C" void __trace_declare_loc(const char* name, const char* type,
+extern "C" void __trace_declare_loc(const char* name, const char* type, void* address,
                                     const char* file, int line) {
     if (!g_trace_file) return;
+
+    g_address_to_name[address] = name;
+    
     const std::string f = json_safe_path(file);
     char extra[256];
     snprintf(extra, sizeof(extra),
-             "\"name\":\"%s\",\"varType\":\"%s\",\"value\":null,\"file\":\"%s\",\"line\":%d",
-             name, type, f.c_str(), line);
-    write_json_event("declare", nullptr, name, g_depth, extra);
+             "\"name\":\"%s\",\"varType\":\"%s\",\"value\":null,\"address\":\"%p\",\"file\":\"%s\",\"line\":%d",
+             name, type, address, f.c_str(), line);
+    write_json_event("declare", address, name, g_depth, extra);
 }
 
 extern "C" void __trace_assign_loc(const char* name, long long value,
@@ -384,7 +390,7 @@ extern "C" void __trace_pointer_heap_init_loc(const char* ptrName, void* heapAdd
     
     PointerInfo pinfo;
     pinfo.pointerName = ptrName;
-    pinfo.pointsTo = "";
+    pinfo.aliasedAddress = heapAddr;
     pinfo.isHeap = true;
     pinfo.heapAddress = heapAddr;
     

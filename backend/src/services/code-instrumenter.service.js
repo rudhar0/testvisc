@@ -228,8 +228,13 @@ class CodeInstrumenter {
     let functionBraceDepth = 0;
     let currentFunction = 'main';
     let scopeStack = [0];
+    // Holds the raw function definition line until its opening brace is processed
+    let pendingFunctionDef = null;
+    this.functionParams = new Map();
+    this.pendingCalls = new Map();
     this.currentScope = 0;
     this.scopeVariables.clear();
+    this.functionParamInfo = new Map();
     loopIdCounter = 0;
     blockDepthCounter = 0;
     this.blockDepth = 0;
@@ -253,6 +258,20 @@ class CodeInstrumenter {
           inFunction = true;
           functionBraceDepth = 0;
           currentFunction = funcName;
+          pendingFunctionDef = line; // store definition line for later parameter injection
+          // Parse and store parameter info for later call-site aliasing
+          const paramMatch = line.match(/\(([^)]*)\)/);
+          if (paramMatch) {
+            const rawParams = paramMatch[1].split(',').map(p => p.trim()).filter(p => p);
+            const paramsInfo = rawParams.map(p => {
+              const parts = p.split(/\s+/);
+              const namePart = parts.pop();
+              const varName = namePart.replace(/^\*+/, '');
+              const isPointer = /\*/.test(p);
+              return { varName, isPointer };
+            });
+            this.functionParamInfo.set(funcName, paramsInfo);
+          }
           console.log(`✓ Function definition at line ${i + 1}: ${trimmed.substring(0, 50)}`);
         }
       }
@@ -296,6 +315,25 @@ class CodeInstrumenter {
           this.currentScope++;
           scopeStack.push(this.currentScope);
           this.blockDepth++;
+        }
+        // If we have a pending function definition, this is the opening brace of the function body.
+        if (pendingFunctionDef) {
+          out.push(line);
+          const paramMatch = pendingFunctionDef.match(/\(([^)]*)\)/);
+          if (paramMatch) {
+              const params = paramMatch[1].split(',').map(p => p.trim()).filter(p => p && p.toLowerCase() !== 'void');
+              for (const p of params) {
+                  if (p.includes('*') || p.includes('[]')) {
+                      const parts = p.replace(/\[\]/g, '*').split(/\s+/);
+                      const namePart = parts.pop();
+                      const varName = namePart.replace(/^\*+/, '');
+                      const isArrayDecay = p.includes('[]');
+                      out.push(`${indent}  __trace_pointer_alias(${varName}, ${varName}, ${isArrayDecay}, ${i + 1});`);
+                  }
+              }
+          }
+          pendingFunctionDef = null;
+          continue; 
         }
       }
 
@@ -428,26 +466,47 @@ class CodeInstrumenter {
       }
 
       const declInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*=\s*([^;]+);/);
-      if (declInit) {
-        const [, type, varName, value] = declInit;
-        const currentScopeId = scopeStack[scopeStack.length - 1];
-        if (!this.isVariableDeclaredInScope(varName, currentScopeId)) {
-          out.push(`${indent}${type} ${varName};`);
-          out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-          this.markVariableDeclared(varName, currentScopeId);
-        } else out.push(`${indent}${type} ${varName};`);
-        out.push(`${indent}${varName} = ${value};`);
-        out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
-        continue;
-      }
+        if (declInit) {
+          const [, type, varName, value] = declInit;
+          const currentScopeId = scopeStack[scopeStack.length - 1];
+          const isPointer = /\*/.test(value) || /\*/.test(varName) || /\*/.test(type);
+          if (!this.isVariableDeclaredInScope(varName, currentScopeId)) {
+            out.push(`${indent}${type} ${varName};`);
+            out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
+            this.markVariableDeclared(varName, currentScopeId);
+          } else out.push(`${indent}${type} ${varName};`);
+          out.push(`${indent}${varName} = ${value};`);
+          out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
+          // If this is a pointer initialization, emit alias event immediately
+          if (isPointer) {
+            // Determine alias target, stripping leading '&' if present
+            let aliasTarget = value.trim();
+            if (aliasTarget.startsWith('&')) {
+              aliasTarget = aliasTarget.replace(/^&\s*/, '');
+            }
+            if (aliasTarget !== varName) {
+              const decayed = this.isArrayDecay(value) ? 'true' : 'false';
+              out.push(`${indent}__trace_pointer_alias(${varName}, ${aliasTarget}, ${decayed}, ${i + 1});`);
+            }
+          }
+          continue;
+        }
 
       if (trimmed.match(/^\s*const\s+/)) { out.push(line); continue; }
-      if (trimmed.match(/^\s*[a-zA-Z0-9_]+\s*=\s*[^;]+;/)) {
+      if (trimmed.match(/^[a-zA-Z0-9_]+\s*=\s*[^;]+;/)) {
         const assign = trimmed.match(/^\s*(\w+)\s*=\s*([^;]+);/);
         if (assign) {
           const [, varName, value] = assign;
           out.push(line);
           out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
+          // Emit pointer alias if assigning address-of a variable
+          const addrMatch = value.trim().match(/^&\s*(\w+)$/);
+          if (addrMatch) {
+            const source = addrMatch[1];
+            if (source !== varName) {
+              out.push(`${indent}__trace_pointer_alias(${varName}, ${source}, false, ${i + 1});`);
+            }
+          }
         } else out.push(line);
         continue;
       }
@@ -567,7 +626,6 @@ class CodeInstrumenter {
         const [, condition] = whileEnd;
         const loopId = this.loopStack[this.loopStack.length - 1]; // peek
         out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
-        out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}} while (${condition});`);
         out.push(`${indent}__trace_loop_end(${loopId}, ${i + 1});`);
         this.loopStack.pop();

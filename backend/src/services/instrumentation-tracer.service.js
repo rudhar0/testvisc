@@ -26,6 +26,8 @@ class InstrumentationTracer {
         this.globalCallIndex = 0;
         this.frameCounts = new Map();
         this.loopIterationCounts = new Map();
+        this.addressToName = new Map();
+        this.addressToFrame = new Map();
     }
 
     async ensureTempDir() {
@@ -33,7 +35,6 @@ class InstrumentationTracer {
             await mkdir(this.tempDir, { recursive: true });
         }
     }
-
     generateFrameId(functionName) {
         const count = this.frameCounts.get(functionName) || 0;
         this.frameCounts.set(functionName, count + 1);
@@ -94,61 +95,67 @@ class InstrumentationTracer {
         return this.frameStack.pop();
     }
 
-    resolvePointerTarget(pointerName, currentFrame) {
-        if (!currentFrame) return null;
+    resolveAliasByValue(pointerName, startFrame) {
+        if (!startFrame) return null;
 
-        let current = pointerName;
-        let visited = new Set();
+        let currentPointerName = pointerName;
+        const visited = new Set();
 
-        while (current && !visited.has(current)) {
-            visited.add(current);
+        while (currentPointerName && !visited.has(currentPointerName)) {
+            visited.add(currentPointerName);
 
-            const alias = currentFrame.pointerAliases.get(current);
-            if (alias && alias.aliasOf) {
-                const nextAlias = currentFrame.pointerAliases.get(alias.aliasOf);
-                if (!nextAlias) {
-                    return {
-                        targetName: alias.aliasOf,
-                        region: alias.memoryRegion || 'stack',
-                        address: alias.address,
-                        isHeap: alias.isHeap || false
-                    };
-                }
-                current = alias.aliasOf;
-            } else {
-                break;
-            }
-        }
-
-        for (let i = this.frameStack.length - 1; i >= 0; i--) {
-            const frame = this.frameStack[i];
-            current = pointerName;
-            visited.clear();
-
-            while (current && !visited.has(current)) {
-                visited.add(current);
-
-                const frameAlias = frame.pointerAliases.get(current);
-                if (frameAlias && frameAlias.aliasOf) {
-                    const nextAlias = frame.pointerAliases.get(frameAlias.aliasOf);
-                    if (!nextAlias) {
-                        return {
-                            targetName: frameAlias.aliasOf,
-                            region: frameAlias.memoryRegion || 'stack',
-                            address: frameAlias.address,
-                            isHeap: frameAlias.isHeap || false
-                        };
-                    }
-                    current = frameAlias.aliasOf;
-                } else {
+            let aliasInfo = null;
+            let frameIdx = this.frameStack.indexOf(startFrame);
+            while (frameIdx >= 0) {
+                const frame = this.frameStack[frameIdx];
+                if (frame.pointerAliases.has(currentPointerName)) {
+                    aliasInfo = frame.pointerAliases.get(currentPointerName);
                     break;
                 }
+                frameIdx--;
+            }
+
+            if (!aliasInfo || !aliasInfo.aliasedAddress) {
+                return null;
+            }
+
+            const { aliasedAddress } = aliasInfo;
+
+            if (this.addressToName.has(aliasedAddress)) {
+                const targetName = this.addressToName.get(aliasedAddress);
+                
+                let isTargetPointer = false;
+                let targetFrameIdx = this.frameStack.length - 1;
+                while (targetFrameIdx >= 0) {
+                    if (this.frameStack[targetFrameIdx].pointerAliases.has(targetName)) {
+                        isTargetPointer = true;
+                        break;
+                    }
+                    targetFrameIdx--;
+                }
+
+                if (isTargetPointer) {
+                    currentPointerName = targetName;
+                } else {
+                    return {
+                        targetName: targetName,
+                        address: aliasedAddress,
+                        isHeap: aliasInfo.isHeap || false,
+                        region: aliasInfo.isHeap ? 'heap' : 'stack'
+                    };
+                }
+            } else {
+                return {
+                    targetName: 'unknown',
+                    address: aliasedAddress,
+                    isHeap: aliasInfo.isHeap || true,
+                    region: 'unknown'
+                };
             }
         }
-
-        return null;
+        return null; // Loop detected
     }
-
+    
     async getLineInfo(executable, address) {
         return new Promise((resolve) => {
             const proc = spawn('addr2line', ['-e', executable, '-f', '-C', '-i', address]);
@@ -267,7 +274,8 @@ class InstrumentationTracer {
         const sessionId = uuid();
         const ext = language === 'c' ? 'c' : 'cpp';
         const compiler = 'g++';
-        const stdFlag = language === 'c' ? '-std=c11' : '-std=c++17';
+        // Use C++17 flag for both C and C++ to support trace.h which relies on C++ features
+        const stdFlag = '-std=c++17';
 
         const instrumented = await codeInstrumenter.instrumentCode(code, language);
         const sourceFile = path.join(this.tempDir, `src_${sessionId}.${ext}`);
@@ -379,6 +387,8 @@ class InstrumentationTracer {
         this.globalCallIndex = 0;
         this.frameCounts = new Map();
         this.loopIterationCounts = new Map();
+        this.addressToName.clear();
+        this.addressToFrame.clear();
 
         const normalizeFunctionName = (name) => {
             if (!name) return 'unknown';
@@ -751,6 +761,10 @@ class InstrumentationTracer {
                 };
 
             } else if (ev.type === 'array_create') {
+                if (ev.addr) {
+                    this.addressToName.set(ev.addr, ev.name);
+                    if (currentFrame) this.addressToFrame.set(ev.addr, currentFrame.frameId);
+                }
                 step = {
                     stepIndex: stepIndex++,
                     eventType: 'array_create',
@@ -807,10 +821,10 @@ class InstrumentationTracer {
                     currentFrame.pointerAliases.set(ev.name, {
                         pointerName: ev.name,
                         aliasOf: ev.aliasOf,
+                        aliasedAddress: ev.aliasedAddress,
                         decayedFromArray: ev.decayedFromArray || false,
-                        memoryRegion: 'stack',
-                        address: null,
-                        isHeap: false
+                        memoryRegion: ev.isHeap ? 'heap' : 'stack',
+                        isHeap: ev.isHeap || false
                     });
                 }
 
@@ -827,9 +841,9 @@ class InstrumentationTracer {
                     aliasOf: ev.aliasOf,
                     decayedFromArray: ev.decayedFromArray || false,
                     pointsTo: {
-                        region: 'stack',
+                        region: ev.isHeap ? 'heap' : 'stack',
                         target: ev.aliasOf,
-                        address: null
+                        address: ev.aliasedAddress,
                     },
                     explanation: ev.decayedFromArray
                         ? `${ev.name} → ${ev.aliasOf} (array decay)`
@@ -849,24 +863,10 @@ class InstrumentationTracer {
                 }
 
             } else if (ev.type === 'pointer_deref_write') {
-                const resolved = this.resolvePointerTarget(ev.pointerName, currentFrame);
+                const resolved = this.resolveAliasByValue(ev.pointerName, currentFrame);
 
-                let targetName = null;
-                let isHeap = false;
-
-                // CRITICAL: Only use resolved target if it's valid and different from pointer
-                if (resolved && resolved.targetName && resolved.targetName !== ev.pointerName) {
-                    targetName = resolved.targetName;
-                    isHeap = resolved.isHeap || false;
-                } else if (ev.targetName && ev.targetName !== 'unknown' && ev.targetName !== ev.pointerName) {
-                    targetName = ev.targetName;
-                    isHeap = ev.isHeap || false;
-                }
-
-                // CRITICAL: Never fall back to pointerName as targetName
-                if (!targetName || targetName === ev.pointerName) {
-                    targetName = null;
-                }
+                let targetName = resolved ? resolved.targetName : 'unknown';
+                let isHeap = resolved ? resolved.isHeap : false;
 
                 steps.push({
                     stepIndex: stepIndex++,
@@ -878,19 +878,18 @@ class InstrumentationTracer {
                     file: path.basename(info.file),
                     timestamp: ev.ts || null,
                     pointerName: ev.pointerName,
-                    targetName: targetName || 'unknown',
+                    targetName: targetName,
                     value: ev.value,
                     isHeap: isHeap,
                     explanation: isHeap
                         ? `*${ev.pointerName} = ${ev.value} (heap write)`
-                        : targetName
+                        : targetName !== 'unknown'
                             ? `*${ev.pointerName} = ${ev.value} (writes to ${targetName})`
                             : `*${ev.pointerName} = ${ev.value}`,
                     internalEvents: [],
                     ...frameMetadata
                 });
 
-                // CRITICAL: Only emit var_assign if we have a valid target
                 if (!isHeap && targetName && targetName !== 'unknown') {
                     steps.push({
                         stepIndex: stepIndex++,
@@ -934,6 +933,11 @@ class InstrumentationTracer {
                 if (currentFrame) {
                     if (!currentFrame.declaredVariables.has(varKey)) {
                         currentFrame.declaredVariables.set(varKey, true);
+                        
+                        if (ev.address) {
+                            this.addressToName.set(ev.address, ev.name);
+                            this.addressToFrame.set(ev.address, currentFrame.frameId);
+                        }
 
                         if (currentFrame.scopeStack.length > 0) {
                             const topScope = currentFrame.scopeStack[currentFrame.scopeStack.length - 1];

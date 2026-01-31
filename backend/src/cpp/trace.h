@@ -21,7 +21,7 @@ void trace_var_double(const char* name, double value);
 void trace_var_ptr(const char* name, void* value);
 void trace_var_str(const char* name, const char* value);
 
-void __trace_declare_loc(const char* name, const char* type, const char* file, int line);
+void __trace_declare_loc(const char* name, const char* type, void* address, const char* file, int line);
 void __trace_assign_loc(const char* name, long long value, const char* file, int line);
 
 void __trace_array_create_loc(const char* name, const char* baseType, void* address,
@@ -34,7 +34,7 @@ void __trace_array_init_string_loc(const char* name, const char* str_literal,
 void __trace_array_index_assign_loc(const char* name, int idx1, int idx2, int idx3,
                                      long long value, const char* file, int line);
 
-void __trace_pointer_alias_loc(const char* name, const char* aliasOf, bool decayedFromArray,
+void __trace_pointer_alias_loc(const char* name, void* aliasedAddress, bool decayedFromArray,
                                 const char* file, int line);
 void __trace_pointer_deref_write_loc(const char* ptrName, long long value,
                                       const char* file, int line);
@@ -63,7 +63,7 @@ void __trace_block_exit_loc(int blockDepth, const char* file, int line);
 #define TRACE_VAR(var)    TRACE_INT(var)
 
 #define __trace_declare(name, type, line) \
-    __trace_declare_loc(#name, #type, __FILE__, line)
+    __trace_declare_loc(#name, #type, (void*)&(name), __FILE__, line)
 #define __trace_assign(name, value, line) \
     __trace_assign_loc(#name, (long long)(value), __FILE__, line)
 #define __trace_array_create(name, baseType, dim1, dim2, dim3, line) \
@@ -78,8 +78,8 @@ void __trace_block_exit_loc(int blockDepth, const char* file, int line);
     __trace_array_index_assign_loc(#name, idx1, idx2, -1, (long long)(value), __FILE__, line)
 #define __trace_array_index_assign_3d(name, idx1, idx2, idx3, value, line) \
     __trace_array_index_assign_loc(#name, idx1, idx2, idx3, (long long)(value), __FILE__, line)
-#define __trace_pointer_alias(name, aliasOf, decayed, line) \
-    __trace_pointer_alias_loc(#name, #aliasOf, decayed, __FILE__, line)
+#define __trace_pointer_alias(name, value, decayed, line) \
+    __trace_pointer_alias_loc(#name, (void*)(value), decayed, __FILE__, line)
 #define __trace_pointer_deref_write(ptrName, value, line) \
     __trace_pointer_deref_write_loc(#ptrName, (long long)(value), __FILE__, line)
 #define __trace_pointer_heap_init(ptrName, heapAddr, line) \
@@ -121,7 +121,7 @@ void trace_var_double(const char* name, double value);
 void trace_var_ptr(const char* name, void* value);
 void trace_var_str(const char* name, const char* value);
 
-void __trace_declare_loc(const char* name, const char* type, const char* file, int line);
+void __trace_declare_loc(const char* name, const char* type, void* address, const char* file, int line);
 void __trace_assign_loc(const char* name, long long value, const char* file, int line);
 
 void __trace_array_create_loc(const char* name, const char* baseType, void* address,
@@ -134,7 +134,7 @@ void __trace_array_init_string_loc(const char* name, const char* str_literal,
 void __trace_array_index_assign_loc(const char* name, int idx1, int idx2, int idx3,
                                      long long value, const char* file, int line);
 
-void __trace_pointer_alias_loc(const char* name, const char* aliasOf, bool decayedFromArray,
+void __trace_pointer_alias_loc(const char* name, void* aliasedAddress, bool decayedFromArray,
                                 const char* file, int line);
 void __trace_pointer_deref_write_loc(const char* ptrName, long long value,
                                       const char* file, int line);
@@ -163,7 +163,7 @@ void __trace_block_exit_loc(int blockDepth, const char* file, int line);
 #define TRACE_VAR(var)    TRACE_INT(var)
 
 #define __trace_declare(name, type, line) \
-    __trace_declare_loc(#name, #type, __FILE__, line)
+    __trace_declare_loc(#name, #type, (void*)&(name), __FILE__, line)
 #define __trace_assign(name, value, line) \
     __trace_assign_loc(#name, (long long)(value), __FILE__, line)
 #define __trace_array_create(name, baseType, dim1, dim2, dim3, line) \
@@ -178,8 +178,8 @@ void __trace_block_exit_loc(int blockDepth, const char* file, int line);
     __trace_array_index_assign_loc(#name, idx1, idx2, -1, (long long)(value), __FILE__, line)
 #define __trace_array_index_assign_3d(name, idx1, idx2, idx3, value, line) \
     __trace_array_index_assign_loc(#name, idx1, idx2, idx3, (long long)(value), __FILE__, line)
-#define __trace_pointer_alias(name, aliasOf, decayed, line) \
-    __trace_pointer_alias_loc(#name, #aliasOf, decayed, __FILE__, line)
+#define __trace_pointer_alias(name, value, decayed, line) \
+    __trace_pointer_alias_loc(#name, (void*)(value), decayed, __FILE__, line)
 #define __trace_pointer_deref_write(ptrName, value, line) \
     __trace_pointer_deref_write_loc(#ptrName, (long long)(value), __FILE__, line)
 #define __trace_pointer_heap_init(ptrName, heapAddr, line) \
