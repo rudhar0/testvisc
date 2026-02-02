@@ -4,7 +4,7 @@ import Konva from "konva";
 import { ZoomIn, ZoomOut, Maximize2, Move, Hand } from "lucide-react";
 import { useExecutionStore } from "@store/slices/executionSlice";
 import { useCanvasStore } from "@store/slices/canvasSlice";
-
+import { useThemeStore } from "@store/slices/themeSlice";
 import { VariableBox } from "./elements/VariableBox";
 import { ArrayPanel } from "./elements/ArrayPanel";
 import { ArrayReference } from "./elements/ArrayReference";
@@ -23,13 +23,37 @@ import { InputDialog } from "./InputDialog";
 import { socketService } from "../../api/socket.service";
 import { getFocusPosition } from "../../utils/camera";
 import { SmoothUpdateArrow } from "./elements/SmoothUpdateArrow";
+import { LoopElement } from './elements/LoopElement';
+import { ConditionElement } from './elements/ConditionElement';
 
-const COLORS = {
+const DARK_COLORS = {
   bg: "#0F172A",
   grid: "#1E293B",
   mainBorder: "#A855F7",
   globalBorder: "#2DD4BF",
   functionBorder: "#8B5CF6",
+  overlayBg: "#1E293B",
+  overlayBorder: "#334155",
+  buttonBg: "#334155",
+  buttonText: "#F1F5F9",
+  textPrimary: "#F1F5F9",
+  textSecondary: "#94A3B8",
+  textMuted: "#64748B",
+};
+
+const LIGHT_COLORS = {
+  bg: "#e8ecef",
+  grid: "#d0d8e0",
+  mainBorder: "#A855F7",
+  globalBorder: "#2DD4BF",
+  functionBorder: "#8B5CF6",
+  overlayBg: "#f5f7f9",
+  overlayBorder: "#c8d0d8",
+  buttonBg: "#dde3e8",
+  buttonText: "#1a2332",
+  textPrimary: "#1a2332",
+  textSecondary: "#5a6a7a",
+  textMuted: "#8a9aaa",
 };
 
 const SPACING = {
@@ -66,6 +90,8 @@ export default function VisualizationCanvas() {
   const currentStep = useExecutionStore((state) => state.currentStep);
   const getCurrentStep = useExecutionStore((state) => state.getCurrentStep);
   const isAnalyzing = useExecutionStore((state) => state.isAnalyzing);
+  const { theme } = useThemeStore();
+  const COLORS = theme === 'dark' ? DARK_COLORS : LIGHT_COLORS;
   const { setCanvasSize, zoom, setZoom, position, setPosition } =
     useCanvasStore();
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
@@ -867,64 +893,78 @@ export default function VisualizationCanvas() {
 
       case "loop":
         return (
-          <Group key={id} x={x} y={y}>
-            <Rect
-              width={width}
-              height={height}
-              fill="#1E293B"
-              stroke="#F59E0B"
-              strokeWidth={2}
-              cornerRadius={8}
-            />
-            <Text
-              text={`Loop: ${data?.condition || data?.explanation || "for/while"}`}
-              x={12}
-              y={20}
-              fontSize={14}
-              fill="#F1F5F9"
-              fontFamily="monospace"
-            />
+          <LoopElement
+            key={`${id}-${stepId}`}
+            id={id}
+            loopType={data?.loopType || 'for'}
+            loopId={data?.loopId || 0}
+            currentIteration={data?.currentIteration}
+            totalIterations={data?.totalIterations}
+            isActive={data?.isActive || false}
+            isComplete={data?.isComplete || false}
+            initialization={data?.initialization}
+            condition={data?.condition}
+            update={data?.update}
+            conditionResult={data?.conditionResult}
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            isNew={isNew}
+            stepNumber={stepId}
+            enterDelay={enterDelayMap.get(id) || 0}
+          >
             {filterChildren(children).map((child) => {
               const relativeX = child.x - x;
-              const relativeY = child.y - y;
+              const relativeY = child.y - y - SPACING.HEADER_HEIGHT;
               return (
                 <Group key={child.id} x={relativeX} y={relativeY}>
-                  {renderElement(child, x, y)}
+                  {renderElement(
+                    { ...child, x: 0, y: 0 },
+                    x,
+                    y,
+                  )}
                 </Group>
               );
             })}
-          </Group>
+          </LoopElement>
         );
 
       case "condition":
         return (
-          <Group key={id} x={x} y={y}>
-            <Rect
-              width={width}
-              height={height}
-              fill="#1E293B"
-              stroke="#8B5CF6"
-              strokeWidth={2}
-              cornerRadius={8}
-            />
-            <Text
-              text={`Condition: ${data?.explanation || "if/else"}`}
-              x={x}
-              y={y}
-              fontSize={14}
-              fill="#F1F5F9"
-              fontFamily="monospace"
-            />
+          <ConditionElement
+            key={`${id}-${stepId}`}
+            id={id}
+            conditionType={data?.conditionType || 'if'}
+            condition={data?.condition || ''}
+            conditionResult={data?.conditionResult}
+            branchTaken={data?.branchTaken}
+            caseValue={data?.caseValue}
+            isActive={data?.isActive || false}
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            isNew={isNew}
+            stepNumber={stepId}
+            enterDelay={enterDelayMap.get(id) || 0}
+            switchExpression={data?.switchExpression}
+            totalCases={data?.totalCases}
+          >
             {filterChildren(children).map((child) => {
               const relativeX = child.x - x;
-              const relativeY = child.y - y;
+              const relativeY = child.y - y - SPACING.HEADER_HEIGHT;
               return (
                 <Group key={child.id} x={relativeX} y={relativeY}>
-                  {renderElement(child, x, y)}
+                  {renderElement(
+                    { ...child, x: 0, y: 0 },
+                    x,
+                    y,
+                  )}
                 </Group>
               );
             })}
-          </Group>
+          </ConditionElement>
         );
 
       default:
@@ -942,7 +982,7 @@ export default function VisualizationCanvas() {
           alignItems: "center",
           justifyContent: "center",
           backgroundColor: COLORS.bg,
-          color: "#94A3B8",
+          color: COLORS.textSecondary,
           fontFamily: "system-ui",
         }}
       >
@@ -955,12 +995,12 @@ export default function VisualizationCanvas() {
               fontSize: "20px",
               fontWeight: 600,
               marginBottom: "12px",
-              color: "#F1F5F9",
+              color: COLORS.textPrimary,
             }}
           >
             Responsive Canvas Ready
           </div>
-          <div style={{ fontSize: "14px", color: "#64748B" }}>
+          <div style={{ fontSize: "14px", color: COLORS.textMuted }}>
             Run your code to see animated visualization
           </div>
         </div>
@@ -987,21 +1027,21 @@ export default function VisualizationCanvas() {
             zIndex: 100,
             display: "flex",
             gap: "8px",
-            backgroundColor: "#1E293B",
+            backgroundColor: COLORS.overlayBg,
             padding: "10px",
             borderRadius: "10px",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-            border: "1px solid #334155",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+            border: `1px solid ${COLORS.overlayBorder}`,
           }}
         >
           <button
             onClick={() => setDragMode(!dragMode)}
             style={{
               padding: "8px 12px",
-              backgroundColor: dragMode ? "#3B82F6" : "#334155",
+              backgroundColor: dragMode ? "#3B82F6" : COLORS.buttonBg,
               border: "none",
               borderRadius: "6px",
-              color: "#F1F5F9",
+              color: dragMode ? "#FFFFFF" : COLORS.buttonText,
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
@@ -1020,7 +1060,7 @@ export default function VisualizationCanvas() {
             title="Zoom In (+)"
             style={{
               padding: "8px",
-              backgroundColor: "#334155",
+              backgroundColor: COLORS.buttonBg,
               border: "none",
               borderRadius: "6px",
               cursor: "pointer",
@@ -1028,14 +1068,14 @@ export default function VisualizationCanvas() {
               alignItems: "center",
             }}
           >
-            <ZoomIn size={20} color="#F1F5F9" />
+            <ZoomIn size={20} color={COLORS.buttonText} />
           </button>
           <button
             onClick={handleZoomOut}
             title="Zoom Out (-)"
             style={{
               padding: "8px",
-              backgroundColor: "#334155",
+              backgroundColor: COLORS.buttonBg,
               border: "none",
               borderRadius: "6px",
               cursor: "pointer",
@@ -1043,14 +1083,14 @@ export default function VisualizationCanvas() {
               alignItems: "center",
             }}
           >
-            <ZoomOut size={20} color="#F1F5F9" />
+            <ZoomOut size={20} color={COLORS.buttonText} />
           </button>
           <button
             onClick={handleFitToScreen}
             title="Fit to Screen (0)"
             style={{
               padding: "8px",
-              backgroundColor: "#334155",
+              backgroundColor: COLORS.buttonBg,
               border: "none",
               borderRadius: "6px",
               cursor: "pointer",
@@ -1058,7 +1098,7 @@ export default function VisualizationCanvas() {
               alignItems: "center",
             }}
           >
-            <Maximize2 size={20} color="#F1F5F9" />
+            <Maximize2 size={20} color={COLORS.buttonText} />
           </button>
         </div>
         <div
@@ -1067,17 +1107,17 @@ export default function VisualizationCanvas() {
             top: 16,
             left: 16,
             zIndex: 100,
-            backgroundColor: "#1E293B",
+            backgroundColor: COLORS.overlayBg,
             padding: "10px 16px",
             borderRadius: "10px",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-            border: "1px solid #334155",
-            color: "#F1F5F9",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+            border: `1px solid ${COLORS.overlayBorder}`,
+            color: COLORS.textPrimary,
             fontSize: "14px",
             fontWeight: 600,
           }}
         >
-          Step {currentStep + 1} / {executionTrace.totalSteps}
+          Step {currentStep + 1} / {executionTrace?.totalSteps ?? 0}
         </div>
 
         {dimensions.width > 0 && dimensions.height > 0 && (

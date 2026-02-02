@@ -40,7 +40,7 @@ export default function SymbolNavigator() {
     }));
   };
 
-  const handleSymbolClick = (symbolName: string, type: 'global' | 'function') => {
+  const handleSymbolClick = (symbolName: string, _type: 'global' | 'function') => {
     selectElement(symbolName);
     // TODO: Highlight in canvas and center view
   };
@@ -48,7 +48,7 @@ export default function SymbolNavigator() {
   if (!executionTrace || !executionTrace.steps || executionTrace.steps.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-4">
-        <div className="text-center text-sm text-slate-500">
+        <div className="text-center text-sm text-[#5a6a7a] dark:text-slate-500">
           <Box className="mx-auto mb-2 h-8 w-8 opacity-50" />
           <p>No symbols available</p>
           <p className="mt-1 text-xs">Run code to see symbols</p>
@@ -63,18 +63,18 @@ export default function SymbolNavigator() {
       <div className="mb-4">
         <button
           onClick={() => toggleSection('globals')}
-          className="mb-2 flex w-full items-center gap-2 rounded px-2 py-1 hover:bg-slate-800 transition-colors"
+          className="mb-2 flex w-full items-center gap-2 rounded px-2 py-1 hover:bg-[#c8d0d8] dark:hover:bg-slate-800 transition-colors"
         >
           <ChevronRight
-            className={`h-4 w-4 text-slate-400 transition-transform ${
+            className={`h-4 w-4 text-[#8a9aaa] dark:text-slate-400 transition-transform ${
               expandedSections.globals ? 'rotate-90' : ''
             }`}
           />
           <Globe className="h-4 w-4" style={{ color: COLORS.memory.global.DEFAULT }} />
-          <span className="text-sm font-semibold text-slate-200">
+          <span className="text-sm font-semibold text-[#1a2332] dark:text-slate-200">
             Global Variables
           </span>
-          <span className="ml-auto text-xs text-slate-500">
+          <span className="ml-auto text-xs text-[#5a6a7a] dark:text-slate-500">
             {Object.keys(globals).length}
           </span>
         </button>
@@ -85,22 +85,22 @@ export default function SymbolNavigator() {
               <button 
                 key={name}
                 onClick={() => handleSymbolClick(name, 'global')}
-                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 transition-colors group"
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-[#c8d0d8] dark:hover:bg-slate-800 transition-colors group"
               >
                 <div
                   className="h-2 w-2 rounded-full"
                   style={{ backgroundColor: COLORS.memory.global.DEFAULT }}
                 />
-                <span className="text-sm text-slate-300 group-hover:text-white">
+                <span className="text-sm text-[#5a6a7a] dark:text-slate-300 group-hover:text-[#1a2332] dark:group-hover:text-white">
                   {name}
                 </span>
-                <span className="ml-auto text-xs text-slate-500">
+                <span className="ml-auto text-xs text-[#8a9aaa] dark:text-slate-500">
                   {variable.type}
                 </span>
               </button>
             ))}
             {Object.keys(globals).length === 0 && (
-              <div className="px-2 py-1 text-xs text-slate-500">
+              <div className="px-2 py-1 text-xs text-[#8a9aaa] dark:text-slate-500">
                 No global variables
               </div>
             )}
@@ -112,18 +112,18 @@ export default function SymbolNavigator() {
       <div>
         <button
           onClick={() => toggleSection('functions')}
-          className="mb-2 flex w-full items-center gap-2 rounded px-2 py-1 hover:bg-slate-800 transition-colors"
+          className="mb-2 flex w-full items-center gap-2 rounded px-2 py-1 hover:bg-[#c8d0d8] dark:hover:bg-slate-800 transition-colors"
         >
           <ChevronRight
-            className={`h-4 w-4 text-slate-400 transition-.transform ${
+            className={`h-4 w-4 text-[#8a9aaa] dark:text-slate-400 transition-transform ${
               expandedSections.functions ? 'rotate-90' : ''
             }`}
           />
           <SquareFunction className="h-4 w-4" style={{ color: COLORS.memory.stack.DEFAULT }} />
-          <span className="text-sm font-semibold text-slate-200">
+          <span className="text-sm font-semibold text-[#1a2332] dark:text-slate-200">
             Functions
           </span>
-          <span className="ml-auto text-xs text-slate-500">
+          <span className="ml-auto text-xs text-[#5a6a7a] dark:text-slate-500">
             {functions.length}
           </span>
         </button>
@@ -134,24 +134,24 @@ export default function SymbolNavigator() {
               <button 
                 key={funcName}
                 onClick={() => handleSymbolClick(funcName, 'function')}
-                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 transition-colors group"
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-[#c8d0d8] dark:hover:bg-slate-800 transition-colors group"
               >
                 <div
                   className="h-2 w-2 rounded-full"
                   style={{ backgroundColor: COLORS.memory.stack.DEFAULT }}
                 />
-                <span className="text-sm text-slate-300 group-hover:text-white">
+                <span className="text-sm text-[#5a6a7a] dark:text-slate-300 group-hover:text-[#1a2332] dark:group-hover:text-white">
                   {funcName}()
                 </span>
                 {funcName === 'main' && (
-                  <span className="ml-auto text-xs text-blue-400 font-medium">
+                  <span className="ml-auto text-xs text-blue-600 dark:text-blue-400 font-medium">
                     entry
                   </span>
                 )}
               </button>
             ))}
             {functions.length === 0 && (
-              <div className="px-2 py-1 text-xs text-slate-500">
+              <div className="px-2 py-1 text-xs text-[#8a9aaa] dark:text-slate-500">
                 No functions
               </div>
             )}

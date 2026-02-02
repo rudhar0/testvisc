@@ -1,6 +1,7 @@
 // frontend/src/components/canvas/layout/LayoutEngine.ts
 
 import type { ExecutionStep, ExecutionTrace } from "../../../types";
+import { useLoopStore } from "../../../store/slices/loopSlice";
 
 export interface LayoutElement {
   id: string;
@@ -266,6 +267,28 @@ export class LayoutEngine {
   private static frameOrderMap: Map<string, number> = new Map();
   private static frameOrder: number = 0;
 
+  private static activeLoops: Map<number, {
+    loopId: number;
+    loopType: 'for' | 'while' | 'do-while';
+    startStep: number;
+    endStep?: number;
+    currentIteration: number;
+    totalIterations: number;
+    elementId?: string;
+    parentFrameId: string;
+  }> = new Map();
+
+  private static activeConditions: Map<string, {
+    conditionId: string;
+    conditionType: 'if' | 'if-else' | 'if-else-if' | 'switch';
+    startStep: number;
+    endStep?: number;
+    elementId?: string;
+    parentFrameId: string;
+    conditionResult?: boolean;
+    branchTaken?: string;
+  }> = new Map();
+
   // ============================================
   // LANE MANAGEMENT
   // ============================================
@@ -294,6 +317,32 @@ export class LayoutEngine {
         lanes[laneName] = { startY: 0, usedHeight: 0 };
     }
     return lanes[laneName];
+  }
+
+  /**
+   * Get the active loop for a given frame (if any)
+   * Used to check if we're currently inside a loop
+   */
+  private static getActiveLoopForFrame(frameId: string) {
+    for (const loop of this.activeLoops.values()) {
+      if (loop.parentFrameId === frameId) {
+        return loop;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find a child element inside a loop by variable name
+   * Used for toggle mode to update existing elements
+   */
+  private static findLoopChildElement(loopElementId: string, varName: string) {
+    const loopElement = this.elementHistory.get(loopElementId);
+    if (!loopElement || !loopElement.children) return null;
+    
+    return loopElement.children.find(
+      child => child.data?.name === varName
+    );
   }
 
   // NEW METHOD: Sort children by stepId
@@ -364,7 +413,7 @@ export class LayoutEngine {
 
   public static calculateLayout(
     executionTrace: ExecutionTrace,
-    currentStepIndex: number,
+    currentStep: number, // RENAMED from currentStepIndex
     canvasWidth: number,
     canvasHeight: number,
   ): Layout {
@@ -400,6 +449,8 @@ export class LayoutEngine {
     };
 
     this.elementHistory.clear();
+    this.activeLoops.clear();
+    this.activeConditions.clear();
     this.arrayTracker = new ProgressiveArrayTracker();
     this.createdInStep.clear();
     this.updateArrows.clear();
@@ -415,17 +466,17 @@ export class LayoutEngine {
 
     for (
       let i = 0;
-      i <= currentStepIndex && i < executionTrace.steps.length;
+      i <= currentStep && i < executionTrace.steps.length;
       i++
     ) {
       const step = executionTrace.steps[i];
-      this.processStep(step, layout, i, currentStepIndex, executionTrace);
+      this.processStep(step, layout, i, currentStep, executionTrace);
     }
 
-    this.createArrayPanel(layout, currentStepIndex);
+    this.createArrayPanel(layout, currentStep);
     this.positionGlobalPanel(layout);
-    this.createArrayReferences(layout, currentStepIndex);
-    this.createUpdateArrows(layout, currentStepIndex);
+    this.createArrayReferences(layout, currentStep);
+    this.createUpdateArrows(layout, currentStep);
     this.updateContainerHeights(layout);
     layout.functionArrows = this.functionArrows;
 
@@ -658,15 +709,24 @@ export class LayoutEngine {
       
       const elementHeight = explanation ? VARIABLE_HEIGHT + EXPLANATION_HEIGHT : VARIABLE_HEIGHT;
       
+      // CHECK FOR ACTIVE LOOP PARENT
+      const activeLoop = this.getActiveLoopForFrame(frameId);
+      
       const varElement: LayoutElement = {
         id: varId,
         type: "variable",
         subtype: "variable_load",
-        x: ownerFrame.x + indent,
-        y: ownerFrame.y + lane.startY + lane.usedHeight,
-        width: ownerFrame.width - indent * 2,
+        x: activeLoop 
+           ? this.elementHistory.get(activeLoop.elementId!)!.x + 20 
+           : ownerFrame.x + indent,
+        y: activeLoop 
+           ? this.getNextCursorY(this.elementHistory.get(activeLoop.elementId!)!) 
+           : ownerFrame.y + lane.startY + lane.usedHeight,
+        width: (activeLoop 
+           ? this.elementHistory.get(activeLoop.elementId!)!.width 
+           : ownerFrame.width - indent * 2) - 40,
         height: elementHeight,
-        parentId: ownerFrame.id,
+        parentId: activeLoop ? activeLoop.elementId : ownerFrame.id,
         stepId: stepIndex,
         data: {
             ...variable,
@@ -674,9 +734,16 @@ export class LayoutEngine {
         },
       };
 
-      lane.usedHeight += varElement.height + ELEMENT_SPACING;
+      if (activeLoop) {
+        // Add to loop container instead of frame lane
+        const loopElement = this.elementHistory.get(activeLoop.elementId!)!;
+        loopElement.children!.push(varElement);
+        // We don't increment lane height here because loop height will grow dynamically
+      } else {
+        lane.usedHeight += varElement.height + ELEMENT_SPACING;
+        ownerFrame.children!.push(varElement);
+      }
 
-      ownerFrame.children!.push(varElement);
       layout.elements.push(varElement);
       this.elementHistory.set(varId, varElement);
       this.createdInStep.set(varId, stepIndex);
@@ -694,6 +761,24 @@ export class LayoutEngine {
       const varName = name || symbol;
 
       if (!varName) return;
+
+      // Check if we're in toggle mode and inside a loop
+      const { toggleMode } = useLoopStore.getState();
+      const currentLoop = this.getActiveLoopForFrame(frameId);
+
+      if (currentLoop && toggleMode) {
+        // Try to find existing element with this variable name
+        const existingElement = this.findLoopChildElement(currentLoop.elementId!, varName);
+        
+        if (existingElement) {
+          // UPDATE existing element instead of creating new one
+          existingElement.data.value = value;
+          existingElement.data.isUpdated = true;
+          existingElement.stepId = stepIndex;
+          this.createdInStep.set(existingElement.id, stepIndex); // Update "created" step to current for animation focus
+          return; // Don't create new element
+        }
+      }
 
       const varId = `var-${frameId}-${varName}-${stepIndex}`;
 
@@ -730,15 +815,23 @@ export class LayoutEngine {
                          (hasFunctionCall ? 60 : 0); // 60px for inline call
       const elementHeight = baseHeight + extraHeight;
       
+      const activeLoop = this.getActiveLoopForFrame(frameId);
+
       const varElement: LayoutElement = {
         id: varId,
         type: "variable",
         subtype: isFunctionReturnAssignment ? "variable_with_call" : "variable_load",
-        x: ownerFrame.x + indent,
-        y: this.getNextCursorY(ownerFrame),
-        width: ownerFrame.width - indent * 2,
+        x: activeLoop 
+           ? this.elementHistory.get(activeLoop.elementId!)!.x + 20 
+           : ownerFrame.x + indent,
+        y: activeLoop 
+           ? this.getNextCursorY(this.elementHistory.get(activeLoop.elementId!)!) 
+           : this.getNextCursorY(ownerFrame),
+        width: (activeLoop 
+           ? this.elementHistory.get(activeLoop.elementId!)!.width 
+           : ownerFrame.width - indent * 2) - 40,
         height: elementHeight,
-        parentId: ownerFrame.id,
+        parentId: activeLoop ? activeLoop.elementId : ownerFrame.id,
         stepId: stepIndex,
         data: {
           ...variable,
@@ -753,7 +846,13 @@ export class LayoutEngine {
         },
       };
 
-      ownerFrame.children!.push(varElement);
+      if (activeLoop) {
+        const loopElement = this.elementHistory.get(activeLoop.elementId!)!;
+        loopElement.children!.push(varElement);
+      } else {
+        ownerFrame.children!.push(varElement);
+      }
+
       layout.elements.push(varElement);
       this.elementHistory.set(varId, varElement);
       this.createdInStep.set(varId, stepIndex);
@@ -949,6 +1048,162 @@ export class LayoutEngine {
       ownerFrame.children!.push(outputElement);
       layout.elements.push(outputElement);
       this.elementHistory.set(outputId, outputElement);
+      return;
+    }
+
+    // LOOP START
+    if (stepType === "loop_start") {
+      const { loopId, loopType } = step as any;
+      const ownerFrame = this.functionFrames.get(frameId);
+      if (!ownerFrame) return;
+
+      const loopElementId = `loop-${frameId}-${loopId}-${stepIndex}`;
+      
+      // Look ahead to find end step for skip functionality
+      let endStep: number | undefined;
+      for (let i = stepIndex + 1; i < executionTrace.steps.length; i++) {
+        const s = executionTrace.steps[i] as any;
+        if (s.eventType === 'loop_end' && s.loopId === loopId) {
+          endStep = i;
+          break;
+        }
+      }
+
+      this.activeLoops.set(loopId, {
+        loopId,
+        loopType,
+        startStep: stepIndex,
+        endStep: endStep,
+        currentIteration: 0,
+        totalIterations: 0,
+        elementId: loopElementId,
+        parentFrameId: frameId,
+      });
+
+      // SYNC WITH STORE
+      // We only want to sync if this is the "current" step being processed for the first time
+      // to avoid dispatching actions during historical re-renders.
+      // However, calculating layout usually implies "current state".
+      // We use a small timeout or check if we are near the end of the trace?
+      // Better: Just sync. The store handles updates.
+      if (stepIndex === currentStep) { // RENAMED
+         try {
+           useLoopStore.getState().enterLoop({
+             loopId,
+             loopType,
+             currentIteration: 0,
+             totalIterations: 0, // Will be updated
+             startStepIndex: stepIndex,
+             endStepIndex: endStep,
+           });
+         } catch (e) { console.error("Failed to sync loop start", e); }
+      }
+
+      const indent = getIndentSize(ownerFrame);
+      const lane = this.getLane(ownerFrame, 'LOCALS');
+
+      const loopElement: LayoutElement = {
+        id: loopElementId,
+        type: 'loop',
+        subtype: loopType,
+        x: ownerFrame.x + indent,
+        y: ownerFrame.y + lane.startY + lane.usedHeight,
+        width: ownerFrame.width - indent * 2,
+        height: 150,
+        parentId: ownerFrame.id,
+        stepId: stepIndex,
+        children: [],
+        data: {
+          loopId,
+          loopType,
+          currentIteration: 0,
+          isActive: true,
+          frameId: frameId,
+          explanation: explanation,
+        },
+      };
+
+      ownerFrame.children!.push(loopElement);
+      layout.elements.push(loopElement);
+      this.elementHistory.set(loopElementId, loopElement);
+      this.createdInStep.set(loopElementId, stepIndex);
+      
+      lane.usedHeight += 60;
+      
+      return;
+    }
+
+    // LOOP ITERATION START
+    if (stepType === "loop_body_start") {
+      const { loopId, iteration } = step as any;
+      const loopState = this.activeLoops.get(loopId);
+      
+      if (loopState) {
+        loopState.currentIteration = iteration;
+        
+        const loopElement = this.elementHistory.get(loopState.elementId!);
+        if (loopElement && loopElement.data) {
+          loopElement.data.currentIteration = iteration;
+          loopElement.data.isActive = true;
+        }
+        
+        if (stepIndex === currentStep) { // RENAMED
+           useLoopStore.getState().updateLoopIteration(loopId, iteration);
+        }
+      }
+      return;
+    }
+
+    // LOOP CONDITION
+    if (stepType === "loop_condition") {
+      const { loopId, result } = step as any;
+      const loopState = this.activeLoops.get(loopId);
+      
+      if (loopState) {
+        const loopElement = this.elementHistory.get(loopState.elementId!);
+        if (loopElement && loopElement.data) {
+          loopElement.data.conditionResult = result === 1;
+        }
+      }
+      return;
+    }
+
+    // LOOP ITERATION END
+    if (stepType === "loop_iteration_end") {
+      const { loopId, iteration } = step as any;
+      const loopState = this.activeLoops.get(loopId);
+      
+      if (loopState) {
+        loopState.totalIterations = Math.max(loopState.totalIterations, iteration);
+        
+        const loopElement = this.elementHistory.get(loopState.elementId!);
+        if (loopElement && loopElement.data) {
+          loopElement.data.totalIterations = loopState.totalIterations;
+        }
+      }
+      return;
+    }
+
+    // LOOP END
+    if (stepType === "loop_end") {
+      const { loopId } = step as any;
+      const loopState = this.activeLoops.get(loopId);
+      
+      if (loopState) {
+        loopState.endStep = stepIndex;
+        
+        const loopElement = this.elementHistory.get(loopState.elementId!);
+        if (loopElement && loopElement.data) {
+          loopElement.data.isActive = false;
+          loopElement.data.isComplete = true;
+        }
+        
+        this.activeLoops.delete(loopId);
+        
+        if (stepIndex === currentStep) { // RENAMED
+           useLoopStore.getState().exitLoop(loopId);
+        }
+      }
       return;
     }
   }

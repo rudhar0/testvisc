@@ -154,6 +154,7 @@ static void write_json_event(const char* type, void* addr,
     if (extra) fprintf(g_trace_file, ",%s", extra);
     fputs("}", g_trace_file);
     fflush(g_trace_file);
+    fflush(stdout);
 
     unlock_trace();
 }
@@ -172,6 +173,34 @@ static PointerInfo* findPointerInfo(const std::string& ptrName) {
     }
     
     return nullptr;
+}
+
+extern "C" void __trace_output_flush_loc(const char* file, int line) {
+    fflush(stdout);
+    fflush(stderr);
+    fflush(g_trace_file);
+}
+
+extern "C" void __trace_condition_eval_loc(int conditionId, const char* expression, int result,
+                                           const char* file, int line) {
+    if (!g_trace_file) return;
+    const std::string f = json_safe_path(file);
+    char extra[512];
+    snprintf(extra, sizeof(extra),
+             "\"conditionId\":%d,\"expression\":\"%s\",\"result\":%d,\"file\":\"%s\",\"line\":%d",
+             conditionId, expression, result, f.c_str(), line);
+    write_json_event("condition_eval", nullptr, g_current_function.c_str(), g_depth, extra);
+}
+
+extern "C" void __trace_branch_taken_loc(int conditionId, const char* branchType,
+                                         const char* file, int line) {
+    if (!g_trace_file) return;
+    const std::string f = json_safe_path(file);
+    char extra[256];
+    snprintf(extra, sizeof(extra),
+             "\"conditionId\":%d,\"branchType\":\"%s\",\"file\":\"%s\",\"line\":%d",
+             conditionId, branchType, f.c_str(), line);
+    write_json_event("branch_taken", nullptr, g_current_function.c_str(), g_depth, extra);
 }
 
 extern "C" void __trace_array_create_loc(const char* name, const char* baseType,
@@ -672,6 +701,9 @@ void __cyg_profile_func_exit(void* func, void* caller) {
     }
 #endif
 
+    fflush(stdout);
+    fflush(stderr);
+
     if (!g_call_stack.empty()) {
         auto& activeLoops = g_call_stack.back().activeLoops;
         while (!activeLoops.empty()) {
@@ -766,11 +798,15 @@ extern "C" {
 extern "C" void __attribute__((constructor)) init_tracer()
     __attribute__((no_instrument_function));
 void init_tracer() {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     const char* trace_path = std::getenv("TRACE_OUTPUT");
     if (!trace_path) trace_path = "trace.json";
 
     g_trace_file = std::fopen(trace_path, "w");
     if (g_trace_file) {
+        setvbuf(g_trace_file, NULL, _IONBF, 0);
         std::fprintf(g_trace_file,
                      "{\"version\":\"1.0\",\"functions\":[],\"events\":[\n");
         std::fflush(g_trace_file);
@@ -780,6 +816,9 @@ void init_tracer() {
 extern "C" void __attribute__((destructor)) finish_tracer()
     __attribute__((no_instrument_function));
 void finish_tracer() {
+    fflush(stdout);
+    fflush(stderr);
+    
     if (g_trace_file) {
         std::fprintf(g_trace_file, "\n],\"tracked_functions\":[");
         bool first = true;

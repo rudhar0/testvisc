@@ -153,7 +153,7 @@ class InstrumentationTracer {
                 };
             }
         }
-        return null; // Loop detected
+        return null;
     }
     
     async getLineInfo(executable, address) {
@@ -236,45 +236,10 @@ class InstrumentationTracer {
         return { rendered, escapes };
     }
 
-    createOutputSteps(stdout, baseStepIndex) {
-        if (!stdout || stdout.trim().length === 0) return [];
-
-        const lines = stdout.split('\n');
-        const steps = [];
-        let stepIndex = baseStepIndex;
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            if (line.trim().length === 0 && i === lines.length - 1) continue;
-
-            const { rendered, escapes } = this.parseEscapeSequences(line);
-
-            const frameMetadata = this.getCurrentFrameMetadata();
-
-            steps.push({
-                stepIndex: stepIndex++,
-                eventType: 'output',
-                line: 0,
-                function: 'output',
-                scope: 'global',
-                file: 'stdout',
-                timestamp: Date.now() + i,
-                text: rendered,
-                rawText: line,
-                escapeInfo: escapes,
-                explanation: `📤 Output: "${rendered}"`,
-                internalEvents: [],
-                ...frameMetadata
-            });
-        }
-        return steps;
-    }
-
     async compile(code, language = 'cpp') {
         const sessionId = uuid();
         const ext = language === 'c' ? 'c' : 'cpp';
         const compiler = 'g++';
-        // Use C++17 flag for both C and C++ to support trace.h which relies on C++ features
         const stdFlag = '-std=c++17';
 
         const instrumented = await codeInstrumenter.instrumentCode(code, language);
@@ -341,7 +306,15 @@ class InstrumentationTracer {
             });
 
             let stdout = '', stderr = '';
-            proc.stdout.on('data', d => stdout += d.toString());
+            const stdoutChunks = [];
+            const stdoutTimestamps = [];
+
+            proc.stdout.on('data', d => {
+                const chunk = d.toString();
+                stdout += chunk;
+                stdoutChunks.push(chunk);
+                stdoutTimestamps.push(Date.now() * 1000);
+            });
             proc.stderr.on('data', d => stderr += d.toString());
 
             const timeout = setTimeout(() => {
@@ -352,7 +325,7 @@ class InstrumentationTracer {
             proc.on('close', code => {
                 clearTimeout(timeout);
                 if (code === 0 || code === null) {
-                    resolve({ stdout, stderr });
+                    resolve({ stdout, stderr, stdoutChunks, stdoutTimestamps });
                 } else {
                     reject(new Error(`Execution failed (code ${code})`));
                 }
@@ -389,6 +362,9 @@ class InstrumentationTracer {
         this.loopIterationCounts = new Map();
         this.addressToName.clear();
         this.addressToFrame.clear();
+
+        const outputLines = programOutput.stdout.split('\n').filter(line => line.length > 0 || line === '\n');
+        let outputIndex = 0;
 
         const normalizeFunctionName = (name) => {
             if (!name) return 'unknown';
@@ -461,6 +437,28 @@ class InstrumentationTracer {
             }
 
             if (ev.type === 'func_exit') {
+                while (outputIndex < outputLines.length) {
+                    const line = outputLines[outputIndex++];
+                    const { rendered, escapes } = this.parseEscapeSequences(line);
+                    const frameMetadata = this.getCurrentFrameMetadata();
+
+                    steps.push({
+                        stepIndex: stepIndex++,
+                        eventType: 'output',
+                        line: 0,
+                        function: 'output',
+                        scope: 'global',
+                        file: 'stdout',
+                        timestamp: ev.ts || Date.now(),
+                        text: rendered,
+                        rawText: line,
+                        escapeInfo: escapes,
+                        explanation: `📤 Output: "${rendered}"`,
+                        internalEvents: [],
+                        ...frameMetadata
+                    });
+                }
+
                 const exitingFrame = this.popCallFrame();
 
                 if (exitingFrame) {
@@ -525,7 +523,40 @@ class InstrumentationTracer {
 
             let step = null;
 
-            if (ev.type === 'loop_start') {
+            if (ev.type === 'condition_eval') {
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'condition_eval',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    conditionId: ev.conditionId,
+                    expression: ev.expression,
+                    result: ev.result === 1,
+                    explanation: `🔍 Condition (${ev.expression}) = ${ev.result === 1 ? 'true' : 'false'}`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
+
+            } else if (ev.type === 'branch_taken') {
+                step = {
+                    stepIndex: stepIndex++,
+                    eventType: 'branch_taken',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    conditionId: ev.conditionId,
+                    branchType: ev.branchType,
+                    explanation: `➡️ Taking ${ev.branchType} branch`,
+                    internalEvents: [],
+                    ...frameMetadata
+                };
+
+            } else if (ev.type === 'loop_start') {
                 const loopId = ev.loopId;
                 if (currentFrame) {
                     currentFrame.activeLoops.set(loopId, { iterations: 0 });
@@ -1040,13 +1071,10 @@ class InstrumentationTracer {
             }
         }
 
-        const outputSteps = this.createOutputSteps(programOutput.stdout, steps.length);
-        const allSteps = [...steps, ...outputSteps];
-
-        const lastStepIndex = allSteps.at(-1)?.stepIndex ?? 0;
+        const lastStepIndex = steps.at(-1)?.stepIndex ?? 0;
         const finalFrameMetadata = this.getCurrentFrameMetadata();
 
-        allSteps.push({
+        steps.push({
             stepIndex: lastStepIndex + 1,
             eventType: 'program_end',
             line: 0,
@@ -1059,9 +1087,9 @@ class InstrumentationTracer {
             ...finalFrameMetadata
         });
 
-        console.log(`✅ Generated ${allSteps.length} steps`);
+        console.log(`✅ Generated ${steps.length} steps`);
 
-        return allSteps;
+        return steps;
     }
 
     extractGlobals(steps) {

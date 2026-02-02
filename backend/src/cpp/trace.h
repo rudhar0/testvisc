@@ -50,6 +50,9 @@ void __trace_loop_condition_loc(int loopId, int result, const char* file, int li
 void __trace_return_loc(long long value, const char* returnType, const char* destinationSymbol, const char* file, int line);
 void __trace_block_enter_loc(int blockDepth, const char* file, int line);
 void __trace_block_exit_loc(int blockDepth, const char* file, int line);
+void __trace_output_flush_loc(const char* file, int line);
+void __trace_condition_eval_loc(int conditionId, const char* expression, int result, const char* file, int line);
+void __trace_branch_taken_loc(int conditionId, const char* branchType, const char* file, int line);
 
 #ifdef __cplusplus
 }
@@ -102,6 +105,12 @@ void __trace_block_exit_loc(int blockDepth, const char* file, int line);
     __trace_block_enter_loc(blockDepth, __FILE__, line)
 #define __trace_block_exit(blockDepth, line) \
     __trace_block_exit_loc(blockDepth, __FILE__, line)
+#define __trace_output_flush(line) \
+    __trace_output_flush_loc(__FILE__, line)
+#define __trace_condition_eval(conditionId, expression, result, line) \
+    __trace_condition_eval_loc(conditionId, expression, result, __FILE__, line)
+#define __trace_branch_taken(conditionId, branchType, line) \
+    __trace_branch_taken_loc(conditionId, branchType, __FILE__, line)
 
 #else
 
@@ -150,6 +159,9 @@ void __trace_loop_condition_loc(int loopId, int result, const char* file, int li
 void __trace_return_loc(long long value, const char* returnType, const char* destinationSymbol, const char* file, int line);
 void __trace_block_enter_loc(int blockDepth, const char* file, int line);
 void __trace_block_exit_loc(int blockDepth, const char* file, int line);
+void __trace_output_flush_loc(const char* file, int line);
+void __trace_condition_eval_loc(int conditionId, const char* expression, int result, const char* file, int line);
+void __trace_branch_taken_loc(int conditionId, const char* branchType, const char* file, int line);
 
 #ifdef __cplusplus
 }
@@ -202,5 +214,11 @@ void __trace_block_exit_loc(int blockDepth, const char* file, int line);
     __trace_block_enter_loc(blockDepth, __FILE__, line)
 #define __trace_block_exit(blockDepth, line) \
     __trace_block_exit_loc(blockDepth, __FILE__, line)
+#define __trace_output_flush(line) \
+    __trace_output_flush_loc(__FILE__, line)
+#define __trace_condition_eval(conditionId, expression, result, line) \
+    __trace_condition_eval_loc(conditionId, expression, result, __FILE__, line)
+#define __trace_branch_taken(conditionId, branchType, line) \
+    __trace_branch_taken_loc(conditionId, branchType, __FILE__, line)
 
 #endif

@@ -6,6 +6,7 @@ import { v4 as uuid } from 'uuid';
 
 let loopIdCounter = 0;
 let blockDepthCounter = 0;
+let conditionIdCounter = 0;
 
 class CodeInstrumenter {
   constructor() {
@@ -228,7 +229,6 @@ class CodeInstrumenter {
     let functionBraceDepth = 0;
     let currentFunction = 'main';
     let scopeStack = [0];
-    // Holds the raw function definition line until its opening brace is processed
     let pendingFunctionDef = null;
     this.functionParams = new Map();
     this.pendingCalls = new Map();
@@ -237,6 +237,7 @@ class CodeInstrumenter {
     this.functionParamInfo = new Map();
     loopIdCounter = 0;
     blockDepthCounter = 0;
+    conditionIdCounter = 0;
     this.blockDepth = 0;
     this.loopStack = [];
 
@@ -245,7 +246,6 @@ class CodeInstrumenter {
       const trimmed = line.trim();
       const indent = line.match(/^\s*/)[0];
 
-      // Always count braces for global tracking
       const { open: openBraces, close: closeBraces } = this.countBraces(line);
 
       if (trimmed.match(/^\s*(struct|class)\s+\w+/) && !trimmed.includes(';')) {
@@ -258,8 +258,7 @@ class CodeInstrumenter {
           inFunction = true;
           functionBraceDepth = 0;
           currentFunction = funcName;
-          pendingFunctionDef = line; // store definition line for later parameter injection
-          // Parse and store parameter info for later call-site aliasing
+          pendingFunctionDef = line;
           const paramMatch = line.match(/\(([^)]*)\)/);
           if (paramMatch) {
             const rawParams = paramMatch[1].split(',').map(p => p.trim()).filter(p => p);
@@ -290,14 +289,9 @@ class CodeInstrumenter {
         continue;
       }
 
-      // WE ARE IN FUNCTION
-      // Update local depth
       functionBraceDepth += openBraces - closeBraces;
-
-      // Update global depth
       globalBraceDepth += openBraces - closeBraces;
 
-      // Check if function ends
       if (functionBraceDepth === 0 && closeBraces > 0) {
         inFunction = false;
         out.push(line);
@@ -316,7 +310,6 @@ class CodeInstrumenter {
           scopeStack.push(this.currentScope);
           this.blockDepth++;
         }
-        // If we have a pending function definition, this is the opening brace of the function body.
         if (pendingFunctionDef) {
           out.push(line);
           const paramMatch = pendingFunctionDef.match(/\(([^)]*)\)/);
@@ -344,7 +337,6 @@ class CodeInstrumenter {
         }
       }
 
-      // Skip comments / preprocessor inside function
       if (trimmed.startsWith('//') ||
         trimmed.startsWith('/*') ||
         trimmed.startsWith('#')) {
@@ -352,7 +344,6 @@ class CodeInstrumenter {
         continue;
       }
 
-      // Check for nested function definitions (ERROR State protection)
       if (this.isFunctionDefinitionStart(line, 0)) {
         out.push(line);
         continue;
@@ -361,6 +352,7 @@ class CodeInstrumenter {
       const returnStmt = trimmed.match(/^\s*return\s+([^;]+);/);
       if (returnStmt) {
         const returnValue = returnStmt[1];
+        out.push(`${indent}__trace_output_flush(${i + 1});`);
         out.push(`${indent}__trace_return(${returnValue}, "auto", "", ${i + 1});`);
         out.push(line);
         continue;
@@ -466,31 +458,29 @@ class CodeInstrumenter {
       }
 
       const declInit = trimmed.match(/^\s*(int|long|float|double|char|bool)\s+(\w+)\s*=\s*([^;]+);/);
-        if (declInit) {
-          const [, type, varName, value] = declInit;
-          const currentScopeId = scopeStack[scopeStack.length - 1];
-          const isPointer = /\*/.test(value) || /\*/.test(varName) || /\*/.test(type);
-          if (!this.isVariableDeclaredInScope(varName, currentScopeId)) {
-            out.push(`${indent}${type} ${varName};`);
-            out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
-            this.markVariableDeclared(varName, currentScopeId);
-          } else out.push(`${indent}${type} ${varName};`);
-          out.push(`${indent}${varName} = ${value};`);
-          out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
-          // If this is a pointer initialization, emit alias event immediately
-          if (isPointer) {
-            // Determine alias target, stripping leading '&' if present
-            let aliasTarget = value.trim();
-            if (aliasTarget.startsWith('&')) {
-              aliasTarget = aliasTarget.replace(/^&\s*/, '');
-            }
-            if (aliasTarget !== varName) {
-              const decayed = this.isArrayDecay(value) ? 'true' : 'false';
-              out.push(`${indent}__trace_pointer_alias(${varName}, ${aliasTarget}, ${decayed}, ${i + 1});`);
-            }
+      if (declInit) {
+        const [, type, varName, value] = declInit;
+        const currentScopeId = scopeStack[scopeStack.length - 1];
+        const isPointer = /\*/.test(value) || /\*/.test(varName) || /\*/.test(type);
+        if (!this.isVariableDeclaredInScope(varName, currentScopeId)) {
+          out.push(`${indent}${type} ${varName};`);
+          out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
+          this.markVariableDeclared(varName, currentScopeId);
+        } else out.push(`${indent}${type} ${varName};`);
+        out.push(`${indent}${varName} = ${value};`);
+        out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
+        if (isPointer) {
+          let aliasTarget = value.trim();
+          if (aliasTarget.startsWith('&')) {
+            aliasTarget = aliasTarget.replace(/^&\s*/, '');
           }
-          continue;
+          if (aliasTarget !== varName) {
+            const decayed = this.isArrayDecay(value) ? 'true' : 'false';
+            out.push(`${indent}__trace_pointer_alias(${varName}, ${aliasTarget}, ${decayed}, ${i + 1});`);
+          }
         }
+        continue;
+      }
 
       if (trimmed.match(/^\s*const\s+/)) { out.push(line); continue; }
       if (trimmed.match(/^[a-zA-Z0-9_]+\s*=\s*[^;]+;/)) {
@@ -499,7 +489,6 @@ class CodeInstrumenter {
           const [, varName, value] = assign;
           out.push(line);
           out.push(`${indent}__trace_assign(${varName}, ${value}, ${i + 1});`);
-          // Emit pointer alias if assigning address-of a variable
           const addrMatch = value.trim().match(/^&\s*(\w+)$/);
           if (addrMatch) {
             const source = addrMatch[1];
@@ -526,18 +515,11 @@ class CodeInstrumenter {
         continue;
       }
 
-      // FOR LOOP LOGIC
-      const forLoop = trimmed.match(/^\s*for\s*\(\s*(int|long)\s+(\w+)\s*=\s*([^;]+);([^;]+);([^)]+)\)/);
+      const forLoop = trimmed.match(/^\s*for\s*\(\s*(int|long)\s+(\w+)\s*=\s*([^;]+);([^;]+);([^)]+)\)\s*\{/);
       if (forLoop) {
-        if (!trimmed.includes('{')) {
-          out.push(line);
-          continue;
-        }
-
         const [, type, varName, initValue, condition, increment] = forLoop;
         const currentScopeId = scopeStack[scopeStack.length - 1];
         const loopId = loopIdCounter++;
-        this.loopStack.push(loopId);
 
         if (!this.isVariableDeclaredInScope(varName, currentScopeId)) {
           out.push(`${indent}${type} ${varName};`);
@@ -546,75 +528,35 @@ class CodeInstrumenter {
         }
         out.push(`${indent}${varName} = ${initValue};`);
         out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
-
         out.push(`${indent}__trace_loop_start(${loopId}, "for", ${i + 1});`);
-        out.push(`${indent}for (; ${condition}; ) {`);
+        out.push(`${indent}for (; ${condition}; ${increment}) {`);
         out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}  if (!(${condition})) { __trace_loop_end(${loopId}, ${i + 1}); break; }`);
         out.push(`${indent}  __trace_loop_body_start(${loopId}, ${i + 1});`);
-        out.push(`${indent}  {`);
-
-        let j = i + 1;
-        let loopBraceDepth = 1;
-        const loopBody = [];
-
-        while (j < lines.length && loopBraceDepth > 0) {
-          const bodyLine = lines[j];
-          const { open, close } = this.countBraces(bodyLine);
-          loopBraceDepth += open - close;
-
-          if (loopBraceDepth > 0) {
-            loopBody.push(bodyLine);
-          }
-          j++;
-        }
-
-        out.push(...loopBody);
-        out.push(`${indent}  }`);
-        out.push(`${indent}  ${increment};`);
-        out.push(`${indent}  __trace_assign(${varName}, ${varName}, ${i + 1});`);
-        out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
-        out.push(`${indent}}`);
-
-        this.loopStack.pop();
-
-        // Fix tracking for skipped range
-        functionBraceDepth -= 1;
-        globalBraceDepth -= 1;
-
-        i = j - 1;
+        this.loopStack.push({ loopId, varName, increment, lineNum: i + 1 });
         continue;
       }
 
-      // WHILE LOOP
-      const whileLoop = trimmed.match(/^\s*while\s*\(([^)]+)\)/);
+      const whileLoop = trimmed.match(/^\s*while\s*\(([^)]+)\)\s*\{/);
       if (whileLoop) {
-        if (!trimmed.includes('{')) {
-          out.push(line); continue;
-        }
         const [, condition] = whileLoop;
         const loopId = loopIdCounter++;
-        this.loopStack.push(loopId);
         out.push(`${indent}__trace_loop_start(${loopId}, "while", ${i + 1});`);
         out.push(`${indent}while (1) {`);
         out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}  if (!(${condition})) { __trace_loop_end(${loopId}, ${i + 1}); break; }`);
         out.push(`${indent}  __trace_loop_body_start(${loopId}, ${i + 1});`);
+        this.loopStack.push({ loopId, varName: null, increment: null, lineNum: i + 1 });
         continue;
       }
 
-      // DO-WHILE
-      const doWhile = trimmed.match(/^\s*do\s*\{?$/);
+      const doWhile = trimmed.match(/^\s*do\s*\{/);
       if (doWhile) {
-        // If unbraced do..while? 'do' usually followed by {
-        if (!trimmed.includes('{')) {
-          out.push(line); continue;
-        }
         const loopId = loopIdCounter++;
-        this.loopStack.push(loopId);
         out.push(`${indent}__trace_loop_start(${loopId}, "do-while", ${i + 1});`);
         out.push(`${indent}do {`);
         out.push(`${indent}  __trace_loop_body_start(${loopId}, ${i + 1});`);
+        this.loopStack.push({ loopId, varName: null, increment: null, lineNum: i + 1 });
         continue;
       }
 
@@ -624,20 +566,56 @@ class CodeInstrumenter {
           out.push(line); continue;
         }
         const [, condition] = whileEnd;
-        const loopId = this.loopStack[this.loopStack.length - 1]; // peek
-        out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
+        const loopInfo = this.loopStack.pop();
+        out.push(`${indent}  __trace_loop_iteration_end(${loopInfo.loopId}, ${i + 1});`);
         out.push(`${indent}} while (${condition});`);
-        out.push(`${indent}__trace_loop_end(${loopId}, ${i + 1});`);
-        this.loopStack.pop();
+        out.push(`${indent}__trace_loop_end(${loopInfo.loopId}, ${i + 1});`);
         continue;
       }
 
-      // LOOP END CLOSING BRACE
       if (trimmed === '}' && this.loopStack.length > 0) {
-        const loopId = this.loopStack[this.loopStack.length - 1];
-        out.push(`${indent}  __trace_loop_iteration_end(${loopId}, ${i + 1});`);
-        out.push(line);
-        this.loopStack.pop();
+        const loopInfo = this.loopStack[this.loopStack.length - 1];
+        
+        const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : '';
+        if (!nextLine.match(/^\s*while\s*\(/)) {
+          this.loopStack.pop();
+          
+          if (loopInfo.varName && loopInfo.increment) {
+            out.push(`${indent}  __trace_assign(${loopInfo.varName}, ${loopInfo.varName}, ${loopInfo.lineNum});`);
+          }
+          out.push(`${indent}  __trace_loop_iteration_end(${loopInfo.loopId}, ${loopInfo.lineNum});`);
+          out.push(line);
+          out.push(`${indent}__trace_loop_end(${loopInfo.loopId}, ${loopInfo.lineNum});`);
+          continue;
+        }
+      }
+
+      const ifStmt = trimmed.match(/^\s*if\s*\(([^)]+)\)\s*\{/);
+      if (ifStmt) {
+        const [, condition] = ifStmt;
+        const condId = conditionIdCounter++;
+        out.push(`${indent}__trace_condition_eval(${condId}, "${condition.replace(/"/g, '\\"')}", (${condition}) ? 1 : 0, ${i + 1});`);
+        out.push(`${indent}if (${condition}) {`);
+        out.push(`${indent}  __trace_branch_taken(${condId}, "if", ${i + 1});`);
+        continue;
+      }
+
+      const elseIfStmt = trimmed.match(/^\s*}\s*else\s+if\s*\(([^)]+)\)\s*\{/);
+      if (elseIfStmt) {
+        const [, condition] = elseIfStmt;
+        const condId = conditionIdCounter++;
+        out.push(`${indent}} else {`);
+        out.push(`${indent}  __trace_condition_eval(${condId}, "${condition.replace(/"/g, '\\"')}", (${condition}) ? 1 : 0, ${i + 1});`);
+        out.push(`${indent}  if (${condition}) {`);
+        out.push(`${indent}    __trace_branch_taken(${condId}, "else-if", ${i + 1});`);
+        continue;
+      }
+
+      const elseStmt = trimmed.match(/^\s*}\s*else\s*\{/);
+      if (elseStmt) {
+        const condId = conditionIdCounter++;
+        out.push(`${indent}} else {`);
+        out.push(`${indent}  __trace_branch_taken(${condId}, "else", ${i + 1});`);
         continue;
       }
 

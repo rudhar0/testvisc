@@ -14,7 +14,7 @@ export default function StepInfo() {
   if (!currentStep) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="flex items-center gap-2 text-sm text-slate-500">
+        <div className="flex items-center gap-2 text-sm text-[#5a6a7a] dark:text-slate-500">
           <Info className="h-4 w-4" />
           <span>No execution trace available</span>
         </div>
@@ -47,7 +47,7 @@ export default function StepInfo() {
   };
 
   return (
-    <div className="flex h-full flex-col justify-center gap-1 rounded-lg bg-slate-800 px-4 py-2">
+    <div className="flex h-full flex-col justify-center gap-1 rounded-lg bg-[#c8d0d8] dark:bg-slate-800 px-4 py-2">
       {/* Step Type Badge */}
       <div className="flex items-center gap-2">
         <div
@@ -57,19 +57,19 @@ export default function StepInfo() {
           {currentStep.type.replace(/_/g, ' ')}
         </div>
         
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-[#5a6a7a] dark:text-slate-500">
           Line {currentStep.line}
         </span>
       </div>
 
       {/* Explanation */}
-      <div className="text-sm text-slate-300 line-clamp-2">
+      <div className="text-sm text-[#1a2332] dark:text-slate-300 line-clamp-2">
         {currentStep.explanation}
       </div>
 
       {/* Input Request Indicator */}
       {currentStep.pauseExecution && (
-        <div className="mt-1 flex items-center gap-1 text-xs font-medium text-yellow-400">
+        <div className="mt-1 flex items-center gap-1 text-xs font-medium text-yellow-600 dark:text-yellow-400">
           <Info className="h-3 w-3" />
           <span>Waiting for user input</span>
         </div>

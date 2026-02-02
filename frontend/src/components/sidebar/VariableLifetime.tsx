@@ -23,16 +23,15 @@ export default function VariableLifetime() {
 
   let stackDepth = 0;
 
-  executionTrace.forEach((step, index) => {
+  // Guard against null/undefined executionTrace
+  const steps = executionTrace?.steps || [];
+  
+  steps.forEach((step: any, index: number) => {
     // Handle both legacy 'function_call' and new 'func_enter'
     if (step.type === 'function_call' || step.type === 'func_enter') stackDepth++;
 
     // Handle variable creation from both old and new backends
-    // Legacy backend emitted explicit 'variable_declaration' / 'global_declaration' / 'var' types.
-    // New backend emits primitive type events (e.g., 'int', 'double', 'char', etc.) with a 'name' field.
     const primitiveVarTypes = ['int', 'float', 'double', 'char', 'bool', 'long', 'short'];
-    // Detect variable creation from legacy declarations or new primitive events.
-    // For new backend events, the original primitive type is stored in step.originalEventType.
     const isPrimitiveEvent = primitiveVarTypes.includes((step as any).originalEventType as string);
     if (
       step.type === 'variable_declaration' ||
@@ -40,9 +39,7 @@ export default function VariableLifetime() {
       step.type === 'var' ||
       isPrimitiveEvent
     ) {
-      // Prefer explicit variable name fields; fallback to generic name.
       const varName = (step as any).variable || (step as any).name;
-      // Determine variable type: for primitive events use the original event type.
       const varType = (step as any).dataType || (step as any).varType || (isPrimitiveEvent ? (step as any).originalEventType : undefined);
       const scope = step.type === 'global_declaration' ? 'global' : 'local';
 
@@ -61,7 +58,7 @@ export default function VariableLifetime() {
     
     // Detect variable death from both legacy 'function_return' and new 'func_exit'
     if (step.type === 'function_return' || step.type === 'func_exit') {
-      variables.forEach((v, name) => {
+      variables.forEach((v) => {
         // Only kill locals at the current stack depth
         if (v.scope === 'local' && v.deathStep === null && v.depth === stackDepth) {
           v.deathStep = index;
@@ -77,7 +74,7 @@ export default function VariableLifetime() {
   if (variableArray.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-4">
-        <div className="text-center text-sm text-slate-500">
+        <div className="text-center text-sm text-[#5a6a7a] dark:text-slate-500">
           <Activity className="mx-auto mb-2 h-8 w-8 opacity-50" />
           <p>No variables to track</p>
           <p className="mt-1 text-xs">Run code to see lifetimes</p>
@@ -88,7 +85,7 @@ export default function VariableLifetime() {
 
   return (
     <div className="h-full overflow-y-auto p-3">
-      <div className="mb-3 flex items-center gap-2 text-sm text-slate-400">
+      <div className="mb-3 flex items-center gap-2 text-sm text-[#5a6a7a] dark:text-slate-400">
         <Clock className="h-4 w-4" />
         <span>Variable Lifetimes</span>
       </div>
@@ -117,10 +114,10 @@ export default function VariableLifetime() {
                         : COLORS.lifecycle.dead
                     }}
                   />
-                  <span className="text-sm font-medium text-slate-300">
+                  <span className="text-sm font-medium text-[#1a2332] dark:text-slate-300">
                     {variable.name}
                   </span>
-                  <span className="text-xs text-slate-500">
+                  <span className="text-xs text-[#8a9aaa] dark:text-slate-500">
                     {variable.type}
                   </span>
                 </div>
@@ -139,7 +136,7 @@ export default function VariableLifetime() {
               </div>
 
               {/* Timeline Bar */}
-              <div className="relative h-6 rounded bg-slate-800">
+              <div className="relative h-6 rounded bg-[#c8d0d8] dark:bg-slate-800">
                 {/* Lifetime bar */}
                 <div
                   className="absolute h-full rounded transition-opacity"
@@ -171,7 +168,7 @@ export default function VariableLifetime() {
               </div>
 
               {/* Lifetime Stats */}
-              <div className="flex justify-between text-xs text-slate-500">
+              <div className="flex justify-between text-xs text-[#8a9aaa] dark:text-slate-500">
                 <span>Born: Step {birth}</span>
                 <span>
                   {variable.deathStep ? `Died: Step ${death}` : 'Still alive'}
