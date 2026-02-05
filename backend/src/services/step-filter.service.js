@@ -58,9 +58,16 @@ class StepFilterService {
     // Clone step to avoid mutations
     const processed = JSON.parse(JSON.stringify(step));
 
+    // Normalize: eventType from instrumentation-tracer -> type field
+    if (!processed.type && processed.eventType) {
+      processed.type = processed.eventType;
+    }
+
     // ===================================================================
     // STEP 1: Detect main() entry
-    // ==================================================================      this.mainStarted = true;
+    // ===================================================================
+    if (!this.mainStarted && processed.function === 'main') {
+      this.mainStarted = true;
       this.globalInitPhase = false;
       console.log(`✅ Main entry at step ${index}`);
       
@@ -94,7 +101,12 @@ class StepFilterService {
     // ===================================================================
     if (this.isSystemCode(processed)) {
       console.log(`🔇 Filtered system code: ${processed.function}`);
-dling)
+      return null;
+    }
+
+    // ===================================================================
+    // STEP 3b: Check if user source file
+    // ===================================================================
     if (!this.isUserSourceFile(processed.file)) {
       console.log(`🔇 Filtered step not in source file: ${processed.file}`);
       return null;
@@ -148,6 +160,37 @@ dling)
     // STEP 8: Keep program end
     // ===================================================================
     if (processed.type === 'program_end') {
+      return processed;
+    }
+
+    // ===================================================================
+    // STEP 9: Keep loop events (CRITICAL for visualization)
+    // ===================================================================
+    const loopEventTypes = [
+      'loop_start',
+      'loop_condition',
+      'loop_body_start',
+      'loop_iteration_end',
+      'loop_end'
+    ];
+    if (loopEventTypes.includes(processed.type)) {
+      console.log(`✅ Keeping loop event: ${processed.type}`);
+      return processed;
+    }
+
+    // ===================================================================
+    // STEP 10: Keep condition evaluation events
+    // ===================================================================
+    if (processed.type === 'condition_eval' || processed.type === 'condition_evaluation') {
+      console.log(`✅ Keeping condition event: ${processed.type}`);
+      return processed;
+    }
+
+    // ===================================================================
+    // STEP 11: Keep input request events (CRITICAL for user input)
+    // ===================================================================
+    if (processed.type === 'input_request') {
+      console.log(`✅ Keeping input request event`);
       return processed;
     }
 

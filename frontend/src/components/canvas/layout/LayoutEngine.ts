@@ -275,6 +275,7 @@ export class LayoutEngine {
     currentIteration: number;
     totalIterations: number;
     elementId?: string;
+    currentIterationElementId?: string; // NEW: For expanded view
     parentFrameId: string;
   }> = new Map();
 
@@ -735,9 +736,15 @@ export class LayoutEngine {
       };
 
       if (activeLoop) {
-        // Add to loop container instead of frame lane
-        const loopElement = this.elementHistory.get(activeLoop.elementId!)!;
-        loopElement.children!.push(varElement);
+        // CHECK FOR ITERATION CONTAINER (Expanded Mode)
+        if (activeLoop.currentIterationElementId) {
+             const iterationElement = this.elementHistory.get(activeLoop.currentIterationElementId)!;
+             iterationElement.children!.push(varElement);
+        } else {
+             // Add to loop container (Collapsed Mode)
+             const loopElement = this.elementHistory.get(activeLoop.elementId!)!;
+             loopElement.children!.push(varElement);
+        }
         // We don't increment lane height here because loop height will grow dynamically
       } else {
         lane.usedHeight += varElement.height + ELEMENT_SPACING;
@@ -847,8 +854,14 @@ export class LayoutEngine {
       };
 
       if (activeLoop) {
-        const loopElement = this.elementHistory.get(activeLoop.elementId!)!;
-        loopElement.children!.push(varElement);
+        // CHECK FOR ITERATION CONTAINER (Expanded Mode)
+        if (activeLoop.currentIterationElementId) {
+             const iterationElement = this.elementHistory.get(activeLoop.currentIterationElementId)!;
+             iterationElement.children!.push(varElement);
+        } else {
+             const loopElement = this.elementHistory.get(activeLoop.elementId!)!;
+             loopElement.children!.push(varElement);
+        }
       } else {
         ownerFrame.children!.push(varElement);
       }
@@ -1120,6 +1133,7 @@ export class LayoutEngine {
           isActive: true,
           frameId: frameId,
           explanation: explanation,
+          endStep: endStep,
         },
       };
 
@@ -1140,11 +1154,42 @@ export class LayoutEngine {
       
       if (loopState) {
         loopState.currentIteration = iteration;
+        const loopElement = this.elementHistory.get(loopState.elementId!)!;
         
-        const loopElement = this.elementHistory.get(loopState.elementId!);
         if (loopElement && loopElement.data) {
           loopElement.data.currentIteration = iteration;
           loopElement.data.isActive = true;
+        }
+
+        // TOGGLE MODE CHECK
+        const { toggleMode } = useLoopStore.getState();
+        
+        if (!toggleMode) {
+            // EXPANDED MODE: Create new Iteration Container
+            const iterationId = `iter-${loopId}-${iteration}-${stepIndex}`;
+            
+            const iterationElement: LayoutElement = {
+                id: iterationId,
+                type: 'loop', // We use 'loop' type but subtype 'iteration'
+                subtype: 'iteration',
+                x: 20, // Relative to Loop Container
+                y: this.getNextCursorY(loopElement),
+                width: loopElement.width - 40,
+                height: 40, // Will grow
+                parentId: loopElement.id,
+                stepId: stepIndex,
+                children: [],
+                data: {
+                    iteration: iteration
+                }
+            };
+            
+            loopElement.children!.push(iterationElement);
+            this.elementHistory.set(iterationId, iterationElement);
+            loopState.currentIterationElementId = iterationId;
+        } else {
+            // COLLAPSED MODE: Reuse loop container, clear specific iteration ID
+            loopState.currentIterationElementId = undefined;
         }
         
         if (stepIndex === currentStep) { // RENAMED
@@ -1152,6 +1197,154 @@ export class LayoutEngine {
         }
       }
       return;
+    }
+
+    // CONDITIONAL START (SWITCH/IF)
+    if (stepType === "conditional_start") {
+        const { conditionId, conditionType, expression } = step as any; // Assuming fields
+        const frameId = (step as any).frameId;
+        const ownerFrame = this.functionFrames.get(frameId);
+        if (!ownerFrame) return;
+
+        // Only handle Switch for now as per task, or generic Conditions later
+        if (conditionType === 'switch') {
+             const switchId = `switch-${conditionId}-${stepIndex}`;
+             
+             // Check for active loop parent
+             const activeLoop = this.getActiveLoopForFrame(frameId);
+             
+             const indent = getIndentSize(ownerFrame);
+             const lane = this.getLane(ownerFrame, 'LOCALS');
+
+             // Determine Parent & Position
+             let parent = ownerFrame;
+             let relativeX = ownerFrame.x + indent;
+             let relativeY = ownerFrame.y + lane.startY + lane.usedHeight;
+             let availableWidth = ownerFrame.width - indent * 2;
+
+             if (activeLoop) {
+                 const loopEl = this.elementHistory.get(activeLoop.elementId!)!;
+                 if (activeLoop.currentIterationElementId) {
+                     const iterEl = this.elementHistory.get(activeLoop.currentIterationElementId)!;
+                     parent = iterEl;
+                     relativeX = iterEl.x + 20; // Relative to Iteration
+                     relativeY = this.getNextCursorY(iterEl);
+                     availableWidth = iterEl.width - 40;
+                 } else {
+                     parent = loopEl;
+                     relativeX = loopEl.x + 20; // Relative to Loop
+                     relativeY = this.getNextCursorY(loopEl);
+                     availableWidth = loopEl.width - 40;
+                 }
+             }
+
+             const switchElement: LayoutElement = {
+                 id: switchId,
+                 type: 'condition', // Generic type
+                 subtype: 'switch',
+                 x: activeLoop ? 20 : relativeX, // If in loop, relative coords handled by renderer? 
+                 // Wait, LayoutEngine calculates ABSOLUTE x/y usually, unless renderer handles relativity.
+                 // Just sticking to absolute X/Y logic or simple relative if parented.
+                 // Existing generic logic: `x: ownerFrame.x + indent`.
+                 // If activeLoop, we use `this.elementHistory.get(activeLoop.elementId!)!.x + 20`.
+                 
+                 // Let's rely on standard positioning logic used for variables:
+                 // "x: activeLoop ? this.elementHistory.get(activeLoop.elementId!)!.x + 20 : ownerFrame.x + indent"
+                 
+                 y: activeLoop 
+                    ? (activeLoop.currentIterationElementId 
+                        ? this.getNextCursorY(this.elementHistory.get(activeLoop.currentIterationElementId!)!) 
+                        : this.getNextCursorY(this.elementHistory.get(activeLoop.elementId!)!))
+                    : relativeY,
+                 
+                 x: activeLoop 
+                    ? (activeLoop.currentIterationElementId 
+                        ? this.elementHistory.get(activeLoop.currentIterationElementId!)!.x + 20 
+                        : this.elementHistory.get(activeLoop.elementId!)!.x + 20)
+                    : relativeX,
+
+                 width: availableWidth,
+                 height: 100,
+                 parentId: parent.id,
+                 stepId: stepIndex,
+                 children: [],
+                 data: {
+                     expression: expression,
+                     conditionId: conditionId
+                 }
+             };
+             
+             parent.children!.push(switchElement);
+             this.elementHistory.set(switchId, switchElement);
+             
+             // Update lane used height if not in loop
+             if (!activeLoop) {
+                 lane.usedHeight += 100 + ELEMENT_SPACING;
+             }
+             
+             // Add to active conditions stack setup if needed, 
+             // but 'conditional_branch' usually comes next immediately or nested.
+             this.activeConditions.set(conditionId, {
+                 conditionId,
+                 conditionType,
+                 startStep: stepIndex,
+                 elementId: switchId,
+                 parentFrameId: frameId
+             });
+        }
+        return;
+    }
+
+    // CONDITIONAL BRANCH (CASE)
+    if (stepType === "conditional_branch") {
+        const { conditionId, label, isMatched } = step as any; // Assuming
+        const conditionState = this.activeConditions.get(conditionId);
+        
+        if (conditionState && conditionState.conditionType === 'switch') {
+             const switchEl = this.elementHistory.get(conditionState.elementId!)!;
+             
+             const caseId = `case-${conditionId}-${label}-${stepIndex}`;
+             const caseElement: LayoutElement = {
+                 id: caseId,
+                 type: 'condition',
+                 subtype: 'case',
+                 x: switchEl.x + 10,
+                 y: this.getNextCursorY(switchEl),
+                 width: switchEl.width - 20,
+                 height: 50,
+                 parentId: switchEl.id,
+                 stepId: stepIndex,
+                 children: [],
+                 data: {
+                     label: label || 'default',
+                     isMatched: isMatched
+                 }
+             };
+             
+             switchEl.children!.push(caseElement);
+             this.elementHistory.set(caseId, caseElement);
+             // We could set this as "Active Scope" for variables?
+             // But valid C++ scoping in switch is tricky.
+             // For now, let's just make sure variables declared here land in this case?
+             // If we want that, we need to track "activeCase".
+             
+             // Simplification: Variables in switch cases usually have block scope or function scope.
+             // If block scope, we'd need `block_enter` logic.
+             // User rules: "Variables declared inside an iteration belong ONLY to that iteration". 
+             // Switch scoping is similar. 
+             // For NOW, variables in cases might just float in the switch if we don't track case scope.
+             // We can assume they land in the parent (Switch) or Iteration.
+             // Ideally we'd add `currentCaseElementId` to `activeConditions`, 
+             // and check `activeConditions` in var_declare.
+             // Let's SKIP strictly creating a new scope for now to avoid complexity explosion,
+             // unless user explicitly asked for Switch Scoping.
+             // User said: "Non-executed cases appear dimmed/skipped".
+             // "Only executed case body is visually active".
+             
+             // If we want visual nesting:
+             conditionState.branchTaken = caseId; // Track active branch
+        }
+        return;
     }
 
     // LOOP CONDITION
@@ -1448,7 +1641,7 @@ export class LayoutEngine {
 
     // *** NEW: Update all function frames ***
     layout.elements.forEach((element) => {
-      if (element.type === 'function_call' || element.type === 'struct' || element.type === 'class') {
+      if (element.type === 'function_call' || element.type === 'struct' || element.type === 'class' || element.type === 'loop' || element.type === 'condition') {
         updateHeight(element);
       }
     });

@@ -515,9 +515,10 @@ class CodeInstrumenter {
         continue;
       }
 
-      const forLoop = trimmed.match(/^\s*for\s*\(\s*(int|long)\s+(\w+)\s*=\s*([^;]+);([^;]+);([^)]+)\)\s*\{/);
-      if (forLoop) {
-        const [, type, varName, initValue, condition, increment] = forLoop;
+      // Case 1: for loop with variable declaration: for (int i = 1; i < n; i++)
+      const forLoopWithDecl = trimmed.match(/^\s*for\s*\(\s*(int|long)\s+(\w+)\s*=\s*([^;]+);([^;]+);([^)]+)\)\s*\{/);
+      if (forLoopWithDecl) {
+        const [, type, varName, initValue, condition, increment] = forLoopWithDecl;
         const currentScopeId = scopeStack[scopeStack.length - 1];
         const loopId = loopIdCounter++;
 
@@ -526,6 +527,23 @@ class CodeInstrumenter {
           out.push(`${indent}__trace_declare(${varName}, ${type}, ${i + 1});`);
           this.markVariableDeclared(varName, currentScopeId);
         }
+        out.push(`${indent}${varName} = ${initValue};`);
+        out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
+        out.push(`${indent}__trace_loop_start(${loopId}, "for", ${i + 1});`);
+        out.push(`${indent}for (; ${condition}; ${increment}) {`);
+        out.push(`${indent}  __trace_loop_condition(${loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
+        out.push(`${indent}  if (!(${condition})) { __trace_loop_end(${loopId}, ${i + 1}); break; }`);
+        out.push(`${indent}  __trace_loop_body_start(${loopId}, ${i + 1});`);
+        this.loopStack.push({ loopId, varName, increment, lineNum: i + 1 });
+        continue;
+      }
+
+      // Case 2: for loop with pre-declared variable: int i; for (i = 1; i < n; i++)
+      const forLoopPreDeclared = trimmed.match(/^\s*for\s*\(\s*(\w+)\s*=\s*([^;]+);([^;]+);([^)]+)\)\s*\{/);
+      if (forLoopPreDeclared) {
+        const [, varName, initValue, condition, increment] = forLoopPreDeclared;
+        const loopId = loopIdCounter++;
+
         out.push(`${indent}${varName} = ${initValue};`);
         out.push(`${indent}__trace_assign(${varName}, ${varName}, ${i + 1});`);
         out.push(`${indent}__trace_loop_start(${loopId}, "for", ${i + 1});`);
@@ -568,6 +586,7 @@ class CodeInstrumenter {
         const [, condition] = whileEnd;
         const loopInfo = this.loopStack.pop();
         out.push(`${indent}  __trace_loop_iteration_end(${loopInfo.loopId}, ${i + 1});`);
+        out.push(`${indent}  __trace_loop_condition(${loopInfo.loopId}, (${condition}) ? 1 : 0, ${i + 1});`);
         out.push(`${indent}} while (${condition});`);
         out.push(`${indent}__trace_loop_end(${loopInfo.loopId}, ${i + 1});`);
         continue;

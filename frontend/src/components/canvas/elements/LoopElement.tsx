@@ -307,6 +307,29 @@ export const LoopElement: React.FC<LoopElementProps> = memo(({
         />
       </Group>
 
+      {/* Skip Button */}
+      {onSkip && (
+        <Group 
+            x={totalWidth - 145} 
+            y={10}
+            onClick={(e) => {
+                if (e && e.cancelBubble !== undefined) e.cancelBubble = true;
+                if (onSkip) onSkip();
+            }}
+            onMouseEnter={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) container.style.cursor = "pointer";
+            }}
+            onMouseLeave={(e) => {
+                const container = e.target.getStage()?.container();
+                if (container) container.style.cursor = "default";
+            }}
+        >
+             <Rect width={28} height={24} fill="rgba(239, 68, 68, 0.15)" stroke="#EF4444" strokeWidth={1} cornerRadius={6} />
+             <Text text="⏩" x={6} y={6} fontSize={12} />
+        </Group>
+      )}
+
       {/* Iteration Counter */}
       {totalIterations !== undefined && (
         <Group x={totalWidth - 110} y={10}>

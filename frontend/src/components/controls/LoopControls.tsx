@@ -9,10 +9,10 @@ import { COLORS } from '@config/theme.config';
 
 export default function LoopControls() {
   const {
-    currentStep,
-    totalSteps,
-    getCurrentStep,
-    jumpToStep,
+    // currentStep, // Unused
+    // totalSteps, // Unused
+    // getCurrentStep, // Unused
+    // jumpToStep, // Unused
   } = useExecutionStore();
 
   const {
@@ -23,7 +23,7 @@ export default function LoopControls() {
     getCurrentLoopInfo,
   } = useLoopStore();
 
-  const currentStepData = getCurrentStep();
+    // const currentStepData = getCurrentStep(); // Unused
   const loopInfo = getCurrentLoopInfo();
   const isInLoop = loopInfo !== null;
   const canSkip = canSkipLoop();
@@ -137,10 +137,10 @@ export default function LoopControls() {
               ⚡ Skip Loop
             </div>
             <div className="text-slate-300">
-              Fast-forward {getSkipPercentage().toFixed(0)}% to loop end
+              Jump to end of loop
             </div>
             <div className="text-orange-400 text-xs mt-1">
-              {loopInfo?.totalIterations! - loopInfo?.currentIteration!} iterations remaining
+              Jumping to step {loopInfo?.endStepIndex}
             </div>
             <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1">
               <div className="w-2 h-2 bg-slate-900 border-slate-700 border-r border-b transform rotate-45"></div>

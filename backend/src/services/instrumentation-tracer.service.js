@@ -123,7 +123,7 @@ class InstrumentationTracer {
 
             if (this.addressToName.has(aliasedAddress)) {
                 const targetName = this.addressToName.get(aliasedAddress);
-                
+
                 let isTargetPointer = false;
                 let targetFrameIdx = this.frameStack.length - 1;
                 while (targetFrameIdx >= 0) {
@@ -155,7 +155,7 @@ class InstrumentationTracer {
         }
         return null;
     }
-    
+
     async getLineInfo(executable, address) {
         return new Promise((resolve) => {
             const proc = spawn('addr2line', ['-e', executable, '-f', '-C', '-i', address]);
@@ -348,13 +348,16 @@ class InstrumentationTracer {
         }
     }
 
-    async convertToSteps(events, executable, sourceFile, programOutput, trackedFunctions) {
+    async convertToSteps(events, executable, sourceFile, programOutput, trackedFunctions, inputLinesMap = null) {
         console.log(`📊 Converting ${events.length} events to beginner-correct steps...`);
 
         const steps = [];
         let stepIndex = 0;
         let mainStarted = false;
         let currentFunction = 'main';
+
+        // Use provided inputLinesMap (from original code) or scan instrumented file
+        const inputLines = inputLinesMap || this.scanForInputOperations(sourceFile);
 
         this.frameStack = [];
         this.globalCallIndex = 0;
@@ -365,6 +368,9 @@ class InstrumentationTracer {
 
         const outputLines = programOutput.stdout.split('\n').filter(line => line.length > 0 || line === '\n');
         let outputIndex = 0;
+
+        // NEW: Loop Buffering Stack
+        const loopStack = [];
 
         const normalizeFunctionName = (name) => {
             if (!name) return 'unknown';
@@ -386,10 +392,19 @@ class InstrumentationTracer {
                 info.function = normalizeFunctionName(info.function);
             }
 
+            // --- Helper to push step to correct buffer ---
+            const pushStep = (step) => {
+                if (loopStack.length > 0) {
+                    loopStack[0].buffer.push(step);
+                } else {
+                    steps.push(step);
+                }
+            };
+
             if (!mainStarted && info.function === 'main' && ev.type === 'func_enter') {
                 const mainFrame = this.pushCallFrame('main');
 
-                steps.push({
+                pushStep({
                     stepIndex: stepIndex++,
                     eventType: 'program_start',
                     line: info.line,
@@ -413,11 +428,44 @@ class InstrumentationTracer {
             if (this.shouldFilterEvent(info, ev, sourceFile)) continue;
             if (!info.file || info.line === 0) continue;
 
+            // ===================================================================
+            // Check if current line has an input operation and inject input_request
+            // ===================================================================
+            if (inputLines.has(info.line) && mainStarted) {
+                const inputInfo = inputLines.get(info.line);
+                const frameMetadata = this.getCurrentFrameMetadata();
+
+                const inputRequest = {
+                    type: inputInfo.type,
+                    variables: inputInfo.variables,
+                    format: inputInfo.format || undefined,
+                    line: info.line
+                };
+
+                pushStep({
+                    stepIndex: stepIndex++,
+                    eventType: 'input_request',
+                    line: info.line,
+                    function: currentFunction,
+                    scope: 'block',
+                    file: path.basename(info.file),
+                    timestamp: ev.ts || null,
+                    explanation: inputInfo.prompt,
+                    pauseExecution: true,
+                    inputRequest: inputRequest,
+                    internalEvents: [],
+                    ...frameMetadata
+                });
+
+                // Remove from map so we don't create duplicate requests
+                inputLines.delete(info.line);
+            }
+
             if (ev.type === 'func_enter' && info.function !== 'main') {
                 const newFrame = this.pushCallFrame(info.function);
                 currentFunction = info.function;
 
-                steps.push({
+                pushStep({
                     stepIndex: stepIndex++,
                     eventType: 'func_enter',
                     line: info.line,
@@ -442,7 +490,7 @@ class InstrumentationTracer {
                     const { rendered, escapes } = this.parseEscapeSequences(line);
                     const frameMetadata = this.getCurrentFrameMetadata();
 
-                    steps.push({
+                    pushStep({
                         stepIndex: stepIndex++,
                         eventType: 'output',
                         line: 0,
@@ -471,7 +519,7 @@ class InstrumentationTracer {
                         }
 
                         if (allDestroyedSymbols.size > 0) {
-                            steps.push({
+                            pushStep({
                                 stepIndex: stepIndex++,
                                 eventType: 'scope_exit',
                                 line: info.line,
@@ -493,7 +541,7 @@ class InstrumentationTracer {
                         exitingFrame.scopeStack = [];
                     }
 
-                    steps.push({
+                    pushStep({
                         stepIndex: stepIndex++,
                         eventType: 'func_exit',
                         line: info.line,
@@ -562,7 +610,8 @@ class InstrumentationTracer {
                     currentFrame.activeLoops.set(loopId, { iterations: 0 });
                     this.loopIterationCounts.set(loopId, 0);
                 }
-                step = {
+
+                const loopStep = {
                     stepIndex: stepIndex++,
                     eventType: 'loop_start',
                     line: info.line,
@@ -577,13 +626,22 @@ class InstrumentationTracer {
                     ...frameMetadata
                 };
 
+                if (loopStack.length === 0) {
+                    steps.push(loopStep);
+                } else {
+                    loopStack[0].buffer.push(loopStep);
+                }
+
+                loopStack.push({ loopId: loopId, buffer: [] });
+
             } else if (ev.type === 'loop_end') {
                 const loopId = ev.loopId;
                 if (currentFrame && currentFrame.activeLoops.has(loopId)) {
                     currentFrame.activeLoops.delete(loopId);
                     this.loopIterationCounts.delete(loopId);
                 }
-                step = {
+
+                const loopEndStep = {
                     stepIndex: stepIndex++,
                     eventType: 'loop_end',
                     line: info.line,
@@ -597,9 +655,39 @@ class InstrumentationTracer {
                     ...frameMetadata
                 };
 
+                const popped = loopStack.pop();
+
+                if (!popped) {
+                    // Safety check for stack underflow
+                    if (loopStack.length === 0) {
+                        steps.push(loopEndStep);
+                    } else {
+                        loopStack[0].buffer.push(loopEndStep);
+                    }
+                } else if (loopStack.length === 0) {
+                    const summaryStep = {
+                        stepIndex: stepIndex++,
+                        eventType: 'loop_body_summary',
+                        line: info.line,
+                        function: currentFunction,
+                        scope: 'block',
+                        file: path.basename(info.file),
+                        timestamp: Date.now(),
+                        loopId: loopId,
+                        explanation: `... Loop execution summary ...`,
+                        internalEvents: [],
+                        events: popped.buffer,
+                        ...frameMetadata
+                    };
+                    steps.push(summaryStep);
+                    steps.push(loopEndStep);
+                } else {
+                    loopStack[0].buffer.push(loopEndStep);
+                }
+
             } else if (ev.type === 'loop_condition') {
                 const loopId = ev.loopId;
-                step = {
+                pushStep({
                     stepIndex: stepIndex++,
                     eventType: 'loop_condition',
                     line: info.line,
@@ -614,7 +702,7 @@ class InstrumentationTracer {
                         : `🔴 Loop condition: false (exit)`,
                     internalEvents: [],
                     ...frameMetadata
-                };
+                });
 
             } else if (ev.type === 'loop_body_start') {
                 const loopId = ev.loopId;
@@ -630,7 +718,7 @@ class InstrumentationTracer {
                     });
                 }
 
-                step = {
+                pushStep({
                     stepIndex: stepIndex++,
                     eventType: 'loop_body_start',
                     line: info.line,
@@ -643,7 +731,7 @@ class InstrumentationTracer {
                     explanation: `🔁 Loop iteration ${iterCount + 1} begins`,
                     internalEvents: [],
                     ...frameMetadata
-                };
+                });
 
             } else if (ev.type === 'loop_iteration_end') {
                 const loopId = ev.loopId;
@@ -655,7 +743,7 @@ class InstrumentationTracer {
                         const destroyedSymbols = Array.from(topScope.variables);
 
                         if (destroyedSymbols.length > 0) {
-                            steps.push({
+                            pushStep({
                                 stepIndex: stepIndex++,
                                 eventType: 'scope_exit',
                                 line: info.line,
@@ -677,7 +765,7 @@ class InstrumentationTracer {
                     }
                 }
 
-                step = {
+                pushStep({
                     stepIndex: stepIndex++,
                     eventType: 'loop_iteration_end',
                     line: info.line,
@@ -690,12 +778,12 @@ class InstrumentationTracer {
                     explanation: `🔁 Loop iteration ${iterCount} ends`,
                     internalEvents: [],
                     ...frameMetadata
-                };
+                });
 
             } else if (ev.type === 'control_flow') {
                 const controlType = ev.controlType;
                 if (controlType === 'break') {
-                    step = {
+                    pushStep({
                         stepIndex: stepIndex++,
                         eventType: 'loop_break',
                         line: info.line,
@@ -706,9 +794,9 @@ class InstrumentationTracer {
                         explanation: '🔴 Break statement - exiting loop',
                         internalEvents: [],
                         ...frameMetadata
-                    };
+                    });
                 } else if (controlType === 'continue') {
-                    step = {
+                    pushStep({
                         stepIndex: stepIndex++,
                         eventType: 'loop_continue',
                         line: info.line,
@@ -719,7 +807,7 @@ class InstrumentationTracer {
                         explanation: '🔄 Continue statement - next iteration',
                         internalEvents: [],
                         ...frameMetadata
-                    };
+                    });
                 }
 
             } else if (ev.type === 'block_enter') {
@@ -731,7 +819,7 @@ class InstrumentationTracer {
                         variables: new Set()
                     });
                 }
-                step = {
+                pushStep({
                     stepIndex: stepIndex++,
                     eventType: 'block_enter',
                     line: info.line,
@@ -743,7 +831,7 @@ class InstrumentationTracer {
                     explanation: `{ Entering code block`,
                     internalEvents: [],
                     ...frameMetadata
-                };
+                });
 
             } else if (ev.type === 'block_exit') {
                 if (currentFrame && currentFrame.scopeStack.length > 0) {
@@ -777,7 +865,7 @@ class InstrumentationTracer {
                     currentFrame.blockScopes.pop();
                 }
 
-                step = {
+                pushStep({
                     stepIndex: stepIndex++,
                     eventType: 'block_exit',
                     line: info.line,
@@ -789,7 +877,7 @@ class InstrumentationTracer {
                     explanation: `} Exiting code block`,
                     internalEvents: [],
                     ...frameMetadata
-                };
+                });
 
             } else if (ev.type === 'array_create') {
                 if (ev.addr) {
@@ -964,7 +1052,7 @@ class InstrumentationTracer {
                 if (currentFrame) {
                     if (!currentFrame.declaredVariables.has(varKey)) {
                         currentFrame.declaredVariables.set(varKey, true);
-                        
+
                         if (ev.address) {
                             this.addressToName.set(ev.address, ev.name);
                             this.addressToFrame.set(ev.address, currentFrame.frameId);
@@ -1135,6 +1223,9 @@ class InstrumentationTracer {
         this.frameCounts = new Map();
         this.loopIterationCounts = new Map();
 
+        // Scan ORIGINAL code for input operations BEFORE instrumentation
+        const inputLinesMap = this.scanForInputOperations(code);
+
         let exe, src, traceOut, hdr;
         try {
             ({ executable: exe, sourceFile: src, traceOutput: traceOut, headerCopy: hdr } =
@@ -1145,7 +1236,7 @@ class InstrumentationTracer {
 
             console.log(`📋 Captured ${events.length} raw events, ${functions.length} functions`);
 
-            const steps = await this.convertToSteps(events, exe, src, { stdout, stderr }, functions);
+            const steps = await this.convertToSteps(events, exe, src, { stdout, stderr }, functions, inputLinesMap);
 
             const result = {
                 steps,
@@ -1193,6 +1284,60 @@ class InstrumentationTracer {
             if (f && existsSync(f)) {
                 try { await unlink(f); } catch (_) { }
             }
+        }
+    }
+
+    /**
+     * Scan source file for input operations (scanf, cin)
+     */
+    scanForInputOperations(sourceFile) {
+        try {
+            if (!existsSync(sourceFile)) {
+                return new Map();
+            }
+
+            const content = require('fs').readFileSync(sourceFile, 'utf-8');
+            const lines = content.split('\n');
+            const inputLines = new Map();
+
+            const scanfRegex = /scanf\s*\(\s*"([^"]*)"\s*,\s*([^)]+)/;
+            const cinRegex = /cin\s*>>\s*([^;]+)/;
+
+            lines.forEach((line, index) => {
+                const lineNumber = index + 1;
+                let match;
+
+                if ((match = line.match(scanfRegex))) {
+                    const format = match[1];
+                    const variables = match[2].trim().split(',').map(v => v.replace(/[&\s]/g, ''));
+
+                    inputLines.set(lineNumber, {
+                        line: lineNumber,
+                        type: 'scanf',
+                        format: format,
+                        variables: variables,
+                        prompt: `Waiting for scanf input on line ${lineNumber}`
+                    });
+                } else if ((match = line.match(cinRegex))) {
+                    const variables = match[1].trim().split('>>').map(v => v.trim()).filter(v => v && v.length > 0);
+
+                    inputLines.set(lineNumber, {
+                        line: lineNumber,
+                        type: 'cin',
+                        variables: variables,
+                        prompt: `Waiting for cin input on line ${lineNumber}`
+                    });
+                }
+            });
+
+            if (inputLines.size > 0) {
+                console.log(`✅ Found ${inputLines.size} input operations in source code`);
+            }
+
+            return inputLines;
+        } catch (error) {
+            console.warn(`⚠️ Failed to scan for input operations: ${error.message}`);
+            return new Map();
         }
     }
 }

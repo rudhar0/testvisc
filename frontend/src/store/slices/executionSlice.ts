@@ -51,6 +51,20 @@ export interface ExecutionState {
   canStepBackward: () => boolean;
 }
 
+// Helper to expand loop summaries into full steps
+const expandTrace = (steps: ExecutionStep[]): ExecutionStep[] => {
+  const expanded: ExecutionStep[] = [];
+  
+  for (const step of steps) {
+    if (step.type === 'loop_body_summary' && (step as any).events) {
+       expanded.push(...expandTrace((step as any).events as ExecutionStep[]));
+    } else {
+       expanded.push(step);
+    }
+  }
+  return expanded;
+};
+
 export const useExecutionStore = create<ExecutionState>()(
   immer((set, get) => ({
     // Initial state
@@ -74,8 +88,12 @@ export const useExecutionStore = create<ExecutionState>()(
           console.error("Invalid trace received in setTrace");
           return;
         }
-        state.executionTrace = trace;
-        state.totalSteps = trace.totalSteps;
+
+        const expandedSteps = expandTrace(trace.steps);
+        const expandedTrace = { ...trace, steps: expandedSteps, totalSteps: expandedSteps.length };
+
+        state.executionTrace = expandedTrace;
+        state.totalSteps = expandedTrace.totalSteps;
         state.currentStep = 0;
         state.isPlaying = false;
         state.isPaused = false;
@@ -89,12 +107,13 @@ export const useExecutionStore = create<ExecutionState>()(
           state.playbackInterval = null;
         }
         
-        if (trace.steps.length > 0) {
-          state.currentState = trace.steps[0].state;
+        if (expandedTrace.steps.length > 0) {
+          state.currentState = expandedTrace.steps[0].state;
         }
         
-        console.log('✅ Trace loaded:', {
-          totalSteps: trace.totalSteps,
+        console.log('✅ Trace loaded & expanded:', {
+          originalSteps: trace.steps.length,
+          expandedSteps: expandedTrace.totalSteps,
           startingAtStep: 0,
         });
       }),

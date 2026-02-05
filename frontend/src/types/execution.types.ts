@@ -17,7 +17,8 @@ export type StepType =
   | 'heap_free'
   | 'output'
   | 'input_request'
-  | 'program_end';
+  | 'program_end'
+  | 'loop_body_summary';
 
 export interface ClassInfo {
   members: Array<{ name: string; type: string; isField: boolean }>;
@@ -77,6 +78,18 @@ export interface ExecutionStep {
   function?: string;
   
   // Note: birthStep is on the Variable, not the step itself
+
+  // Fields used by LayoutEngine
+  eventType?: string;
+  frameId?: string;
+  callDepth?: number;
+  parentFrameId?: string;
+  isFunctionEntry?: boolean;
+  isFunctionExit?: boolean;
+  scopeDepth?: number;
+  varType?: string;
+  symbol?: string;
+  returnValue?: any;
 }
 
 export interface GlobalVariable {

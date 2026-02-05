@@ -25,6 +25,8 @@ import { getFocusPosition } from "../../utils/camera";
 import { SmoothUpdateArrow } from "./elements/SmoothUpdateArrow";
 import { LoopElement } from './elements/LoopElement';
 import { ConditionElement } from './elements/ConditionElement';
+import { SwitchElement, CaseElement } from './elements/SwitchElement';
+import { IterationElement } from './elements/IterationElement';
 
 const DARK_COLORS = {
   bg: "#0F172A",
@@ -891,7 +893,35 @@ export default function VisualizationCanvas() {
           </ClassView>
         );
 
-      case "loop":
+      case "loop": {
+        if (element.subtype === 'iteration') {
+            return (
+              <IterationElement
+                key={id}
+                id={id}
+                iteration={data?.iteration ?? 0}
+                x={x}
+                y={y}
+                width={width}
+                height={height}
+              >
+                {filterChildren(children).map((child) => {
+                  const relativeX = child.x - x;
+                  const relativeY = child.y - y - 25; // Adjusted offset for Iteration
+                  return (
+                    <Group key={child.id} x={relativeX} y={relativeY}>
+                      {renderElement(
+                        { ...child, x: 0, y: 0 },
+                        x,
+                        y,
+                      )}
+                    </Group>
+                  );
+                })}
+              </IterationElement>
+            );
+        }
+
         return (
           <LoopElement
             key={`${id}-${stepId}`}
@@ -913,6 +943,11 @@ export default function VisualizationCanvas() {
             isNew={isNew}
             stepNumber={stepId}
             enterDelay={enterDelayMap.get(id) || 0}
+            onSkip={() => {
+              if (data?.endStep) {
+                 useExecutionStore.getState().jumpToStep(data.endStep);
+              }
+            }}
           >
             {filterChildren(children).map((child) => {
               const relativeX = child.x - x;
@@ -929,8 +964,65 @@ export default function VisualizationCanvas() {
             })}
           </LoopElement>
         );
+      }
 
       case "condition":
+        if (element.subtype === 'switch') {
+             return (
+                 <SwitchElement
+                    key={id}
+                    id={id}
+                    x={x}
+                    y={y}
+                    width={width}
+                    height={height}
+                    expression={data?.expression || '...'}
+                 >
+                    {filterChildren(children).map((child) => {
+                      const relativeX = child.x - x;
+                      const relativeY = child.y - y - 35; // Header height
+                      return (
+                        <Group key={child.id} x={relativeX} y={relativeY}>
+                          {renderElement(
+                            { ...child, x: 0, y: 0 },
+                            x,
+                            y,
+                          )}
+                        </Group>
+                      );
+                    })}
+                 </SwitchElement>
+             );
+        }
+        if (element.subtype === 'case') {
+             return (
+                 <CaseElement
+                    key={id}
+                    id={id} // Add ID
+                    x={x} // Add X
+                    y={y} // Add Y
+                    width={width}
+                    height={height}
+                    label={data?.label || 'default'}
+                    isMatched={data?.isMatched || false}
+                 >
+                    {filterChildren(children).map((child) => {
+                      const relativeX = child.x - x;
+                      const relativeY = child.y - y - 28; // Header height
+                      return (
+                        <Group key={child.id} x={relativeX} y={relativeY}>
+                          {renderElement(
+                            { ...child, x: 0, y: 0 },
+                            x,
+                            y,
+                          )}
+                        </Group>
+                      );
+                    })}
+                 </CaseElement>
+             );
+        }
+
         return (
           <ConditionElement
             key={`${id}-${stepId}`}
